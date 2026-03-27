@@ -1,0 +1,3086 @@
+import { useState, useRef, useCallback, useEffect } from "react";
+import { useUser } from "@clerk/clerk-react";
+import AuthGate from "./components/AuthGate.jsx";
+import UserMenu from "./components/UserMenu.jsx";
+
+// ── localStorage persistence helpers ────────────────────────────────
+function usePersistedState(key, defaultValue) {
+  const [state, setState] = useState(() => {
+    try {
+      const stored = localStorage.getItem(key);
+      return stored ? JSON.parse(stored) : defaultValue;
+    } catch { return defaultValue; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem(key, JSON.stringify(state)); }
+    catch { /* storage full or unavailable */ }
+  }, [key, state]);
+  return [state, setState];
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// DATA LAYER
+// ═══════════════════════════════════════════════════════════════════
+
+// SAY East division names & age mappings (Silver Matrix, birth-year based Aug 1–Jul 31)
+// Instructional=U6(ages4-5), Passers=U8(6-7), Wings=U10(8-9),
+// Strikers=U12(10-11), Kickers=U14(12-13), Minors=U16(14-15), Seniors=U19(16-18)
+const LEAGUES = [
+  "U6 / Instructional",
+  "U8 / Passers",
+  "U10 / Wings",
+  "U12 / Strikers",
+  "U14 / Kickers",
+  "U16 / Minors",
+  "U19 / Seniors",
+];
+const FORMATS = ["4v4","5v5","6v6","7v7","8v8","9v9","11v11"];
+const ALL_POSITIONS = ["GK","DEF","CB","LB","RB","MID","CDM","CAM","LW","RW","FWD","ST","CF","Wing"];
+
+const POSITIONS_BY_FORMAT = {
+  "4v4":  ["GK","DEF","MID","FWD"],
+  "5v5":  ["GK","DEF","DEF","MID","FWD"],
+  "6v6":  ["GK","DEF","DEF","MID","MID","FWD"],
+  "7v7":  ["GK","DEF","DEF","MID","MID","FWD","FWD"],
+  "8v8":  ["GK","DEF","DEF","DEF","MID","MID","FWD","FWD"],
+  "9v9":  ["GK","DEF","DEF","DEF","MID","MID","MID","FWD","FWD"],
+  "11v11":["GK","DEF","DEF","DEF","DEF","MID","MID","MID","FWD","FWD","FWD"],
+};
+
+const FIELD_BASE = {
+  GK:{x:50,y:88}, CB:{x:50,y:72}, DEF:{x:50,y:72}, LB:{x:25,y:72}, RB:{x:75,y:72},
+  CDM:{x:50,y:58}, MID:{x:50,y:50}, CAM:{x:50,y:38}, LW:{x:18,y:32}, RW:{x:82,y:32},
+  FWD:{x:50,y:22}, ST:{x:50,y:18}, CF:{x:50,y:22}, Wing:{x:20,y:30},
+};
+
+// ─── SAY East Play-Time Rules (SAY Rule 12) ───────────────────────
+// Every player present must play approximately half the game.
+// Source: SAY East Playing Laws Rulebook (Updated Jan 2026), Rule 12
+const PLAY_TIME_RULES = {
+  "U6 / Instructional": { minFraction: 1.0, note: "All players play the entire game (Instructional only)" },
+  "U8 / Passers":       { minFraction: 0.5, note: "SAY Rule 12: Every player must play ≈ half the game" },
+  "U10 / Wings":        { minFraction: 0.5, note: "SAY Rule 12: Every player must play ≈ half the game" },
+  "U12 / Strikers":     { minFraction: 0.5, note: "SAY Rule 12: Every player must play ≈ half the game" },
+  "U14 / Kickers":      { minFraction: 0.5, note: "SAY Rule 12: Every player must play ≈ half the game" },
+  "U16 / Minors":       { minFraction: 0.5, note: "SAY Rule 12: Every player must play ≈ half the game" },
+  "U19 / Seniors":      { minFraction: 0.5, note: "SAY Rule 12: Every player must play ≈ half the game" },
+};
+
+// ─── SAY East League Rules ─────────────────────────────────────────
+// Source: SAY East Playing Laws Rulebook (Updated Jan 2026) + SAY National Playing Laws (2024/2026)
+// SAY East specific exceptions: Silver Matrix age chart, SAY East formats, GK punting allowed, no blowouts
+const LEAGUE_RULES = {
+  "U6 / Instructional": {
+    divisionName: "Instructional", ageRange: "Ages 4–5",
+    format: "4v4", ballSize: 3,
+    fieldLength: "25–35 yds", fieldWidth: "15–25 yds",
+    goalSize: "4×6 ft",
+    heading: false, offside: false, slideTackle: false, buildOut: false,
+    gkPunt: false, throwIns: false, penaltyKick: false, yellowRedCards: false,
+    periods: 4, periodMin: 8,
+    quickRules: [
+      { icon:"🎯", text:"Development only — score is NOT kept", important: true },
+      { icon:"🚫", text:"No heading — IFK awarded to opponents if it occurs", important: true },
+      { icon:"⏱", text:"4 × 8 min quarters (32 min total)" },
+      { icon:"👟", text:"Kick-ins replace throw-ins (no throw-ins)" },
+      { icon:"⚽", text:"No offside rule applies" },
+      { icon:"🔄", text:"All players play the entire game" },
+      { icon:"🧤", text:"GK may NOT punt — roll or throw only" },
+      { icon:"🟢", text:"No yellow or red cards — verbal guidance only" },
+      { icon:"⚽", text:"Size 3 ball" },
+      { icon:"🏟", text:"Small field: 25–35 × 15–25 yards" },
+    ],
+    unknownRules: [
+      "Coaches are often allowed near the field to guide young players — SAY encourages teaching moments",
+      "Even 'accidental' heading results in an IFK for the other team at this age",
+      "No penalty kicks in Instructional play — all free kicks are indirect",
+      "If a team is winning by more than 5 goals, SAY East's 'no blowout' rule requires adjustments — coaches must act",
+      "The build-out line is NOT used at U6/Instructional; it begins at U8/Passers",
+      "Referees at this age are there to educate, not just officiate — expect teaching stoppages",
+    ],
+    officialLinks: [
+      { label: "SAY East Official Site", url: "https://www.sayeast.org" },
+      { label: "SAY National Playing Laws (2024)", url: "https://www.saysoccer.org/Default.aspx?tabid=733802" },
+      { label: "SAY East Rulebook PDF (Jan 2026)", url: "https://www.sayeast.org/wp-content/uploads/2022/07/SAY-East-Playing-Laws-Rulebook.pdf" },
+    ]
+  },
+
+  "U8 / Passers": {
+    divisionName: "Passers", ageRange: "Ages 6–7 (Silver Matrix)",
+    format: "6v6 (SAY East)", ballSize: 3,
+    fieldLength: "55–65 yds", fieldWidth: "35–45 yds",
+    goalSize: "12–18 ft wide × 6–7 ft high",
+    heading: false, offside: false, slideTackle: false, buildOut: true,
+    gkPunt: true, throwIns: true, penaltyKick: false, yellowRedCards: true,
+    periods: 4, periodMin: 12,
+    quickRules: [
+      { icon:"🚫", text:"No heading — IFK awarded to opponents", important: true },
+      { icon:"📏", text:"Build-out line: all opponents must retreat on GK ball or goal kick", important: true },
+      { icon:"⏱", text:"4 × 12 min quarters (48 min total)" },
+      { icon:"⚽", text:"SAY East: 6v6 format (spring & fall)" },
+      { icon:"🔄", text:"Every player must play ≈ half the game (SAY Rule 12)" },
+      { icon:"🧤", text:"GK may punt (SAY East exception to national rule)" },
+      { icon:"⚽", text:"No offside rule — open play encouraged" },
+      { icon:"🔁", text:"Unlimited subs: goal kicks, after goals, injuries, between periods, cautions" },
+      { icon:"⚽", text:"Size 3 ball" },
+      { icon:"🏟", text:"7v7 small-sided field: 55–65 × 35–45 yards" },
+    ],
+    unknownRules: [
+      "SAY East uses 6v6 format, not the SAY national standard of 7v7 — plan your roster accordingly",
+      "Build-out line: when the GK has the ball OR on a goal kick, all opponents must retreat behind the build-out line before the ball is played",
+      "GK cannot score directly from a punt (ball must touch another player first)",
+      "No penalty kicks at this age — direct free kicks from outside the penalty area only",
+      "SAY East 'no blowout' rule: winning by more than 5 goals is a violation — coaches must rotate and adjust",
+      "A player ejected (Red Card for fighting) is suspended for the next 2 games per SAY East rules",
+      "Players who re-enter after subbing are fully allowed — re-entry is unlimited",
+    ],
+    officialLinks: [
+      { label: "SAY East Official Site", url: "https://www.sayeast.org" },
+      { label: "SAY National Playing Laws (2024)", url: "https://www.saysoccer.org/Default.aspx?tabid=733802" },
+      { label: "SAY East Rulebook PDF (Jan 2026)", url: "https://www.sayeast.org/wp-content/uploads/2022/07/SAY-East-Playing-Laws-Rulebook.pdf" },
+    ]
+  },
+
+  "U10 / Wings": {
+    divisionName: "Wings", ageRange: "Ages 8–9 (Silver Matrix)",
+    format: "8v8 (SAY East)", ballSize: 4,
+    fieldLength: "55–65 yds", fieldWidth: "35–45 yds",
+    goalSize: "12–18 ft wide × 6–7 ft high",
+    heading: false, offside: false, slideTackle: false, buildOut: true,
+    gkPunt: true, throwIns: true, penaltyKick: true, yellowRedCards: true,
+    periods: 4, periodMin: 15,
+    quickRules: [
+      { icon:"🚫", text:"No heading — IFK awarded to opponents", important: true },
+      { icon:"📏", text:"Build-out line used — opponents retreat on GK possession / goal kicks", important: true },
+      { icon:"⏱", text:"4 × 15 min quarters (60 min total)" },
+      { icon:"⚽", text:"SAY East: 8v8 format (spring & fall)" },
+      { icon:"🔄", text:"Every player must play ≈ half the game (SAY Rule 12)" },
+      { icon:"🧤", text:"GK may punt (SAY East exception)" },
+      { icon:"⚽", text:"No offside rule at this age" },
+      { icon:"🔁", text:"Unlimited substitutions (with referee permission)" },
+      { icon:"🟡", text:"Yellow & red cards apply" },
+      { icon:"⚽", text:"Size 4 ball" },
+      { icon:"🏟", text:"7v7 small-sided field: 55–65 × 35–45 yards" },
+    ],
+    unknownRules: [
+      "SAY East uses 8v8 format — this is larger than the national 7v7 standard",
+      "Build-out line is still active: opponents must retreat when GK has the ball or on goal kicks",
+      "Even though penalty kicks are possible, they are taken from the 7v7 penalty mark (10 yards), not the full 12 yards",
+      "No offside is called at Wings — the build-out line is the only positional restriction",
+      "SAY East 'no blowout' rule: winning margin over 5 goals requires coaches to adjust strategy",
+      "A red card for fighting means a 2-game suspension under SAY East rules",
+      "Goal kick ball does not have to leave the penalty area to be in play (SAY rule)",
+    ],
+    officialLinks: [
+      { label: "SAY East Official Site", url: "https://www.sayeast.org" },
+      { label: "SAY National Playing Laws (2024)", url: "https://www.saysoccer.org/Default.aspx?tabid=733802" },
+      { label: "SAY East Rulebook PDF (Jan 2026)", url: "https://www.sayeast.org/wp-content/uploads/2022/07/SAY-East-Playing-Laws-Rulebook.pdf" },
+    ]
+  },
+
+  "U12 / Strikers": {
+    divisionName: "Strikers", ageRange: "Ages 10–11 (Silver Matrix)",
+    format: "9v9 (SAY East)", ballSize: 4,
+    fieldLength: "70–80 yds", fieldWidth: "45–55 yds",
+    goalSize: "18–21 ft wide × 6–7 ft high",
+    heading: false, offside: true, slideTackle: false, buildOut: false,
+    gkPunt: true, throwIns: true, penaltyKick: true, yellowRedCards: true,
+    periods: 4, periodMin: 20,
+    quickRules: [
+      { icon:"🚫", text:"NO heading — banned in games & practices through U12", important: true },
+      { icon:"📏", text:"Full offside rule applies (from defensive line, whole field)", important: true },
+      { icon:"⏱", text:"4 × 20 min quarters (80 min total)" },
+      { icon:"⚽", text:"SAY East: 9v9 format (spring & fall)" },
+      { icon:"🔄", text:"Every player must play ≈ half the game (SAY Rule 12)" },
+      { icon:"🧤", text:"GK may punt (SAY East exception)" },
+      { icon:"⚽", text:"No build-out line at this age — full field offside" },
+      { icon:"🔁", text:"Unlimited substitutions with referee permission" },
+      { icon:"🟡", text:"Full yellow/red card system" },
+      { icon:"⚽", text:"Size 4 ball" },
+      { icon:"🏟", text:"9v9 field: 70–80 × 45–55 yards" },
+    ],
+    unknownRules: [
+      "Heading is STILL banned at U12 — any deliberate header results in an IFK for the other team, even in games and at practice",
+      "This is the first SAY age group where the full FIFA offside rule applies from the defensive line",
+      "No build-out line at Strikers — opponents no longer need to retreat for GK possession",
+      "SAY East 'no blowout' rule still applies — win margin over 5 is a violation",
+      "Slide tackling: SAY rules do not expressly prohibit it but refs may restrict it locally — ask your referee before games",
+      "Penalty mark is at 10 yards (9v9 field), not the full 12-yard FIFA spot",
+      "Red card for fighting = 2-game suspension under SAY East rules",
+    ],
+    officialLinks: [
+      { label: "SAY East Official Site", url: "https://www.sayeast.org" },
+      { label: "SAY National Playing Laws (2024)", url: "https://www.saysoccer.org/Default.aspx?tabid=733802" },
+      { label: "SAY East Rulebook PDF (Jan 2026)", url: "https://www.sayeast.org/wp-content/uploads/2022/07/SAY-East-Playing-Laws-Rulebook.pdf" },
+    ]
+  },
+
+  "U14 / Kickers": {
+    divisionName: "Kickers", ageRange: "Ages 12–13 (Silver Matrix)",
+    format: "9v9 (spring) / 11v11 (fall) — SAY East", ballSize: 5,
+    fieldLength: "80–130 yds (11v11) / 70–80 yds (9v9)", fieldWidth: "50–100 yds (11v11)",
+    goalSize: "24 ft wide × 8 ft high (11v11)",
+    heading: true, offside: true, slideTackle: true, buildOut: false,
+    gkPunt: true, throwIns: true, penaltyKick: true, yellowRedCards: true,
+    periods: 2, periodMin: 35,
+    quickRules: [
+      { icon:"✅", text:"Heading is allowed — limit practice headers per SAY policy", important: true },
+      { icon:"📏", text:"Full offside rule (FIFA standard from defensive line)" },
+      { icon:"⏱", text:"2 × 35 min halves (70 min total)" },
+      { icon:"⚽", text:"SAY East: 9v9 spring / 11v11 fall" },
+      { icon:"🔄", text:"Every player must play ≈ half the game (SAY Rule 12)" },
+      { icon:"🧤", text:"GK may punt" },
+      { icon:"🔁", text:"Unlimited substitutions with referee permission" },
+      { icon:"🟡", text:"Full yellow/red card system — cards carry across games" },
+      { icon:"⚽", text:"Size 5 ball" },
+      { icon:"🏟", text:"Full-sided field (11v11): 80–130 × 50–100 yards" },
+    ],
+    unknownRules: [
+      "Heading is now allowed but SAY limits practice headers to max 15–20 reps and 30 minutes per week at U14",
+      "SAY East uses 9v9 in spring and 11v11 in fall — confirm format with your district coordinator each season",
+      "Yellow cards can accumulate across games — check your district's suspension threshold (often 3 yellows = 1 game ban)",
+      "Slide tackling is permitted at U14+ under SAY rules — referees will still penalize dangerous challenges",
+      "Penalty kicks are from the full 12-yard FIFA spot on 11v11 fields",
+      "SAY East 'no blowout' rule still technically applies — coaches should manage score differential sportsmanly",
+      "Red card for fighting = 2-game suspension (SAY East local rule, same for all divisions)",
+      "GK cannot be replaced by a field player mid-play without referee notification — must wait for a stoppage",
+    ],
+    officialLinks: [
+      { label: "SAY East Official Site", url: "https://www.sayeast.org" },
+      { label: "SAY National Playing Laws (2024)", url: "https://www.saysoccer.org/Default.aspx?tabid=733802" },
+      { label: "SAY East Rulebook PDF (Jan 2026)", url: "https://www.sayeast.org/wp-content/uploads/2022/07/SAY-East-Playing-Laws-Rulebook.pdf" },
+      { label: "FIFA Laws of the Game (IFAB)", url: "https://www.theifab.com/laws-of-the-game" },
+    ]
+  },
+
+  "U16 / Minors": {
+    divisionName: "Minors", ageRange: "Ages 14–15 (Silver Matrix)",
+    format: "11v11", ballSize: 5,
+    fieldLength: "80–130 yds", fieldWidth: "50–100 yds",
+    goalSize: "24 ft wide × 8 ft high",
+    heading: true, offside: true, slideTackle: true, buildOut: false,
+    gkPunt: true, throwIns: true, penaltyKick: true, yellowRedCards: true,
+    periods: 2, periodMin: 40,
+    quickRules: [
+      { icon:"⚽", text:"Full SAY/FIFA Laws of the Game apply", important: true },
+      { icon:"⏱", text:"2 × 40 min halves (80 min total)" },
+      { icon:"✅", text:"Heading fully allowed — no practice limits" },
+      { icon:"📏", text:"Full offside rule — FIFA standard" },
+      { icon:"🔄", text:"Every player must play ≈ half the game (SAY Rule 12)" },
+      { icon:"🔁", text:"Unlimited substitutions with referee permission" },
+      { icon:"🟡", text:"Yellow/red cards — accumulation rules apply" },
+      { icon:"⚽", text:"Size 5 ball" },
+      { icon:"🏟", text:"Full-sided field: 80–130 × 50–100 yards" },
+    ],
+    unknownRules: [
+      "No heading restrictions at U16 — practice and game headers are unlimited",
+      "Referees at this level are expected to use a stricter interpretation of Laws 12 (fouls) and 11 (offside)",
+      "A player ejected (Red Card for fighting) is suspended for 2 games — SAY East local rule",
+      "Goal kicks: ball is in play once it is kicked and clearly moves — does not need to leave the penalty area",
+      "GK has 6 seconds to distribute from hands before an IFK is awarded to opponents",
+      "Yellow card accumulation suspensions apply — confirm threshold with your district",
+      "Coaches receiving a red card must leave the vicinity of the field",
+    ],
+    officialLinks: [
+      { label: "SAY East Official Site", url: "https://www.sayeast.org" },
+      { label: "SAY National Playing Laws (2024)", url: "https://www.saysoccer.org/Default.aspx?tabid=733802" },
+      { label: "SAY East Rulebook PDF (Jan 2026)", url: "https://www.sayeast.org/wp-content/uploads/2022/07/SAY-East-Playing-Laws-Rulebook.pdf" },
+      { label: "IFAB Laws of the Game", url: "https://www.theifab.com/laws-of-the-game" },
+    ]
+  },
+
+  "U19 / Seniors": {
+    divisionName: "Seniors", ageRange: "Ages 16–18 (Silver Matrix)",
+    format: "11v11", ballSize: 5,
+    fieldLength: "80–130 yds", fieldWidth: "50–100 yds",
+    goalSize: "24 ft wide × 8 ft high",
+    heading: true, offside: true, slideTackle: true, buildOut: false,
+    gkPunt: true, throwIns: true, penaltyKick: true, yellowRedCards: true,
+    periods: 2, periodMin: 45,
+    quickRules: [
+      { icon:"⚽", text:"Full SAY/FIFA Laws of the Game apply", important: true },
+      { icon:"⏱", text:"2 × 45 min halves (90 min total)" },
+      { icon:"✅", text:"Heading fully allowed" },
+      { icon:"📏", text:"Full offside rule — FIFA standard" },
+      { icon:"🔄", text:"Every player must play ≈ half the game (SAY Rule 12)" },
+      { icon:"🔁", text:"Unlimited substitutions with referee permission" },
+      { icon:"🟡", text:"Full yellow/red card system — suspensions carry across games" },
+      { icon:"⚽", text:"Size 5 ball" },
+      { icon:"🏟", text:"Full-sided field: 80–130 × 50–100 yards" },
+    ],
+    unknownRules: [
+      "SAY Seniors is for ages 16–18 — this is the highest SAY recreational division",
+      "SAY Rule 12 still applies at Seniors — every player must get approximately half the game",
+      "A player receiving a red card for fighting is suspended for 2 games per SAY East rules",
+      "The 'no blowout' culture is still encouraged at SAY East, even at the senior level",
+      "Deliberate handball leading to the prevention of a goal can result in a Red Card (DOGSO-H)",
+      "GK is allowed 6 seconds to release the ball from hands — IFK awarded if exceeded",
+      "Coaches can be cautioned or sent off by the referee for misconduct on the sideline",
+    ],
+    officialLinks: [
+      { label: "SAY East Official Site", url: "https://www.sayeast.org" },
+      { label: "SAY National Playing Laws (2024)", url: "https://www.saysoccer.org/Default.aspx?tabid=733802" },
+      { label: "SAY East Rulebook PDF (Jan 2026)", url: "https://www.sayeast.org/wp-content/uploads/2022/07/SAY-East-Playing-Laws-Rulebook.pdf" },
+      { label: "IFAB Laws of the Game", url: "https://www.theifab.com/laws-of-the-game" },
+    ]
+  },
+};
+
+// Player skill ratings (1-5 per category)
+const SKILL_CATEGORIES = ["Speed","Technique","Positioning","Teamwork","Effort"];
+
+// ═══════════════════════════════════════════════════════════════════
+// DRILL LIBRARY — 30+ drills with diagram descriptions & images
+// ═══════════════════════════════════════════════════════════════════
+const DRILLS = [
+  {
+    id:"d1", name:"Rondo 4v2", category:"Possession", skills:["Passing","First Touch"],
+    ageMin:"U8", ageMax:"Adult", difficulty:"Beginner", duration:12,
+    image:"https://images.unsplash.com/photo-1553778263-73a83bab9b0c?w=400&q=80",
+    setup:"10×10 grid. 4 on outside, 2 inside.",
+    instructions:"Outside players keep possession. Each defender switch after losing the ball twice or 90 seconds.",
+    coaching:"Open body shape. Quick 1-touch when possible. Move to give passing angles.",
+    progressions:["Shrink grid to 8×8","3-touch max","One-touch only","Add 3v3 in center"],
+    equipment:["8 cones","1 ball per group"]
+  },
+  {
+    id:"d2", name:"1v1 Defending Gates", category:"Defense", skills:["Defending","1v1"],
+    ageMin:"U8", ageMax:"Adult", difficulty:"Beginner", duration:10,
+    image:"https://images.unsplash.com/photo-1431324155629-1a6deb1dec8d?w=400&q=80",
+    setup:"15×15 grid with 4 small cone gates on edges.",
+    instructions:"Attacker dribbles through any gate. Defender prevents this. Switch every 90s.",
+    coaching:"Defender: jockey, stay goal-side, wait for touch. Don't dive in.",
+    progressions:["Add second attacker","Limit dribble touches","Score points system"],
+    equipment:["8 cones","1 ball"]
+  },
+  {
+    id:"d3", name:"Triangle Passing", category:"Passing", skills:["Passing","Movement"],
+    ageMin:"U6", ageMax:"Adult", difficulty:"Beginner", duration:10,
+    image:"https://images.unsplash.com/photo-1574629810360-7efbbe195018?w=400&q=80",
+    setup:"3 cones in triangle, 8 yards apart.",
+    instructions:"A→B, B one-touch to C, C dribbles to A's cone. Rotate. Both directions.",
+    coaching:"Weight of pass. First touch direction. Arrive early to cone.",
+    progressions:["Add 4th player","Two balls","Add defender"],
+    equipment:["3 cones","1 ball"]
+  },
+  {
+    id:"d4", name:"Shooting Circuit", category:"Shooting", skills:["Shooting","First Touch"],
+    ageMin:"U10", ageMax:"Adult", difficulty:"Intermediate", duration:15,
+    image:"https://images.unsplash.com/photo-1508098682722-e99c43a406b2?w=400&q=80",
+    setup:"3 stations around penalty area: cross, through ball, dribble & shoot.",
+    instructions:"Rotate every 5 min. Station 1: volley from cross. Station 2: first-time finish. Station 3: beat mannequin and shoot.",
+    coaching:"Plant foot beside ball. Lean over it. Strike through center. Follow through.",
+    progressions:["Add GK","Time pressure","Score only with weak foot"],
+    equipment:["12 balls","3 mannequins","2 goals"]
+  },
+  {
+    id:"d5", name:"3v3 + GK Small-Sided", category:"Scrimmage", skills:["All"],
+    ageMin:"U8", ageMax:"Adult", difficulty:"Beginner", duration:20,
+    image:"https://images.unsplash.com/photo-1560272564-c83b66b1ad12?w=400&q=80",
+    setup:"25×35 grid, small goals, GK each end.",
+    instructions:"3v3 + GK. Free subs every 4 mins. Winner stays, loser rotates.",
+    coaching:"Width, depth, communication. GK distribution. Quick transitions.",
+    progressions:["No GK","Add neutral player","Goals only from crosses"],
+    equipment:["4 cones","2 small goals","5 balls"]
+  },
+  {
+    id:"d6", name:"GK Distribution Drill", category:"Goalkeeping", skills:["Goalkeeping"],
+    ageMin:"U8", ageMax:"Adult", difficulty:"Beginner", duration:10,
+    image:"https://images.unsplash.com/photo-1517466787929-bc90951d0974?w=400&q=80",
+    setup:"GK in goal. 5 colored cones at 15/20/25 yard intervals.",
+    instructions:"Coach calls color. GK distributes to that cone. Alternate serve types: ground, aerial, low drive.",
+    coaching:"Quick release. Accuracy over power. Communicate before release.",
+    progressions:["Moving targets","Under time pressure","GK kicks only"],
+    equipment:["5 cones (different colors)","6 balls"]
+  },
+  {
+    id:"d7", name:"Transition Counter Attack", category:"Fitness", skills:["Speed","Transition"],
+    ageMin:"U10", ageMax:"Adult", difficulty:"Intermediate", duration:15,
+    image:"https://images.unsplash.com/photo-1551280857-2b9bbe52acf4?w=400&q=80",
+    setup:"Full half of field. Two teams of 5.",
+    instructions:"When possession switches, team must be behind halfway in 4 seconds. Coach counts. Deduct point for slow transitions.",
+    coaching:"Immediate counter-press. Sprint to recover shape. Don't walk after losing the ball.",
+    progressions:["Shorten time to 3s","Add neutral zone","Extra attacker on counter"],
+    equipment:["Bibs","4 cones","4 balls"]
+  },
+  {
+    id:"d8", name:"Dribbling Obstacle Course", category:"Dribbling", skills:["Dribbling","Ball Control"],
+    ageMin:"U6", ageMax:"U14", difficulty:"Beginner", duration:10,
+    image:"https://images.unsplash.com/photo-1556056504-5c7696c4c28d?w=400&q=80",
+    setup:"10 cones weaving pattern, 25 yards long. Speed gate at end.",
+    instructions:"Dribble through with right foot, return with left. Race format for motivation.",
+    coaching:"Ball close to feet. Head up. Both feet used equally.",
+    progressions:["Add defenders at end","Tighter spacing","Ball mastery tricks between gates"],
+    equipment:["10 cones","1 ball per player"]
+  },
+  {
+    id:"d9", name:"Crossing & Finishing", category:"Shooting", skills:["Crossing","Shooting","Movement"],
+    ageMin:"U12", ageMax:"Adult", difficulty:"Intermediate", duration:15,
+    image:"https://images.unsplash.com/photo-1508098682722-e99c43a406b2?w=400&q=80",
+    setup:"Wide channel cones, 2 forwards in box, 1 winger.",
+    instructions:"Winger drives to byline. Crosses to near/far post. Forwards make runs. Rotate positions every 6 crosses.",
+    coaching:"Crosser: low driven or whipped ball. Striker: time run, attack near post first.",
+    progressions:["Add CB","GK in goal","Scoring competition"],
+    equipment:["10 balls","4 cones","1 goal"]
+  },
+  {
+    id:"d10", name:"Pressing Triggers", category:"Defense", skills:["Pressing","Teamwork"],
+    ageMin:"U12", ageMax:"Adult", difficulty:"Advanced", duration:12,
+    image:"https://images.unsplash.com/photo-1431324155629-1a6deb1dec8d?w=400&q=80",
+    setup:"30×20 grid. Defensive team of 4. 5 attackers keep possession.",
+    instructions:"Coach calls trigger: 'GK', 'backward pass', 'miscontrol'. Defenders press immediately on trigger.",
+    coaching:"Compact shape. Cover shadow. Ball-near player presses — others support.",
+    progressions:["No trigger calls — players read it","Wider grid","Add goals to counter-attack"],
+    equipment:["8 cones","2 balls","bibs"]
+  },
+  {
+    id:"d11", name:"Wall Pass / One-Two", category:"Passing", skills:["Combination Play","Passing"],
+    ageMin:"U10", ageMax:"Adult", difficulty:"Intermediate", duration:10,
+    image:"https://images.unsplash.com/photo-1574629810360-7efbbe195018?w=400&q=80",
+    setup:"Two rows of cones 12 yards apart. Pairs of players.",
+    instructions:"Player A passes to B, B one-touches back, A runs onto it. Switch. Add mini defender to make it live.",
+    coaching:"Weight of pass into feet. Return pass into space. Time the run.",
+    progressions:["Add passive defender","Speed competition","Link to shooting"],
+    equipment:["6 cones","1 ball per pair"]
+  },
+  {
+    id:"d12", name:"Heading Fundamentals", category:"Heading", skills:["Heading"],
+    ageMin:"U12", ageMax:"Adult", difficulty:"Beginner", duration:10,
+    image:"https://images.unsplash.com/photo-1553778263-73a83bab9b0c?w=400&q=80",
+    setup:"Pairs, 8 yards apart. Coach serves high balls.",
+    instructions:"Toss-head-catch pairs drill. Progress to heading to target gate. Defensive and attacking headers.",
+    coaching:"Eyes open. Attack the ball. Neck firm. Use forehead center.",
+    progressions:["Moving cross heading","Contested heading","Defensive clearance","Flick-on"],
+    equipment:["6 balls","4 cones"]
+  },
+  {
+    id:"d13", name:"Goalkeeper Shot Stopping", category:"Goalkeeping", skills:["Goalkeeping","Reactions"],
+    ageMin:"U8", ageMax:"Adult", difficulty:"Intermediate", duration:12,
+    image:"https://images.unsplash.com/photo-1517466787929-bc90951d0974?w=400&q=80",
+    setup:"GK in goal. Servers at 16-18 yards.",
+    instructions:"Serve low, mid-height, high shots in sequence. GK distributes after each save. Reaction saves off the post.",
+    coaching:"Set position. Move feet to get behind ball. Strong hands. Spring off ground.",
+    progressions:["Add second ball immediately after save","Crosses combined with shots","Penalty simulation"],
+    equipment:["12 balls","1 goal"]
+  },
+  {
+    id:"d14", name:"Possession 5v2 Rondo", category:"Possession", skills:["Passing","First Touch","Decision Making"],
+    ageMin:"U10", ageMax:"Adult", difficulty:"Intermediate", duration:12,
+    image:"https://images.unsplash.com/photo-1553778263-73a83bab9b0c?w=400&q=80",
+    setup:"12×12 grid. 5 outside, 2 press.",
+    instructions:"2-touch max. If defenders win ball they join outside and two worst performers go in.",
+    coaching:"Constant movement. Create triangles. Switch point of attack. Never square pass under pressure.",
+    progressions:["1-touch only","Directional rondo (score through gates)","Add 3rd defender"],
+    equipment:["8 cones","1 ball"]
+  },
+  {
+    id:"d15", name:"Weak Foot Challenge", category:"Dribbling", skills:["Ball Control","Weak Foot"],
+    ageMin:"U6", ageMax:"U16", difficulty:"Beginner", duration:8,
+    image:"https://images.unsplash.com/photo-1556056504-5c7696c4c28d?w=400&q=80",
+    setup:"Open space. Each player with ball.",
+    instructions:"All passing, dribbling, shooting done with weaker foot only. Friendly competition — most successful passes in 3 minutes.",
+    coaching:"No rush. Slow controlled touches. Celebrate effort not just success.",
+    progressions:["Dribble races weak foot","Shoot on goal weak foot only","1v1 weak foot"],
+    equipment:["1 ball per player","4 cones"]
+  },
+  {
+    id:"d16", name:"Build-Out Line Practice", category:"Possession", skills:["Teamwork","Positioning"],
+    ageMin:"U8", ageMax:"U12", difficulty:"Beginner", duration:12,
+    image:"https://images.unsplash.com/photo-1574629810360-7efbbe195018?w=400&q=80",
+    setup:"Full small-sided field with build-out line marked.",
+    instructions:"GK gets ball. All opponents retreat. Team must build out before crossing. Practice the restart sequence.",
+    coaching:"Players move to create angles. GK communicates. No rushing over the line.",
+    progressions:["Passive defenders at line","Defenders can press once ball crosses","Time the build-out"],
+    equipment:["Cones for build-out line","1 ball","small goals"]
+  },
+  {
+    id:"d17", name:"Speed & Agility Ladder", category:"Fitness", skills:["Speed","Agility"],
+    ageMin:"U6", ageMax:"Adult", difficulty:"Beginner", duration:10,
+    image:"https://images.unsplash.com/photo-1552674605-db6ffd4facb5?w=400&q=80",
+    setup:"Agility ladder flat on ground. Cones at end for direction change.",
+    instructions:"Various footwork patterns: in-in-out-out, lateral, high knees. End each pattern with a sprint to cone.",
+    coaching:"Quick feet. Stay on toes. Pump arms. Eyes forward not on feet.",
+    progressions:["With ball at end","Race format","Combine with pass/shoot at end"],
+    equipment:["1 agility ladder","4 cones"]
+  },
+  {
+    id:"d18", name:"Positional Rotation Scrimmage", category:"Scrimmage", skills:["Positioning","Teamwork","Decision Making"],
+    ageMin:"U10", ageMax:"Adult", difficulty:"Intermediate", duration:20,
+    image:"https://images.unsplash.com/photo-1560272564-c83b66b1ad12?w=400&q=80",
+    setup:"Half field. Teams of 6-8.",
+    instructions:"Every 5 mins, coach calls rotation — all field players shift position clockwise. GK stays.",
+    coaching:"Adaptability. Learn what teammates need. Call for ball constantly.",
+    progressions:["Free play after rotation period","Score bonus for play from new position","Coach assigns specific formations"],
+    equipment:["Bibs","4 cones","2 goals","4 balls"]
+  },
+  {
+    id:"d19", name:"Headers & Volleys", category:"Shooting", skills:["Heading","Shooting","Aerial"],
+    ageMin:"U12", ageMax:"Adult", difficulty:"Advanced", duration:12,
+    image:"https://images.unsplash.com/photo-1508098682722-e99c43a406b2?w=400&q=80",
+    setup:"18-yard box. Servers wide with balls. GK in goal.",
+    instructions:"Server crosses, player chooses header or volley. Rotate server/shooter every 6 attempts.",
+    coaching:"Commit to the ball early. Call your shot type. GK communication.",
+    progressions:["Compete for points","Add CB to contest","Vary delivery heights/speeds"],
+    equipment:["12 balls","1 goal","bibs"]
+  },
+  {
+    id:"d20", name:"Throw-In Techniques", category:"Passing", skills:["Throw-ins","Rules"],
+    ageMin:"U10", ageMax:"Adult", difficulty:"Beginner", duration:8,
+    image:"https://images.unsplash.com/photo-1574629810360-7efbbe195018?w=400&q=80",
+    setup:"Sideline. Pairs of players.",
+    instructions:"Practice legal throw-in technique. Both feet on ground, ball behind/over head. Target near and far.",
+    coaching:"Both feet on or behind line. Full arc over head. Accuracy before distance.",
+    progressions:["Long throw specialist training","Throw-in to set piece combination","Pressure — defender marks receiver"],
+    equipment:["4 balls","cones marking sideline"]
+  },
+  {
+    id:"d21", name:"Shadow Play — Shape & Movement", category:"Possession", skills:["Positioning","Teamwork"],
+    ageMin:"U12", ageMax:"Adult", difficulty:"Advanced", duration:15,
+    image:"https://images.unsplash.com/photo-1553778263-73a83bab9b0c?w=400&q=80",
+    setup:"Full field. Two full teams.",
+    instructions:"No opposition. Team moves ball through set phases of play. Coach directs positioning. No pressure.",
+    coaching:"Compactness. Width and depth. Movement on and off the ball. Verbal communication.",
+    progressions:["Add passive defenders","Add pressing team","Live play from shadow positions"],
+    equipment:["4 balls","bibs","cones","2 goals"]
+  },
+  {
+    id:"d22", name:"Defensive Shape — 4-block", category:"Defense", skills:["Defending","Teamwork","Positioning"],
+    ageMin:"U12", ageMax:"Adult", difficulty:"Advanced", duration:12,
+    image:"https://images.unsplash.com/photo-1431324155629-1a6deb1dec8d?w=400&q=80",
+    setup:"Half field. Defensive team of 4 vs 5 attackers.",
+    instructions:"Defensive block maintains compact shape. Ball-side press, cover side tracks runner. Stay connected.",
+    coaching:"Step together. Never let gaps form centrally. Communicate: 'press', 'hold', 'cover'.",
+    progressions:["Add midfield line","Live full-sided","Counter on winning the ball"],
+    equipment:["Bibs","cones","1 goal","4 balls"]
+  },
+  {
+    id:"d23", name:"Free Kick Combination", category:"Set Pieces", skills:["Set Pieces","Shooting","Teamwork"],
+    ageMin:"U12", ageMax:"Adult", difficulty:"Intermediate", duration:12,
+    image:"https://images.unsplash.com/photo-1508098682722-e99c43a406b2?w=400&q=80",
+    setup:"Balls placed 22-30 yards from goal. Wall set up. GK in place.",
+    instructions:"Practice 3 set free kick routines: dummy run, layoff, direct. Rotate who takes.",
+    coaching:"Commit to routine. Timing of runners. Shooter: pick corner, trust technique.",
+    progressions:["Contested wall","Vary positions","Score competition across routines"],
+    equipment:["8 balls","mannequins or players as wall","1 goal"]
+  },
+  {
+    id:"d24", name:"Corner Kick Routines", category:"Set Pieces", skills:["Set Pieces","Heading","Teamwork"],
+    ageMin:"U12", ageMax:"Adult", difficulty:"Intermediate", duration:10,
+    image:"https://images.unsplash.com/photo-1508098682722-e99c43a406b2?w=400&q=80",
+    setup:"Corner flags, full goal, GK.",
+    instructions:"Practice 2 attacking corner routines (near post flick, far post delivery). Also: defending corners — zonal vs man-mark.",
+    coaching:"Delivery consistency. Runners attack space not the ball. Defenders: don't ball-watch.",
+    progressions:["Live defense","Mix in short corners","Score competition"],
+    equipment:["10 balls","1 full goal","bibs"]
+  },
+  {
+    id:"d25", name:"Fun Ball Mastery (U6-U8)", category:"Dribbling", skills:["Ball Control","Fun"],
+    ageMin:"U6", ageMax:"U8", difficulty:"Beginner", duration:10,
+    image:"https://images.unsplash.com/photo-1556056504-5c7696c4c28d?w=400&q=80",
+    setup:"Open space. Each child with ball.",
+    instructions:"Follow the coach: toe taps, sole rolls, inside-outside, 'stop the ball' freeze. Make it a game — coach calls animal movements.",
+    coaching:"Make it FUN. Every child should be laughing. Praise all attempts.",
+    progressions:["Add freeze tag with ball","Musical cones","Coach says (Simon says)"],
+    equipment:["1 ball per child","10 cones"]
+  },
+  {
+    id:"d26", name:"Nutmeg Challenge", category:"Dribbling", skills:["1v1","Dribbling","Confidence"],
+    ageMin:"U8", ageMax:"U14", difficulty:"Beginner", duration:8,
+    image:"https://images.unsplash.com/photo-1556056504-5c7696c4c28d?w=400&q=80",
+    setup:"Pairs. Defender stands with feet shoulder-width apart.",
+    instructions:"Attacker tries to pass ball through defender's legs. 5 attempts, switch. Progress to live 1v1 where nutmeg = 2 points.",
+    coaching:"Quick touch. Change of pace. Disguise direction.",
+    progressions:["Moving defender","Live 1v1","Nutmeg tournament"],
+    equipment:["1 ball per pair"]
+  },
+  {
+    id:"d27", name:"Long Ball & Settle", category:"Passing", skills:["Long Passing","First Touch","Aerial"],
+    ageMin:"U12", ageMax:"Adult", difficulty:"Intermediate", duration:10,
+    image:"https://images.unsplash.com/photo-1574629810360-7efbbe195018?w=400&q=80",
+    setup:"Two groups, 35-40 yards apart.",
+    instructions:"Player A drives a long ball. Player B must settle in 1-2 touches and return. Compete for cleanest first touch.",
+    coaching:"Non-kicking foot direction. Strike through center. Receiver: soften the touch, cushion it.",
+    progressions:["Add defender at receiver end","Settle then beat defender","Vary delivery — lofted and driven"],
+    equipment:["8 balls","cones"]
+  },
+  {
+    id:"d28", name:"Juggling Progression", category:"Ball Control", skills:["Ball Control","Technique"],
+    ageMin:"U6", ageMax:"Adult", difficulty:"Beginner", duration:8,
+    image:"https://images.unsplash.com/photo-1556056504-5c7696c4c28d?w=400&q=80",
+    setup:"Open space. 1 ball per player.",
+    instructions:"Progression: 1 touch & catch → 2 touches → alternating feet → knees → head. Personal best counting.",
+    coaching:"Relax. Small touches. Strike through center of ball. No rushing.",
+    progressions:["Juggle while moving","Partner juggling","Tricks competition"],
+    equipment:["1 ball per player"]
+  },
+  {
+    id:"d29", name:"Penalty Kick Simulation", category:"Shooting", skills:["Shooting","Mental","Pressure"],
+    ageMin:"U10", ageMax:"Adult", difficulty:"Intermediate", duration:10,
+    image:"https://images.unsplash.com/photo-1508098682722-e99c43a406b2?w=400&q=80",
+    setup:"Penalty spot. Full-size or small goal. GK.",
+    instructions:"Each player takes a penalty. Elimination format — miss = out. Discuss pre-kick routine first.",
+    coaching:"Decide where you're shooting BEFORE the run-up. Commit fully. Trust your technique.",
+    progressions:["Walk-up routine","Shootout simulation","Coach adds verbal pressure"],
+    equipment:["8 balls","1 goal"]
+  },
+  {
+    id:"d30", name:"4-Goal Game", category:"Scrimmage", skills:["Decision Making","Speed","Teamwork"],
+    ageMin:"U8", ageMax:"Adult", difficulty:"Intermediate", duration:20,
+    image:"https://images.unsplash.com/photo-1560272564-c83b66b1ad12?w=400&q=80",
+    setup:"40×30 grid. 4 small goals (2 per team at each end).",
+    instructions:"Each team defends 2 goals and attacks 2. Creates constant decision-making and switching play.",
+    coaching:"Change point of attack. Track two threats. Communication critical.",
+    progressions:["Limit touches","Goals from crosses only","Expand to 5 goals"],
+    equipment:["4 small goals","8 cones","4 balls","bibs"]
+  },
+];
+
+const SKILL_TAGS = [...new Set(DRILLS.flatMap(d => d.skills))].sort();
+const CATEGORIES = [...new Set(DRILLS.map(d => d.category))].sort();
+const DIFFICULTIES = ["Beginner","Intermediate","Advanced"];
+
+// ═══════════════════════════════════════════════════════════════════
+// PRACTICE TEMPLATES BY AGE + FOCUS
+// ═══════════════════════════════════════════════════════════════════
+function generatePractice(league, focus, skills, duration, allDrills) {
+  const ageOrder = LEAGUES;
+  const leagueIdx = ageOrder.indexOf(league);
+
+  const eligible = allDrills.filter(d => {
+    const minIdx = ageOrder.indexOf(d.ageMin);
+    const maxIdx = ageOrder.indexOf(d.ageMax || "Adult");
+    return leagueIdx >= minIdx && leagueIdx <= maxIdx;
+  });
+
+  const focusMatch = eligible.filter(d =>
+    d.category === focus ||
+    d.skills.some(s => skills.includes(s))
+  );
+
+  const isYoung = leagueIdx <= 2; // U6, U8, U10
+  const warmupDrill = eligible.find(d => ["Dribbling","Ball Control","Fitness"].includes(d.category));
+  const mainDrills = focusMatch.filter(d => d.id !== warmupDrill?.id).slice(0, 2);
+  const scrimmage = eligible.find(d => d.category === "Scrimmage");
+  const fun = isYoung ? eligible.find(d => d.skills.includes("Fun")) : null;
+
+  const sections = [];
+  const warmupTime = isYoung ? 8 : 10;
+  const mainTime = Math.floor((duration - warmupTime - 5 - (scrimmage ? 15 : 0)) / (mainDrills.length || 1));
+
+  if (warmupDrill) sections.push({ type:"Warm-Up", drill: warmupDrill, time: warmupTime, notes:"" });
+  mainDrills.forEach((d, i) =>
+    sections.push({ type: i === 0 ? "Main Activity" : "Secondary Activity", drill: d, time: mainTime, notes:"" })
+  );
+  if (fun && isYoung) sections.push({ type:"Fun Game", drill: fun, time: 8, notes:"" });
+  if (scrimmage) sections.push({ type:"Scrimmage", drill: scrimmage, time: Math.min(20, duration * 0.3), notes:"" });
+  sections.push({ type:"Cool Down", drill: null, time: 5, notes:"Stretch, Q&A, preview next session." });
+
+  return sections;
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// UTILITIES
+// ═══════════════════════════════════════════════════════════════════
+function uid() { return Math.random().toString(36).slice(2,9); }
+
+function computePlayTime(players, lineupsByQuarter, totalQuarters) {
+  const counts = {};
+  players.forEach(p => { counts[p.id] = 0; });
+  for (let q = 1; q <= totalQuarters; q++) {
+    const lineup = lineupsByQuarter[q];
+    if (!lineup) continue;
+    lineup.starters.forEach(slot => {
+      if (slot.player) counts[slot.player.id] = (counts[slot.player.id] || 0) + 1;
+    });
+  }
+  return counts;
+}
+
+/**
+ * WHOLE-GAME SCHEDULER
+ * Plans all 4 quarters at once so every eligible player is guaranteed
+ * their minimum play-time quota before higher-rated players get extra time.
+ *
+ * Algorithm:
+ * 1. Each quarter needs `slotsPerQuarter` players on the field.
+ * 2. Total field-slots across 4 quarters = slotsPerQuarter × 4.
+ * 3. Each active player gets at least `minQ` quarters guaranteed.
+ * 4. Remaining slots are distributed to highest-rated players.
+ * 5. Within each quarter, players are sorted to best-fit positions.
+ * 6. Players who sat last quarter get priority for the next one (rotation).
+ */
+function scheduleWholeGame(players, format, league, lockedLineups = {}, fromQuarter = 1) {
+  const TOTAL_Q  = 4;
+  const slots    = POSITIONS_BY_FORMAT[format] || POSITIONS_BY_FORMAT["7v7"];
+  const slotsPerQ = slots.length;
+  const rule     = PLAY_TIME_RULES[league] || { minFraction: 0.5 };
+  const minQ     = Math.ceil(rule.minFraction * TOTAL_Q); // e.g. 2 of 4 quarters
+
+  const active = players.filter(p => !p.injured && !p.out);
+  const n      = active.length;
+
+  // Count play time already locked in from previous quarters
+  const alreadyPlayed = {};
+  active.forEach(p => { alreadyPlayed[p.id] = 0; });
+  for (let q = 1; q < fromQuarter; q++) {
+    const l = lockedLineups[q];
+    if (!l) continue;
+    l.starters.forEach(s => {
+      if (s.player && alreadyPlayed[s.player.id] !== undefined)
+        alreadyPlayed[s.player.id]++;
+    });
+  }
+
+  // Quarters remaining to schedule
+  const remainingQs = [];
+  for (let q = fromQuarter; q <= TOTAL_Q; q++) remainingQs.push(q);
+  const R = remainingQs.length; // number of quarters we're planning
+
+  // Total field-slots to fill across remaining quarters
+  const totalSlots = slotsPerQ * R;
+
+  // Assign each player a quota for the REMAINING quarters
+  // minQ total — but subtract what they've already played
+  const quota = {};
+  active.forEach(p => {
+    const remaining = Math.max(0, minQ - alreadyPlayed[p.id]);
+    quota[p.id] = Math.min(remaining, R); // can't exceed remaining quarters
+  });
+
+  // How many total guaranteed slots are spoken for?
+  const guaranteedTotal = Object.values(quota).reduce((a, b) => a + b, 0);
+  // Remaining free slots go to top-rated players
+  const freeSlots = Math.max(0, totalSlots - guaranteedTotal);
+
+  // Rate players
+  const rated = [...active].sort((a, b) => getOverallRating(b) - getOverallRating(a));
+
+  // Distribute free slots to highest rated players (round-robin from top)
+  const bonusQ = {};
+  active.forEach(p => { bonusQ[p.id] = 0; });
+  let remaining = freeSlots;
+  let round = 0;
+  while (remaining > 0) {
+    let distributed = false;
+    for (const p of rated) {
+      const totalAssigned = quota[p.id] + bonusQ[p.id];
+      if (totalAssigned < R) {
+        bonusQ[p.id]++;
+        remaining--;
+        distributed = true;
+        if (remaining === 0) break;
+      }
+    }
+    if (!distributed) break; // all players maxed out
+    round++;
+    if (round > 100) break; // safety
+  }
+
+  // Final quarters-per-player for remaining schedule
+  const qCount = {};
+  active.forEach(p => { qCount[p.id] = quota[p.id] + bonusQ[p.id]; });
+
+  // Now assign players to specific quarters using a round-robin rotation
+  // that respects qCount and tries to rotate bench players evenly
+  const quarterId = {}; // playerId -> set of quarters they play
+  active.forEach(p => { quarterId[p.id] = new Set(); });
+
+  // Sort by: most quota first, then by rating desc for tiebreaking
+  const sortedByQuota = [...active].sort((a, b) => {
+    const diff = qCount[b.id] - qCount[a.id];
+    if (diff !== 0) return diff;
+    return getOverallRating(b) - getOverallRating(a);
+  });
+
+  // Greedily assign players to quarters
+  // Track how full each quarter is
+  const qFilled = {};
+  remainingQs.forEach(q => { qFilled[q] = 0; });
+
+  // Players with most quota go first
+  for (const player of sortedByQuota) {
+    let needed = qCount[player.id];
+    if (needed <= 0) continue;
+
+    // Prefer quarters where this player sat in adjacent quarters (rotation)
+    // Simple: assign to quarters with the fewest players first
+    const orderedQs = [...remainingQs].sort((a, b) => qFilled[a] - qFilled[b]);
+    for (const q of orderedQs) {
+      if (needed <= 0) break;
+      if (qFilled[q] < slotsPerQ && !quarterId[player.id].has(q)) {
+        quarterId[player.id].add(q);
+        qFilled[q]++;
+        needed--;
+      }
+    }
+  }
+
+  // Build lineups for each remaining quarter
+  const result = { ...lockedLineups };
+
+  for (const q of remainingQs) {
+    const starters_pool = active.filter(p => quarterId[p.id].has(q));
+    const bench_pool    = active.filter(p => !quarterId[p.id].has(q));
+
+    // Assign positions: fill slots with best position match
+    const assigned = new Set();
+    const ratedPool = [...starters_pool].sort((a, b) => getOverallRating(b) - getOverallRating(a));
+
+    const starters = slots.map(pos => {
+      // Best unassigned player who can play this position
+      let best = ratedPool.find(p => !assigned.has(p.id) && (p.positions || []).includes(pos));
+      // Fallback: any unassigned player
+      if (!best) best = ratedPool.find(p => !assigned.has(p.id));
+      if (best) assigned.add(best.id);
+      return { pos, player: best || null };
+    });
+
+    result[q] = { starters, bench: bench_pool };
+  }
+
+  return result;
+}
+
+// Single-quarter wrapper (used for manual regen of one quarter only)
+function autoLineupWithRanking(players, format, quarter, lineupsByQuarter, totalQuarters, league) {
+  const all = scheduleWholeGame(players, format, league, lineupsByQuarter, quarter);
+  return all[quarter];
+}
+
+function getOverallRating(player) {
+  if (!player.ratings) return 0;
+  const vals = Object.values(player.ratings).filter(v => v > 0);
+  return vals.length ? vals.reduce((a,b) => a+b, 0) / vals.length : 0;
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// STYLE CONSTANTS
+// ═══════════════════════════════════════════════════════════════════
+const C = {
+  bg:       "#0a0d0f",
+  surface:  "rgba(255,255,255,0.04)",
+  border:   "rgba(255,255,255,0.08)",
+  gold:     "#e8a020",
+  goldDark: "#b87818",
+  green:    "#1e4d2b",
+  text:     "#e8e4dc",
+  muted:    "#7a7570",
+  danger:   "#c0392b",
+  warn:     "#d35400",
+  ok:       "#27ae60",
+};
+
+const IS = {
+  background: `rgba(255,255,255,0.06)`,
+  border: `1px solid ${C.border}`,
+  borderRadius: 6,
+  color: C.text,
+  padding: "8px 11px",
+  fontSize: 13,
+  outline: "none",
+  fontFamily: "inherit",
+  width: "100%",
+  boxSizing: "border-box",
+};
+
+const SS = { ...IS, cursor: "pointer" };
+
+function Btn({ children, onClick, sm, danger, warn, primary, ghost, disabled, full, style:sx }) {
+  const bg = danger ? C.danger : warn ? C.warn : primary ? `linear-gradient(135deg,${C.gold},${C.goldDark})` : ghost ? "transparent" : "rgba(255,255,255,0.1)";
+  const col = primary ? "#0a0d0f" : C.text;
+  return (
+    <button onClick={onClick} disabled={disabled} style={{
+      padding: sm ? "5px 11px" : "9px 18px",
+      borderRadius: 7, border: ghost ? `1px solid ${C.border}` : "none",
+      cursor: disabled ? "not-allowed" : "pointer",
+      fontWeight: 600, fontSize: sm ? 11 : 13,
+      fontFamily: "inherit",
+      background: bg, color: col,
+      opacity: disabled ? 0.45 : 1,
+      width: full ? "100%" : undefined,
+      transition: "opacity 0.15s",
+      ...sx,
+    }}>{children}</button>
+  );
+}
+
+const lbl = {
+  display: "block", fontSize: 10, color: C.muted, marginBottom: 5,
+  fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.07em",
+};
+
+function Card({ children, style: sx }) {
+  return (
+    <div style={{
+      background: C.surface, border: `1px solid ${C.border}`,
+      borderRadius: 12, padding: "14px 16px", ...sx,
+    }}>{children}</div>
+  );
+}
+
+function StarRating({ value, onChange, max=5 }) {
+  return (
+    <div style={{ display:"flex", gap: 2 }}>
+      {Array.from({length:max},(_,i) => (
+        <button key={i} onClick={() => onChange(i+1)} style={{
+          background:"none", border:"none", cursor:"pointer", padding: "1px",
+          fontSize: 14, color: i < value ? C.gold : "rgba(255,255,255,0.2)",
+          lineHeight: 1,
+        }}>★</button>
+      ))}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// SOCCER FIELD with DRAG & DROP
+// ═══════════════════════════════════════════════════════════════════
+function SoccerField({ lineup, onSwap, format }) {
+  const [dragging, setDragging] = useState(null);
+  const [hoverIdx, setHoverIdx] = useState(null);
+
+  if (!lineup) return (
+    <div style={{
+      background: C.surface, borderRadius: 12, minHeight: 320,
+      border: `2px dashed ${C.border}`, display:"flex", alignItems:"center",
+      justifyContent:"center", color: C.muted, fontSize: 13, textAlign:"center", padding: 20,
+    }}>
+      Generate or load a lineup<br/>to see the field view
+    </div>
+  );
+
+  const slots = lineup.starters || [];
+  const totalByPos = {};
+  slots.forEach(s => { totalByPos[s.pos] = (totalByPos[s.pos]||0)+1; });
+  const idxByPos = {};
+
+  return (
+    <div style={{ position:"relative", width:"100%", maxWidth:320, margin:"0 auto", userSelect:"none" }}>
+      <svg viewBox="0 0 320 480" style={{ width:"100%", display:"block", borderRadius:10 }}>
+        <rect x="5" y="5" width="310" height="470" rx="8" fill="#1e4d1a" stroke="#fff" strokeWidth="1.5"/>
+        <rect x="5" y="5" width="310" height="470" rx="8" fill="url(#grass)"/>
+        <defs>
+          <pattern id="grass" x="0" y="0" width="20" height="20" patternUnits="userSpaceOnUse">
+            <rect width="20" height="20" fill="#1e4d1a"/>
+            <rect width="10" height="20" fill="#1a4518"/>
+          </pattern>
+        </defs>
+        <line x1="5" y1="242" x2="315" y2="242" stroke="rgba(255,255,255,0.6)" strokeWidth="1.5" strokeDasharray="5,4"/>
+        <circle cx="160" cy="242" r="42" fill="none" stroke="rgba(255,255,255,0.6)" strokeWidth="1.5"/>
+        <circle cx="160" cy="242" r="3" fill="rgba(255,255,255,0.8)"/>
+        <rect x="80" y="5" width="160" height="75" fill="none" stroke="rgba(255,255,255,0.6)" strokeWidth="1.5"/>
+        <rect x="110" y="5" width="100" height="38" fill="none" stroke="rgba(255,255,255,0.6)" strokeWidth="1.5"/>
+        <rect x="135" y="5" width="50" height="14" fill="rgba(255,255,255,0.15)"/>
+        <rect x="80" y="400" width="160" height="75" fill="none" stroke="rgba(255,255,255,0.6)" strokeWidth="1.5"/>
+        <rect x="110" y="437" width="100" height="38" fill="none" stroke="rgba(255,255,255,0.6)" strokeWidth="1.5"/>
+        <rect x="135" y="461" width="50" height="14" fill="rgba(255,255,255,0.15)"/>
+        <circle cx="160" cy="415" r="3" fill="rgba(255,255,255,0.6)"/>
+        <circle cx="160" cy="65" r="3" fill="rgba(255,255,255,0.6)"/>
+      </svg>
+
+      {slots.map((slot, idx) => {
+        const pos = slot.pos;
+        if (!idxByPos[pos]) idxByPos[pos] = 0;
+        const posIdx = idxByPos[pos];
+        const total = totalByPos[pos];
+        const base = FIELD_BASE[pos] || {x:50,y:50};
+        const spread = total > 1 ? (posIdx - (total-1)/2) * (52/total) : 0;
+        const fx = base.x + spread * 0.7;
+        idxByPos[pos]++;
+
+        const px = 5 + (fx/100)*310;
+        const py = 5 + (base.y/100)*470;
+        const isDraggingThis = dragging === idx;
+        const isHovered = hoverIdx === idx;
+        const rating = slot.player ? getOverallRating(slot.player) : 0;
+
+        return (
+          <div key={idx}
+            draggable={!!slot.player}
+            onDragStart={() => setDragging(idx)}
+            onDragEnd={() => { setDragging(null); setHoverIdx(null); }}
+            onDragOver={e => { e.preventDefault(); setHoverIdx(idx); }}
+            onDrop={e => { e.preventDefault(); if (dragging !== null && dragging !== idx) { onSwap(dragging, idx); } setDragging(null); setHoverIdx(null); }}
+            style={{
+              position:"absolute",
+              left:`calc(${(px/320)*100}% - 22px)`,
+              top:`calc(${(py/480)*100}% - 26px)`,
+              textAlign:"center", width:44,
+              cursor: slot.player ? "grab" : "default",
+              opacity: isDraggingThis ? 0.4 : 1,
+              zIndex: isDraggingThis ? 10 : 1,
+              transition: "opacity 0.15s",
+            }}>
+            <div style={{
+              width: 38, height: 38, borderRadius:"50%", margin:"0 auto",
+              background: isHovered && dragging !== null && dragging !== idx
+                ? `linear-gradient(135deg,#fff,${C.gold})`
+                : slot.player
+                  ? `linear-gradient(135deg,${C.gold},${C.goldDark})`
+                  : "rgba(255,255,255,0.1)",
+              border: isHovered && dragging !== null ? `2px solid #fff` : "2px solid rgba(255,255,255,0.8)",
+              display:"flex", alignItems:"center", justifyContent:"center",
+              flexDirection:"column", boxShadow: slot.player ? "0 2px 10px rgba(0,0,0,0.6)" : "none",
+              transition: "all 0.15s",
+            }}>
+              {slot.player ? (
+                <>
+                  <div style={{fontSize:8,color:"#1a1a1a",lineHeight:1,fontWeight:700}}>{slot.player.number}</div>
+                  <div style={{fontSize:7,color:"#2a1a0a",lineHeight:1,maxWidth:34,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",fontWeight:600}}>
+                    {slot.player.name?.split(" ")[0]}
+                  </div>
+                  {rating > 0 && <div style={{fontSize:6,color:"#2a1a0a",lineHeight:1}}>{"★".repeat(Math.round(rating))}</div>}
+                </>
+              ) : <span style={{color:"rgba(255,255,255,0.4)",fontSize:10}}>—</span>}
+            </div>
+            <div style={{fontSize:8,color:"#fff",fontWeight:700,textShadow:"0 1px 3px rgba(0,0,0,0.9)",marginTop:2,letterSpacing:"0.03em"}}>{pos}</div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// MID-GAME INJURY BANNER
+// ═══════════════════════════════════════════════════════════════════
+function InjuryAlert({ player, quarter, onDismiss }) {
+  const [visible, setVisible] = useState(true);
+  useEffect(() => {
+    const t = setTimeout(() => setVisible(false), 8000);
+    return () => clearTimeout(t);
+  }, [player.id]);
+
+  if (!visible) return null;
+  return (
+    <div style={{
+      position:"fixed", top:16, right:16, zIndex:9999,
+      background:"linear-gradient(135deg,#7b0000,#c0392b)",
+      border:"2px solid #e74c3c",
+      borderRadius:12, padding:"14px 18px", maxWidth:300,
+      boxShadow:"0 8px 32px rgba(199,57,45,0.5)",
+      animation:"slideIn 0.3s ease",
+    }}>
+      <style>{`@keyframes slideIn{from{transform:translateX(120%);opacity:0}to{transform:translateX(0);opacity:1}}`}</style>
+      <div style={{display:"flex",alignItems:"flex-start",gap:10}}>
+        <span style={{fontSize:24,lineHeight:1}}>🚨</span>
+        <div style={{flex:1}}>
+          <div style={{fontWeight:800,fontSize:14,color:"#fff",marginBottom:2}}>Mid-Game Injury</div>
+          <div style={{fontSize:12,color:"rgba(255,255,255,0.85)"}}>
+            <b>#{player.number} {player.name}</b> marked injured in Q{quarter}.<br/>
+            Remaining quarters will auto-regenerate.
+          </div>
+        </div>
+        <button onClick={()=>{setVisible(false);onDismiss();}} style={{
+          background:"none",border:"none",color:"rgba(255,255,255,0.6)",
+          cursor:"pointer",fontSize:16,lineHeight:1,padding:0,
+        }}>✕</button>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// TAB: GAME DAY
+// ═══════════════════════════════════════════════════════════════════
+function TabGame({ format, league, players, setPlayers, lineupsByQuarter, setLineupsByQuarter }) {
+  const [quarter,       setQuarter]       = useState(1);
+  const [injuryAlerts,  setInjuryAlerts]  = useState([]);
+  const [justRegenned,  setJustRegenned]  = useState(false);
+  const [showRotation,  setShowRotation]  = useState(false);
+  const [showFormations,setShowFormations]= useState(false);
+  const [activeFormation,setActiveFormation]=useState(null);
+
+  // ── QUARTER TIMER ────────────────────────────────────────────────
+  const periodMin = (() => {
+    const r = LEAGUE_RULES[league];
+    return r ? r.periodMin : 15;
+  })();
+  const [timerSec, setTimerSec]   = useState(periodMin * 60);
+  const [timerRunning, setTimerRunning] = useState(false);
+  const timerRef = useRef(null);
+
+  // Reset timer when quarter changes or periodMin changes
+  useEffect(() => {
+    setTimerSec(periodMin * 60);
+    setTimerRunning(false);
+    if (timerRef.current) clearInterval(timerRef.current);
+  }, [quarter, periodMin]);
+
+  useEffect(() => {
+    if (timerRunning) {
+      timerRef.current = setInterval(() => {
+        setTimerSec(s => {
+          if (s <= 1) { clearInterval(timerRef.current); setTimerRunning(false); return 0; }
+          return s - 1;
+        });
+      }, 1000);
+    } else {
+      if (timerRef.current) clearInterval(timerRef.current);
+    }
+    return () => { if (timerRef.current) clearInterval(timerRef.current); };
+  }, [timerRunning]);
+
+  const timerMins = Math.floor(timerSec / 60);
+  const timerSecs = timerSec % 60;
+  const timerPct  = timerSec / (periodMin * 60);
+  const timerColor = timerSec === 0 ? "#e74c3c" : timerSec < 60 ? C.gold : C.ok;
+
+  const totalQuarters = 4;
+  const rule   = PLAY_TIME_RULES[league] || { minFraction: 0, note: "" };
+  const minQ   = Math.ceil(rule.minFraction * totalQuarters);
+
+  const playCounts     = computePlayTime(players, lineupsByQuarter, totalQuarters);
+  const currentLineup  = lineupsByQuarter[quarter] || null;
+  const active         = players.filter(p => !p.injured && !p.out);
+  const needed         = (POSITIONS_BY_FORMAT[format] || []).length;
+  const midGameInjured = players.filter(p => p.midGameInjury);
+  const allPlanned     = [1,2,3,4].every(q => !!lineupsByQuarter[q]);
+
+  // Check if anyone is below min quota (across planned quarters)
+  const violations = active.filter(p => {
+    const played = playCounts[p.id] || 0;
+    return allPlanned && played < minQ && !p.midGameInjury;
+  });
+
+  // ── Plan entire game from scratch (or from a quarter onwards) ──
+  const planWholeGame = (fromQ = 1) => {
+    // Lock quarters before fromQ, schedule the rest
+    const locked = {};
+    for (let q = 1; q < fromQ; q++) {
+      if (lineupsByQuarter[q]) locked[q] = lineupsByQuarter[q];
+    }
+    const result = scheduleWholeGame(players, format, league, locked, fromQ);
+    setLineupsByQuarter(result);
+    setJustRegenned(true);
+    setTimeout(() => setJustRegenned(false), 2500);
+  };
+
+  // ── Regen remaining quarters (respects locked earlier quarters) ──
+  const regenRemaining = (fromQuarter, updatedPlayers, baseLineups) => {
+    const locked = {};
+    for (let q = 1; q < fromQuarter; q++) {
+      if (baseLineups[q]) locked[q] = baseLineups[q];
+    }
+    const result = scheduleWholeGame(updatedPlayers, format, league, locked, fromQuarter);
+    setLineupsByQuarter(result);
+    setJustRegenned(true);
+    setTimeout(() => setJustRegenned(false), 2500);
+  };
+
+  // ── Injury: pull player from current Q, regen rest ──
+  const markMidGameInjury = (playerId) => {
+    const player = players.find(p => p.id === playerId);
+    if (!player) return;
+
+    const updatedPlayers = players.map(p =>
+      p.id === playerId
+        ? { ...p, injured: true, midGameInjury: true, injuredInQuarter: quarter }
+        : p
+    );
+    setPlayers(updatedPlayers);
+    setInjuryAlerts(prev => [...prev, { player, quarter, id: Date.now() }]);
+
+    // Pull from current quarter immediately — sub in first bench player
+    const currentL = lineupsByQuarter[quarter];
+    let baseLineups = { ...lineupsByQuarter };
+    if (currentL) {
+      const benchAvail = (currentL.bench || []).filter(p => p.id !== playerId);
+      const sub = benchAvail[0] || null;
+      const newStarters = currentL.starters.map(slot => {
+        if (slot.player?.id !== playerId) return slot;
+        return sub ? { ...slot, player: sub } : { ...slot, player: null };
+      });
+      const newBench = benchAvail.slice(sub ? 1 : 0);
+      baseLineups[quarter] = { starters: newStarters, bench: newBench };
+    }
+
+    // Regen Q+1 onwards without this player
+    const locked = {};
+    for (let q = 1; q <= quarter; q++) {
+      if (baseLineups[q]) locked[q] = baseLineups[q];
+    }
+    const result = scheduleWholeGame(updatedPlayers, format, league, locked, quarter + 1);
+    setLineupsByQuarter({ ...baseLineups, ...result });
+    setJustRegenned(true);
+    setTimeout(() => setJustRegenned(false), 2500);
+  };
+
+  const clearMidGameInjury = (playerId) => {
+    const updatedPlayers = players.map(p =>
+      p.id === playerId
+        ? { ...p, injured: false, midGameInjury: false, injuredInQuarter: null }
+        : p
+    );
+    setPlayers(updatedPlayers);
+    regenRemaining(quarter, updatedPlayers, lineupsByQuarter);
+  };
+
+  const handleSwap = (idxA, idxB) => {
+    if (!currentLineup) return;
+    const newStarters = [...currentLineup.starters];
+    const temp = newStarters[idxA];
+    newStarters[idxA] = newStarters[idxB];
+    newStarters[idxB] = temp;
+    setLineupsByQuarter(prev => ({ ...prev, [quarter]: { ...currentLineup, starters: newStarters } }));
+  };
+
+  const onFieldIds = new Set(
+    (currentLineup?.starters || []).filter(s => s.player).map(s => s.player.id)
+  );
+
+  // Build rotation grid: rows = players, cols = Q1–Q4
+  const allTrackedPlayers = [...active, ...midGameInjured];
+  const rotationGrid = allTrackedPlayers.map(p => ({
+    player: p,
+    quarters: [1,2,3,4].map(q => {
+      const lineup = lineupsByQuarter[q];
+      if (!lineup) return "unplanned";
+      const onField = lineup.starters.some(s => s.player?.id === p.id);
+      return onField ? "on" : "bench";
+    }),
+    totalPlanned: [1,2,3,4].filter(q => {
+      const l = lineupsByQuarter[q];
+      return l && l.starters.some(s => s.player?.id === p.id);
+    }).length,
+  }));
+
+  return (
+    <div>
+      {/* Injury alerts */}
+      {injuryAlerts.map(alert => (
+        <InjuryAlert key={alert.id} player={alert.player} quarter={alert.quarter}
+          onDismiss={() => setInjuryAlerts(prev => prev.filter(a => a.id !== alert.id))}/>
+      ))}
+
+      {/* Success flash */}
+      {justRegenned && (
+        <div style={{
+          background:"rgba(39,174,96,0.12)", border:"1px solid rgba(39,174,96,0.35)",
+          borderRadius:9, padding:"10px 14px", marginBottom:14,
+          fontSize:12, color:"#2ecc71", fontWeight:600,
+        }}>
+          ✅ All quarters planned — every eligible player meets the minimum play-time rule.
+        </div>
+      )}
+
+      {/* Play-time violation warning */}
+      {violations.length > 0 && (
+        <div style={{
+          background:"rgba(211,84,0,0.1)", border:"1px solid rgba(211,84,0,0.35)",
+          borderRadius:9, padding:"10px 14px", marginBottom:14, fontSize:12, color:C.gold,
+        }}>
+          ⚠️ <b>{violations.length} player{violations.length>1?"s":""}</b> still below the {minQ}-quarter minimum:&nbsp;
+          {violations.map(p=>p.name.split(" ")[0]).join(", ")}. Hit <b>Plan Full Game</b> to fix.
+        </div>
+      )}
+
+      {/* Mid-game injury strip */}
+      {midGameInjured.length > 0 && (
+        <div style={{
+          background:"rgba(120,0,0,0.2)", border:"1px solid rgba(231,76,60,0.4)",
+          borderRadius:10, padding:"10px 14px", marginBottom:14,
+        }}>
+          <div style={{fontSize:11,color:"#e74c3c",fontWeight:700,marginBottom:8,textTransform:"uppercase",letterSpacing:"0.05em"}}>
+            🚨 Mid-Game Injuries
+          </div>
+          {midGameInjured.map(p => (
+            <div key={p.id} style={{display:"flex",alignItems:"center",gap:10,padding:"5px 0",borderBottom:"1px solid rgba(231,76,60,0.12)"}}>
+              <div style={{width:24,height:24,borderRadius:"50%",background:"#7b0000",display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,color:"#fff",fontWeight:700,flexShrink:0}}>{p.number}</div>
+              <div style={{flex:1}}>
+                <div style={{fontSize:12,color:"#e74c3c",fontWeight:600}}>{p.name}</div>
+                <div style={{fontSize:10,color:"rgba(231,76,60,0.65)"}}>Injured Q{p.injuredInQuarter} · remaining quarters adjusted</div>
+              </div>
+              <button onClick={() => clearMidGameInjury(p.id)} style={{
+                background:"rgba(39,174,96,0.15)",border:"1px solid rgba(39,174,96,0.35)",
+                borderRadius:6,cursor:"pointer",fontSize:11,color:"#2ecc71",
+                padding:"3px 9px",fontWeight:600,fontFamily:"inherit",
+              }}>↩ Return</button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div style={{display:"flex",gap:18,flexWrap:"wrap"}}>
+
+        {/* ── LEFT PANEL ── */}
+        <div style={{flex:"0 0 250px",minWidth:210}}>
+
+          {/* ── QUARTER TIMER ── */}
+          <Card style={{marginBottom:12,border:`1px solid ${timerColor}33`}}>
+            <div style={{fontSize:11,color:C.muted,fontWeight:700,textTransform:"uppercase",letterSpacing:"0.05em",marginBottom:8}}>
+              ⏱ Q{quarter} Timer — {periodMin} min
+            </div>
+            {/* Ring display */}
+            <div style={{display:"flex",alignItems:"center",gap:14,marginBottom:10}}>
+              <div style={{position:"relative",width:64,height:64,flexShrink:0}}>
+                <svg width="64" height="64" viewBox="0 0 64 64" style={{transform:"rotate(-90deg)"}}>
+                  <circle cx="32" cy="32" r="26" fill="none" stroke="rgba(255,255,255,0.08)" strokeWidth="5"/>
+                  <circle cx="32" cy="32" r="26" fill="none" stroke={timerColor} strokeWidth="5"
+                    strokeDasharray={`${2*Math.PI*26}`}
+                    strokeDashoffset={`${2*Math.PI*26*(1-timerPct)}`}
+                    style={{transition:"stroke-dashoffset 0.9s linear, stroke 0.3s"}}/>
+                </svg>
+                <div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column"}}>
+                  <div style={{fontSize:14,fontWeight:800,color:timerColor,lineHeight:1,fontVariantNumeric:"tabular-nums"}}>
+                    {String(timerMins).padStart(2,"0")}:{String(timerSecs).padStart(2,"0")}
+                  </div>
+                </div>
+              </div>
+              <div style={{flex:1}}>
+                <div style={{fontSize:timerSec===0?13:11,color:timerSec===0?"#e74c3c":C.muted,fontWeight:timerSec===0?700:400,marginBottom:8}}>
+                  {timerSec===0 ? "⏰ Quarter over! Advance to next quarter." : `${timerMins}:${String(timerSecs).padStart(2,"0")} remaining`}
+                </div>
+                <div style={{display:"flex",gap:5}}>
+                  <button onClick={()=>setTimerRunning(r=>!r)} style={{
+                    flex:1,padding:"6px 0",borderRadius:6,border:"none",cursor:"pointer",
+                    fontWeight:700,fontSize:12,fontFamily:"inherit",
+                    background:timerRunning?`rgba(231,76,60,0.2)`:`rgba(39,174,96,0.2)`,
+                    color:timerRunning?"#e74c3c":C.ok,
+                  }}>{timerRunning?"⏸ Pause":"▶ Start"}</button>
+                  <button onClick={()=>{setTimerSec(periodMin*60);setTimerRunning(false);}} style={{
+                    padding:"6px 10px",borderRadius:6,border:"none",cursor:"pointer",
+                    fontWeight:600,fontSize:11,fontFamily:"inherit",
+                    background:"rgba(255,255,255,0.06)",color:C.muted,
+                  }}>↺</button>
+                  {quarter < 4 && timerSec === 0 && (
+                    <button onClick={()=>setQuarter(q=>Math.min(4,q+1))} style={{
+                      padding:"6px 10px",borderRadius:6,border:"none",cursor:"pointer",
+                      fontWeight:700,fontSize:11,fontFamily:"inherit",
+                      background:`linear-gradient(135deg,${C.gold},${C.goldDark})`,color:"#0a0d0f",
+                    }}>Q{quarter+1} →</button>
+                  )}
+                </div>
+              </div>
+            </div>
+          </Card>
+
+          {/* Formation Templates */}
+          <div style={{marginBottom:14}}>
+            <button onClick={()=>setShowFormations(f=>!f)} style={{
+              width:"100%",padding:"7px 12px",borderRadius:7,border:`1px solid ${C.border}`,
+              cursor:"pointer",fontWeight:600,fontSize:11,fontFamily:"inherit",
+              background:showFormations?`rgba(232,160,32,0.1)`:"transparent",
+              color:showFormations?C.gold:C.muted,textAlign:"left",
+              display:"flex",justifyContent:"space-between",alignItems:"center",
+            }}>
+              <span>🗂 Formation Templates</span>
+              <span>{showFormations?"▲":"▼"}</span>
+            </button>
+            {showFormations && (
+              <div style={{
+                background:C.surface,border:`1px solid ${C.border}`,
+                borderRadius:"0 0 8px 8px",padding:"10px 12px",
+              }}>
+                <div style={{fontSize:10,color:C.muted,marginBottom:8}}>
+                  Select a formation to auto-assign positions. Drag to swap players after.
+                </div>
+                <div style={{display:"flex",flexWrap:"wrap",gap:5}}>
+                  {(FORMATION_TEMPLATES[format]||[]).map(tmpl=>(
+                    <button key={tmpl.name} onClick={()=>{
+                      setActiveFormation(tmpl.name);
+                      // Apply formation: remap current quarter's starters to new positions
+                      if (lineupsByQuarter[quarter]) {
+                        const currentPlayers = (lineupsByQuarter[quarter].starters||[]).filter(s=>s.player).map(s=>s.player);
+                        const bench = lineupsByQuarter[quarter].bench || [];
+                        const allAvail = [...currentPlayers, ...bench];
+                        const assigned = new Set();
+                        const newStarters = tmpl.slots.map(pos=>{
+                          let best = allAvail.find(p=>!assigned.has(p.id)&&(p.positions||[]).includes(pos));
+                          if (!best) best = allAvail.find(p=>!assigned.has(p.id));
+                          if (best) assigned.add(best.id);
+                          return {pos, player:best||null};
+                        });
+                        const newBench = allAvail.filter(p=>!assigned.has(p.id));
+                        setLineupsByQuarter(prev=>({...prev,[quarter]:{starters:newStarters,bench:newBench}}));
+                      }
+                      setShowFormations(false);
+                    }} style={{
+                      padding:"5px 12px",borderRadius:5,border:"none",cursor:"pointer",
+                      fontSize:12,fontWeight:700,fontFamily:"inherit",
+                      background:activeFormation===tmpl.name?`linear-gradient(135deg,${C.gold},${C.goldDark})`:"rgba(255,255,255,0.1)",
+                      color:activeFormation===tmpl.name?"#0a0d0f":C.text,
+                    }}>{tmpl.name}</button>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Quarter tabs */}
+          <label style={lbl}>Viewing Quarter</label>
+          <div style={{display:"flex",gap:5,marginBottom:14}}>
+            {[1,2,3,4].map(q => {
+              const hasLineup = !!lineupsByQuarter[q];
+              const hasInjury = midGameInjured.some(p => p.injuredInQuarter === q);
+              return (
+                <button key={q} onClick={() => setQuarter(q)} style={{
+                  flex:1, padding:"7px 0", borderRadius:7, border:"none", cursor:"pointer",
+                  fontWeight:700, fontSize:13, fontFamily:"inherit",
+                  background: quarter===q ? `linear-gradient(135deg,${C.gold},${C.goldDark})` : C.surface,
+                  color: quarter===q ? "#0a0d0f" : C.text,
+                  boxShadow: hasLineup ? `0 0 0 1px ${hasInjury?"#e74c3c55":C.gold+"44"}` : "none",
+                }}>
+                  Q{q}
+                  <span style={{display:"block",fontSize:8,lineHeight:1.2,opacity:0.75,marginTop:1}}>
+                    {hasLineup ? (hasInjury ? "🚨" : "✓") : "—"}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Status */}
+          <Card style={{marginBottom:12}}>
+            <div style={{fontSize:11,color:C.muted,marginBottom:6,fontWeight:700,textTransform:"uppercase",letterSpacing:"0.05em"}}>Game Status</div>
+            <div style={{fontSize:12,color:C.text,marginBottom:3}}>{active.length} active · {needed} per side</div>
+            {active.length > needed && (
+              <div style={{fontSize:11,color:C.muted}}>{active.length - needed} rotating through bench</div>
+            )}
+            {players.filter(p=>p.injured&&!p.midGameInjury).length > 0 && (
+              <div style={{fontSize:11,color:"#e74c3c",marginTop:3}}>🤕 {players.filter(p=>p.injured&&!p.midGameInjury).length} pre-game injured</div>
+            )}
+            {midGameInjured.length > 0 && (
+              <div style={{fontSize:11,color:"#e74c3c",marginTop:3}}>🚨 {midGameInjured.length} mid-game injur{midGameInjured.length>1?"ies":"y"}</div>
+            )}
+            {minQ > 0 && <div style={{fontSize:11,color:C.muted,marginTop:3}}>Min: {minQ}Q per player ({rule.minFraction*100|0}%)</div>}
+          </Card>
+
+          {/* PRIMARY ACTION */}
+          <div style={{marginBottom:14}}>
+            <Btn primary full onClick={() => planWholeGame(1)} style={{marginBottom:6,padding:"11px 18px",fontSize:13}}>
+              ⚡ Plan Full Game (Q1–Q4)
+            </Btn>
+            <div style={{fontSize:10,color:C.muted,lineHeight:1.5,textAlign:"center"}}>
+              Schedules all 4 quarters at once, guaranteeing every player gets ≥{minQ} quarter{minQ!==1?"s":""} of play.
+            </div>
+          </div>
+
+          {/* Secondary: regen from current quarter */}
+          {allPlanned && (
+            <Btn full ghost onClick={() => planWholeGame(quarter)} style={{marginBottom:14,fontSize:11}}>
+              🔄 Replan Q{quarter}–Q4 (keep Q1{quarter>1?`–Q${quarter-1}`:""})
+            </Btn>
+          )}
+
+          {/* Play-time tracker */}
+          <Card style={{marginBottom:12}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+              <div style={{fontSize:11,color:C.muted,fontWeight:700,textTransform:"uppercase",letterSpacing:"0.05em"}}>Play Time</div>
+              {allPlanned
+                ? <div style={{fontSize:9,fontWeight:700,color:violations.length===0?C.ok:C.gold,background:violations.length===0?"rgba(39,174,96,0.15)":"rgba(211,84,0,0.15)",padding:"2px 7px",borderRadius:4}}>
+                    {violations.length===0?"✓ ALL MET":"⚠ VIOLATIONS"}
+                  </div>
+                : <div style={{fontSize:9,color:C.muted}}>not fully planned</div>
+              }
+            </div>
+            {allTrackedPlayers.map(p => {
+              const played  = playCounts[p.id] || 0;
+              const isMGI   = !!p.midGameInjury;
+              // How many quarters are planned for this player
+              const planned = rotationGrid.find(r=>r.player.id===p.id)?.totalPlanned ?? 0;
+              const target  = minQ;
+              const pct     = target > 0 ? Math.min(1, planned / target) : 1;
+              const ok      = planned >= target || target === 0 || isMGI;
+              return (
+                <div key={p.id} style={{marginBottom:7,opacity:isMGI?0.5:1}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",fontSize:11,marginBottom:2}}>
+                    <span style={{color:isMGI?"#e74c3c":ok?C.text:C.gold,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",maxWidth:"60%"}}>
+                      {isMGI?"🚨 ":""}{p.name.split(" ")[0]} <span style={{color:C.muted}}>#{p.number}</span>
+                    </span>
+                    <span style={{fontSize:10,color:ok?C.ok:C.gold,fontWeight:700,flexShrink:0}}>
+                      {allPlanned ? `${planned}/${target}Q` : "—"}
+                    </span>
+                  </div>
+                  {/* Per-quarter dots */}
+                  <div style={{display:"flex",gap:3,marginBottom:3}}>
+                    {[1,2,3,4].map(q => {
+                      const entry = rotationGrid.find(r=>r.player.id===p.id);
+                      const status = entry ? entry.quarters[q-1] : "unplanned";
+                      const bg = status==="on" ? C.ok : status==="bench" ? "rgba(255,255,255,0.12)" : "rgba(255,255,255,0.04)";
+                      const label = status==="on" ? "▶" : status==="bench" ? "—" : "?";
+                      return (
+                        <div key={q} style={{flex:1,height:18,borderRadius:3,background:bg,display:"flex",alignItems:"center",justifyContent:"center",
+                          fontSize:8,color:status==="on"?"#0a0d0f":"rgba(255,255,255,0.3)",fontWeight:700,cursor:"pointer",border:quarter===q?"1px solid rgba(255,255,255,0.25)":"1px solid transparent"}}
+                          onClick={()=>setQuarter(q)} title={`Q${q}: ${status}`}>
+                          {label}
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <div style={{height:3,background:"rgba(255,255,255,0.07)",borderRadius:2}}>
+                    <div style={{height:"100%",width:`${pct*100}%`,borderRadius:2,transition:"width 0.4s",
+                      background:isMGI?"#e74c3c":ok?C.ok:C.gold}}/>
+                  </div>
+                </div>
+              );
+            })}
+          </Card>
+
+          {/* Mid-game injury panel */}
+          <Card style={{marginBottom:12,border:"1px solid rgba(231,76,60,0.2)"}}>
+            <div style={{fontSize:11,color:"#e74c3c",fontWeight:700,marginBottom:6,textTransform:"uppercase",letterSpacing:"0.05em"}}>🚨 Mark Injury</div>
+            <div style={{fontSize:10,color:C.muted,marginBottom:8,lineHeight:1.5}}>
+              Tap 🤕 to pull a player now. Remaining quarters auto-replan.
+            </div>
+            {active.filter(p => !p.midGameInjury).length === 0 && (
+              <div style={{fontSize:11,color:C.muted,fontStyle:"italic"}}>No active players</div>
+            )}
+            <div style={{display:"flex",flexDirection:"column",gap:3}}>
+              {active.filter(p => !p.midGameInjury).map(p => {
+                const onField = onFieldIds.has(p.id);
+                return (
+                  <div key={p.id} style={{display:"flex",alignItems:"center",gap:7,padding:"4px 7px",borderRadius:6,
+                    background:onField?"rgba(231,76,60,0.06)":"rgba(255,255,255,0.02)",
+                    border:onField?"1px solid rgba(231,76,60,0.15)":`1px solid ${C.border}`}}>
+                    <div style={{width:20,height:20,borderRadius:"50%",flexShrink:0,
+                      background:`linear-gradient(135deg,${C.gold},${C.goldDark})`,
+                      display:"flex",alignItems:"center",justifyContent:"center",
+                      fontSize:8,fontWeight:700,color:"#0a0d0f"}}>{p.number}</div>
+                    <div style={{flex:1,minWidth:0}}>
+                      <div style={{fontSize:11,color:C.text,fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{p.name.split(" ")[0]}</div>
+                      <div style={{fontSize:9,color:C.muted}}>{onField?"🟢 On field":"⚪ Bench"}</div>
+                    </div>
+                    <button onClick={() => markMidGameInjury(p.id)} style={{
+                      background:"rgba(192,57,43,0.2)",border:"1px solid rgba(192,57,43,0.4)",
+                      borderRadius:4,cursor:"pointer",fontSize:13,color:"#e74c3c",
+                      padding:"2px 6px",fontFamily:"inherit",flexShrink:0,lineHeight:1,
+                    }}>🤕</button>
+                  </div>
+                );
+              })}
+            </div>
+          </Card>
+
+          {/* Bench this quarter */}
+          {currentLineup?.bench?.length > 0 && (
+            <Card>
+              <div style={{fontSize:11,color:C.gold,fontWeight:700,marginBottom:7,textTransform:"uppercase",letterSpacing:"0.05em"}}>🪑 Q{quarter} Bench</div>
+              {currentLineup.bench.map(p => (
+                <div key={p.id} style={{fontSize:12,color:C.text,padding:"4px 0",borderBottom:`1px solid ${C.border}`,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                  <span>#{p.number} {p.name.split(" ")[0]}</span>
+                  <span style={{fontSize:10,color:C.muted}}>{(p.positions||[]).slice(0,2).join(", ")}</span>
+                </div>
+              ))}
+            </Card>
+          )}
+        </div>
+
+        {/* ── FIELD ── */}
+        <div style={{flex:1,minWidth:260}}>
+          <div style={{fontSize:11,color:C.gold,fontWeight:700,marginBottom:10,textAlign:"center",textTransform:"uppercase",letterSpacing:"0.07em"}}>
+            ⚽ Q{quarter} Field — Drag to Swap
+          </div>
+          {!allPlanned && !currentLineup && (
+            <div style={{
+              background:C.surface, borderRadius:12, minHeight:200,
+              border:`2px dashed ${C.border}`, display:"flex", flexDirection:"column",
+              alignItems:"center", justifyContent:"center", gap:12, padding:24,
+            }}>
+              <div style={{fontSize:32}}>⚽</div>
+              <div style={{fontSize:13,color:C.muted,textAlign:"center",lineHeight:1.6}}>
+                Hit <b style={{color:C.gold}}>Plan Full Game</b> to schedule all 4 quarters at once,<br/>
+                guaranteeing fair play time for every player.
+              </div>
+              <Btn primary onClick={() => planWholeGame(1)}>⚡ Plan Full Game</Btn>
+            </div>
+          )}
+          <SoccerField lineup={currentLineup} onSwap={handleSwap} format={format}/>
+          {midGameInjured.length > 0 && (
+            <div style={{marginTop:10,padding:"7px 12px",borderRadius:7,
+              background:"rgba(120,0,0,0.15)",border:"1px solid rgba(231,76,60,0.2)",
+              fontSize:11,color:"rgba(231,76,60,0.75)",textAlign:"center",lineHeight:1.5}}>
+              Open slots left by injured players. Use ↩ Return if they recover.
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// TAB: ROSTER + RANKINGS
+// ═══════════════════════════════════════════════════════════════════
+function TabRoster({ players, addPlayer, updatePlayer, removePlayer, format }) {
+  const [newName, setNewName] = useState("");
+  const [newNum,  setNewNum]  = useState("");
+  const [sort,    setSort]    = useState("name"); // name | rating | position
+
+  const handleAdd = () => {
+    if (!newName.trim()) return;
+    addPlayer({ name:newName.trim(), number:newNum||String(players.length+1), positions:["MID"], injured:false, out:false, ratings:{} });
+    setNewName(""); setNewNum("");
+  };
+
+  const sorted = [...players].sort((a,b) => {
+    if (sort==="rating") return getOverallRating(b)-getOverallRating(a);
+    if (sort==="position") return (a.positions?.[0]||"Z").localeCompare(b.positions?.[0]||"Z");
+    return a.name.localeCompare(b.name);
+  });
+
+  return (
+    <div>
+      <div style={{display:"flex",gap:8,marginBottom:14,flexWrap:"wrap",alignItems:"center"}}>
+        <input value={newName} onChange={e=>setNewName(e.target.value)}
+          onKeyDown={e=>e.key==="Enter"&&handleAdd()}
+          placeholder="Player name" style={{...IS,flex:"1 1 140px",width:"auto"}}/>
+        <input value={newNum} onChange={e=>setNewNum(e.target.value)}
+          placeholder="#" style={{...IS,width:55,flex:"0 0 55px"}}/>
+        <Btn primary onClick={handleAdd}>+ Add</Btn>
+        <div style={{marginLeft:"auto",display:"flex",gap:4}}>
+          {[["name","A-Z"],["rating","⭐"],["position","Pos"]].map(([k,l])=>(
+            <button key={k} onClick={()=>setSort(k)} style={{
+              padding:"4px 10px",borderRadius:5,border:"none",cursor:"pointer",fontSize:11,fontFamily:"inherit",
+              background:sort===k?C.gold:"rgba(255,255,255,0.08)",
+              color:sort===k?"#0a0d0f":C.muted,fontWeight:600,
+            }}>{l}</button>
+          ))}
+        </div>
+      </div>
+      {players.length===0 && <div style={{textAlign:"center",color:C.muted,padding:40}}>Add your roster above to get started.</div>}
+      {sorted.map(p=>(
+        <PlayerRow key={p.id} player={p} onUpdate={updatePlayer} onRemove={()=>removePlayer(p.id)}/>
+      ))}
+    </div>
+  );
+}
+
+function PlayerRow({ player, onUpdate, onRemove }) {
+  const [expanded, setExpanded] = useState(false);
+  const [name, setName]   = useState(player.name);
+  const [num,  setNum]    = useState(player.number);
+  const [pos,  setPos]    = useState(player.positions||[]);
+  const rating = getOverallRating(player);
+
+  const save = () => onUpdate({...player, name, number:num, positions:pos});
+  const togglePosition = (p) => {
+    const next = pos.includes(p) ? pos.filter(x=>x!==p) : [...pos,p];
+    setPos(next);
+    onUpdate({...player, name, number:num, positions:next});
+  };
+
+  const setRating = (cat, val) => {
+    const newRatings = {...(player.ratings||{}), [cat]:val};
+    onUpdate({...player, ratings:newRatings});
+  };
+
+  const sc = player.injured?"#e74c3c":player.out?"#e67e22":C.ok;
+
+  return (
+    <div style={{
+      background:C.surface, borderRadius:10, padding:"10px 14px", marginBottom:8,
+      border:`1px solid ${player.injured||player.out?"rgba(220,80,60,0.3)":C.border}`,
+    }}>
+      <div style={{display:"flex",alignItems:"center",gap:10}}>
+        <div style={{
+          width:36,height:36,borderRadius:"50%",flexShrink:0,
+          background:`linear-gradient(135deg,${C.gold},${C.goldDark})`,
+          display:"flex",alignItems:"center",justifyContent:"center",
+          fontWeight:700,fontSize:13,color:"#0a0d0f",
+        }}>{player.number||"#"}</div>
+        <div style={{flex:1,minWidth:0}}>
+          <div style={{fontWeight:600,fontSize:13,color:C.text}}>{player.name}</div>
+          <div style={{fontSize:11,color:C.muted,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+            {(player.positions||[]).join(", ")||"No position"}
+            {rating>0 && <span style={{marginLeft:8,color:C.gold}}>{"★".repeat(Math.round(rating))}</span>}
+          </div>
+        </div>
+        <div style={{fontSize:9,fontWeight:700,color:sc,background:`${sc}22`,padding:"2px 7px",borderRadius:4}}>
+          {player.injured?"INJURED":player.out?"OUT":"ACTIVE"}
+        </div>
+        <div style={{display:"flex",gap:3}}>
+          <Btn sm onClick={()=>setExpanded(!expanded)}>✏️</Btn>
+          <Btn sm warn={!player.injured} onClick={()=>onUpdate({...player,injured:!player.injured,out:false})}>
+            {player.injured?"✅":"🤕"}
+          </Btn>
+          <Btn sm warn={!player.out} onClick={()=>onUpdate({...player,out:!player.out,injured:false})}>
+            {player.out?"✅":"🚫"}
+          </Btn>
+          <Btn sm danger onClick={onRemove}>✕</Btn>
+        </div>
+      </div>
+
+      {expanded && (
+        <div style={{marginTop:12,paddingTop:12,borderTop:`1px solid ${C.border}`}}>
+          <div style={{display:"flex",gap:8,marginBottom:10}}>
+            <div style={{flex:1}}>
+              <label style={lbl}>Name</label>
+              <input value={name} onChange={e=>setName(e.target.value)} style={IS} onBlur={save}/>
+            </div>
+            <div style={{width:60}}>
+              <label style={lbl}>#</label>
+              <input value={num} onChange={e=>setNum(e.target.value)} style={IS} onBlur={save}/>
+            </div>
+          </div>
+
+          <label style={lbl}>Positions</label>
+          <div style={{display:"flex",flexWrap:"wrap",gap:4,marginBottom:12}}>
+            {ALL_POSITIONS.map(p=>(
+              <button key={p} onClick={()=>togglePosition(p)} style={{
+                padding:"3px 8px",borderRadius:4,border:"none",cursor:"pointer",fontSize:10,fontWeight:600,fontFamily:"inherit",
+                background:pos.includes(p)?C.gold:"rgba(255,255,255,0.08)",
+                color:pos.includes(p)?"#0a0d0f":C.muted,
+              }}>{p}</button>
+            ))}
+          </div>
+
+          <label style={lbl}>Player Ratings (factors into auto-lineup priority)</label>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:10}}>
+            {SKILL_CATEGORIES.map(cat=>(
+              <div key={cat}>
+                <div style={{fontSize:11,color:C.muted,marginBottom:3}}>{cat}</div>
+                <StarRating value={(player.ratings||{})[cat]||0} onChange={v=>setRating(cat,v)}/>
+              </div>
+            ))}
+          </div>
+          {rating>0 && (
+            <div style={{fontSize:11,color:C.gold}}>Overall: {"★".repeat(Math.round(rating))} ({rating.toFixed(1)}/5)</div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// TAB: RULES
+// ═══════════════════════════════════════════════════════════════════
+function TabRules({ league, setLeague }) {
+  const [view, setView] = useState("quick");
+  const r = LEAGUE_RULES[league] || LEAGUE_RULES["U10 / Wings"];
+
+  return (
+    <div>
+      {/* SAY East badge */}
+      <div style={{
+        display:"flex",alignItems:"center",gap:10,marginBottom:14,
+        background:"rgba(232,160,32,0.07)",border:"1px solid rgba(232,160,32,0.2)",
+        borderRadius:10,padding:"10px 14px",
+      }}>
+        <span style={{fontSize:20}}>⚽</span>
+        <div>
+          <div style={{fontSize:12,fontWeight:800,color:C.gold,letterSpacing:"0.06em"}}>SAY EAST CINCINNATI — OFFICIAL RULES</div>
+          <div style={{fontSize:11,color:C.muted}}>Source: SAY East Playing Laws Rulebook (Updated Jan 2026) · Silver Matrix age chart</div>
+        </div>
+      </div>
+
+      {/* Division selector */}
+      <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:16}}>
+        {LEAGUES.map(l=>(
+          <button key={l} onClick={()=>setLeague(l)} style={{
+            padding:"5px 13px",borderRadius:7,border:"none",cursor:"pointer",fontSize:12,fontWeight:600,fontFamily:"inherit",
+            background:league===l?`linear-gradient(135deg,${C.gold},${C.goldDark})`:C.surface,
+            color:league===l?"#0a0d0f":C.muted,
+            boxShadow:league===l?`0 2px 8px ${C.gold}44`:"none",
+          }}>{l}</button>
+        ))}
+      </div>
+
+      {/* Division header */}
+      <div style={{
+        background:`linear-gradient(135deg,rgba(232,160,32,0.12),rgba(184,120,24,0.06))`,
+        border:`1px solid rgba(232,160,32,0.25)`,
+        borderRadius:12,padding:"14px 18px",marginBottom:16,
+      }}>
+        <div style={{fontSize:18,fontWeight:800,color:C.gold,marginBottom:2}}>
+          {league} {r.divisionName ? `— ${r.divisionName}` : ""}
+        </div>
+        {r.ageRange && <div style={{fontSize:11,color:C.muted,marginBottom:10}}>{r.ageRange}</div>}
+
+        {/* Key spec badges */}
+        <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+          {[
+            ["🏟 Format", r.format || "—"],
+            ["⚽ Ball", `Size ${r.ballSize}`],
+            ["📐 Field", r.fieldLength ? `${r.fieldLength} × ${r.fieldWidth}` : "—"],
+            ["🥅 Goals", r.goalSize || "—"],
+            ["⏱ Duration", r.periods === 4 ? `4 × ${r.periodMin} min quarters` : `2 × ${r.periodMin} min halves`],
+          ].map(([k,v])=>(
+            <div key={k} style={{background:"rgba(0,0,0,0.35)",borderRadius:7,padding:"5px 11px",fontSize:11}}>
+              <span style={{color:C.muted}}>{k}: </span><span style={{color:C.text,fontWeight:700}}>{v}</span>
+            </div>
+          ))}
+        </div>
+
+        {/* Rule flags row */}
+        <div style={{display:"flex",gap:8,flexWrap:"wrap",marginTop:8}}>
+          {[
+            ["🤕 Heading",    r.heading  ? "✅ Allowed" : "❌ Banned"],
+            ["📏 Offside",    r.offside  ? "Full rule" : "❌ None"],
+            ["🛝 Build-Out",  r.buildOut ? "✅ Active" : "❌ Not used"],
+            ["🦵 Slide Tackle", r.slideTackle ? "Allowed" : "❌ Restricted"],
+            ["🧤 GK Punt",    r.gkPunt   ? "✅ Allowed (SAY East)" : "❌ Not allowed"],
+            ["🟡 Cards",      r.yellowRedCards ? "Full system" : "❌ No cards"],
+          ].map(([k,v])=>(
+            <div key={k} style={{background:"rgba(0,0,0,0.25)",borderRadius:6,padding:"4px 9px",fontSize:11}}>
+              <span style={{color:C.muted}}>{k}: </span><span style={{color:C.text,fontWeight:600}}>{v}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* View tabs */}
+      <div style={{display:"flex",gap:4,marginBottom:14}}>
+        {[["quick","📌 Quick Reference"],["unknown","💡 Easily Missed Rules"],["links","🔗 Official Links"]].map(([k,l])=>(
+          <button key={k} onClick={()=>setView(k)} style={{
+            padding:"6px 14px",borderRadius:7,border:"none",cursor:"pointer",fontSize:12,fontWeight:600,fontFamily:"inherit",
+            background:view===k?`linear-gradient(135deg,${C.gold},${C.goldDark})`:C.surface,
+            color:view===k?"#0a0d0f":C.muted,
+          }}>{l}</button>
+        ))}
+      </div>
+
+      {view==="quick" && (
+        <div>
+          {r.quickRules.map((rule,i)=>(
+            <div key={i} style={{
+              display:"flex",alignItems:"flex-start",gap:12,padding:"10px 14px",
+              marginBottom:6,borderRadius:9,
+              background: rule.important?"rgba(232,160,32,0.08)":C.surface,
+              border:`1px solid ${rule.important?"rgba(232,160,32,0.25)":C.border}`,
+            }}>
+              <span style={{fontSize:18,lineHeight:1,flexShrink:0}}>{rule.icon}</span>
+              <div style={{fontSize:13,color:rule.important?C.text:C.muted,fontWeight:rule.important?600:400}}>{rule.text}</div>
+              {rule.important && <div style={{marginLeft:"auto",fontSize:9,color:C.gold,fontWeight:700,flexShrink:0}}>KEY</div>}
+            </div>
+          ))}
+          {/* Min play time */}
+          <div style={{
+            display:"flex",alignItems:"flex-start",gap:12,padding:"10px 14px",
+            marginBottom:6,borderRadius:9,
+            background:"rgba(39,174,96,0.08)",border:"1px solid rgba(39,174,96,0.2)",
+          }}>
+            <span style={{fontSize:18}}>⏱</span>
+            <div>
+              <div style={{fontSize:13,color:C.text,fontWeight:600}}>Min Play Time (SAY Rule 12)</div>
+              <div style={{fontSize:12,color:C.muted}}>{PLAY_TIME_RULES[league]?.note||"Check local rules"}</div>
+            </div>
+          </div>
+          {/* No blowout rule */}
+          <div style={{
+            display:"flex",alignItems:"flex-start",gap:12,padding:"10px 14px",
+            borderRadius:9,background:"rgba(211,84,0,0.06)",border:"1px solid rgba(211,84,0,0.2)",
+          }}>
+            <span style={{fontSize:18}}>🛑</span>
+            <div>
+              <div style={{fontSize:13,color:C.text,fontWeight:600}}>No Blowout Rule (SAY East)</div>
+              <div style={{fontSize:12,color:C.muted}}>Winning by more than 5 goals is a violation. Coaches must have a plan to manage score — rotate, adjust tactics, avoid running up the score.</div>
+            </div>
+            <div style={{marginLeft:"auto",fontSize:9,color:C.warn,fontWeight:700,flexShrink:0}}>KEY</div>
+          </div>
+        </div>
+      )}
+
+      {view==="unknown" && (
+        <div>
+          <div style={{fontSize:12,color:C.muted,marginBottom:12,lineHeight:1.6}}>
+            💡 Rules frequently misunderstood by coaches and parents in SAY East.
+          </div>
+          {(r.unknownRules||[]).map((rule,i)=>(
+            <div key={i} style={{
+              display:"flex",alignItems:"flex-start",gap:12,padding:"12px 14px",
+              marginBottom:8,borderRadius:9,background:C.surface,border:`1px solid ${C.border}`,
+            }}>
+              <div style={{
+                width:22,height:22,borderRadius:"50%",flexShrink:0,
+                background:`linear-gradient(135deg,${C.gold},${C.goldDark})`,
+                display:"flex",alignItems:"center",justifyContent:"center",
+                fontSize:11,fontWeight:700,color:"#0a0d0f"
+              }}>{i+1}</div>
+              <div style={{fontSize:13,color:C.text,lineHeight:1.6}}>{rule}</div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {view==="links" && (
+        <div>
+          <div style={{fontSize:12,color:C.muted,marginBottom:12}}>
+            Official SAY East and SAY National rulebooks for {league}:
+          </div>
+          {(r.officialLinks||[]).map((link,i)=>(
+            <a key={i} href={link.url} target="_blank" rel="noopener noreferrer" style={{
+              display:"flex",alignItems:"center",gap:12,padding:"12px 16px",
+              marginBottom:8,borderRadius:9,
+              background:C.surface,border:`1px solid ${C.border}`,
+              textDecoration:"none",transition:"border-color 0.15s",
+            }}
+            onMouseEnter={e=>e.currentTarget.style.borderColor=C.gold}
+            onMouseLeave={e=>e.currentTarget.style.borderColor=C.border}>
+              <span style={{fontSize:20}}>📄</span>
+              <div style={{flex:1}}>
+                <div style={{fontSize:13,color:C.text,fontWeight:600}}>{link.label}</div>
+                <div style={{fontSize:11,color:C.muted,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{link.url}</div>
+              </div>
+              <span style={{color:C.gold,fontSize:14}}>↗</span>
+            </a>
+          ))}
+          <div style={{fontSize:11,color:C.muted,marginTop:12,lineHeight:1.6,padding:"10px 14px",background:C.surface,borderRadius:8,border:`1px solid ${C.border}`}}>
+            ℹ️ Rules may vary by local league, state association, or competition. Always verify with your specific league administrator.
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// TAB: DRILLS
+// ═══════════════════════════════════════════════════════════════════
+function TabDrills({ drills, league, addCustomDrill, removeCustomDrill }) {
+  const [catFilter,   setCatFilter]   = useState("All");
+  const [skillFilter, setSkillFilter] = useState("All");
+  const [diffFilter,  setDiffFilter]  = useState("All");
+  const [ageFilter,   setAgeFilter]   = useState(false);
+  const [search,      setSearch]      = useState("");
+  const [expanded,    setExpanded]    = useState(null);
+  const [showAdd,     setShowAdd]     = useState(false);
+  const [newDrill,    setNewDrill]    = useState({name:"",category:"Passing",skills:[],ageMin:"U6",ageMax:"Adult",difficulty:"Beginner",duration:10,instructions:"",coaching:"",progressions:[],equipment:[]});
+  const [progInput,   setProgInput]   = useState("");
+  const [equipInput,  setEquipInput]  = useState("");
+
+  const ageOrder = LEAGUES;
+  const leagueIdx = ageOrder.indexOf(league);
+
+  const filtered = drills.filter(d => {
+    if (catFilter!=="All" && d.category!==catFilter) return false;
+    if (skillFilter!=="All" && !d.skills.includes(skillFilter)) return false;
+    if (diffFilter!=="All" && d.difficulty!==diffFilter) return false;
+    if (ageFilter) {
+      const minI = ageOrder.indexOf(d.ageMin||"U6");
+      const maxI = ageOrder.indexOf(d.ageMax||"Adult");
+      if (leagueIdx < minI || leagueIdx > maxI) return false;
+    }
+    if (search && !d.name.toLowerCase().includes(search.toLowerCase()) && !d.skills.join(" ").toLowerCase().includes(search.toLowerCase())) return false;
+    return true;
+  });
+
+  const addProg = () => { if (progInput.trim()) { setNewDrill(d=>({...d,progressions:[...d.progressions,progInput.trim()]})); setProgInput(""); } };
+  const addEquip = () => { if (equipInput.trim()) { setNewDrill(d=>({...d,equipment:[...d.equipment,equipInput.trim()]})); setEquipInput(""); } };
+
+  return (
+    <div>
+      {/* Filters */}
+      <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:12,alignItems:"center"}}>
+        <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="🔍 Search drills…" style={{...IS,width:"auto",flex:"1 1 140px"}}/>
+        <Btn sm primary onClick={()=>setShowAdd(!showAdd)}>+ Custom</Btn>
+      </div>
+      <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:8}}>
+        <div style={{display:"flex",gap:3,flexWrap:"wrap"}}>
+          {["All",...CATEGORIES].map(c=>(
+            <FilterPill key={c} label={c} active={catFilter===c} onClick={()=>setCatFilter(c)}/>
+          ))}
+        </div>
+      </div>
+      <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:12}}>
+        <FilterPill label="All Ages" active={!ageFilter} onClick={()=>setAgeFilter(false)}/>
+        <FilterPill label={`Age: ${league}`} active={ageFilter} onClick={()=>setAgeFilter(true)}/>
+        {DIFFICULTIES.map(d=><FilterPill key={d} label={d} active={diffFilter===d} onClick={()=>setDiffFilter(diffFilter===d?"All":d)}/>)}
+      </div>
+
+      {/* Add custom drill */}
+      {showAdd && (
+        <Card style={{marginBottom:14,border:`1px solid rgba(232,160,32,0.25)`}}>
+          <div style={{fontSize:13,fontWeight:700,color:C.gold,marginBottom:12}}>Add Custom Drill</div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
+            <div style={{gridColumn:"1/-1"}}>
+              <label style={lbl}>Name</label>
+              <input value={newDrill.name} onChange={e=>setNewDrill(d=>({...d,name:e.target.value}))} style={IS} placeholder="Drill name"/>
+            </div>
+            <div>
+              <label style={lbl}>Category</label>
+              <select value={newDrill.category} onChange={e=>setNewDrill(d=>({...d,category:e.target.value}))} style={SS}>
+                {CATEGORIES.map(c=><option key={c}>{c}</option>)}
+              </select>
+            </div>
+            <div>
+              <label style={lbl}>Difficulty</label>
+              <select value={newDrill.difficulty} onChange={e=>setNewDrill(d=>({...d,difficulty:e.target.value}))} style={SS}>
+                {DIFFICULTIES.map(c=><option key={c}>{c}</option>)}
+              </select>
+            </div>
+            <div>
+              <label style={lbl}>Age Min</label>
+              <select value={newDrill.ageMin} onChange={e=>setNewDrill(d=>({...d,ageMin:e.target.value}))} style={SS}>
+                {LEAGUES.map(l=><option key={l}>{l}</option>)}
+              </select>
+            </div>
+            <div>
+              <label style={lbl}>Duration (min)</label>
+              <input type="number" value={newDrill.duration} onChange={e=>setNewDrill(d=>({...d,duration:+e.target.value}))} style={IS}/>
+            </div>
+            <div style={{gridColumn:"1/-1"}}>
+              <label style={lbl}>Instructions</label>
+              <textarea value={newDrill.instructions} onChange={e=>setNewDrill(d=>({...d,instructions:e.target.value}))} rows={3} style={{...IS,resize:"vertical"}}/>
+            </div>
+            <div style={{gridColumn:"1/-1"}}>
+              <label style={lbl}>Coaching Points</label>
+              <textarea value={newDrill.coaching} onChange={e=>setNewDrill(d=>({...d,coaching:e.target.value}))} rows={2} style={{...IS,resize:"vertical"}}/>
+            </div>
+            <div>
+              <label style={lbl}>Progressions</label>
+              <div style={{display:"flex",gap:4,marginBottom:4}}>
+                <input value={progInput} onChange={e=>setProgInput(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addProg()} style={{...IS,flex:1}} placeholder="Add progression…"/>
+                <Btn sm onClick={addProg}>+</Btn>
+              </div>
+              {newDrill.progressions.map((p,i)=><div key={i} style={{fontSize:11,color:C.muted,marginBottom:2}}>• {p}</div>)}
+            </div>
+            <div>
+              <label style={lbl}>Equipment</label>
+              <div style={{display:"flex",gap:4,marginBottom:4}}>
+                <input value={equipInput} onChange={e=>setEquipInput(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addEquip()} style={{...IS,flex:1}} placeholder="Add equipment…"/>
+                <Btn sm onClick={addEquip}>+</Btn>
+              </div>
+              {newDrill.equipment.map((e,i)=><div key={i} style={{fontSize:11,color:C.muted,marginBottom:2}}>• {e}</div>)}
+            </div>
+          </div>
+          <div style={{display:"flex",gap:6}}>
+            <Btn primary sm onClick={()=>{ addCustomDrill(newDrill); setShowAdd(false); setNewDrill({name:"",category:"Passing",skills:[],ageMin:"U6",ageMax:"Adult",difficulty:"Beginner",duration:10,instructions:"",coaching:"",progressions:[],equipment:[]}); }}>💾 Save Drill</Btn>
+            <Btn sm onClick={()=>setShowAdd(false)}>Cancel</Btn>
+          </div>
+        </Card>
+      )}
+
+      <div style={{fontSize:11,color:C.muted,marginBottom:10}}>{filtered.length} drill{filtered.length!==1?"s":""} shown</div>
+
+      {filtered.map(drill=>(
+        <DrillCard key={drill.id} drill={drill} expanded={expanded===drill.id}
+          onToggle={()=>setExpanded(expanded===drill.id?null:drill.id)}
+          onRemove={drill.custom?()=>removeCustomDrill(drill.id):null}/>
+      ))}
+    </div>
+  );
+}
+
+function FilterPill({ label, active, onClick }) {
+  return (
+    <button onClick={onClick} style={{
+      padding:"3px 10px",borderRadius:20,border:"none",cursor:"pointer",fontSize:11,fontWeight:600,fontFamily:"inherit",
+      background:active?`linear-gradient(135deg,${C.gold},${C.goldDark})`:C.surface,
+      color:active?"#0a0d0f":C.muted,
+    }}>{label}</button>
+  );
+}
+
+function DrillCard({ drill, expanded, onToggle, onRemove }) {
+  const diffColor = drill.difficulty==="Advanced"?C.warn:drill.difficulty==="Intermediate"?C.gold:C.ok;
+  return (
+    <div style={{
+      background:C.surface,borderRadius:10,marginBottom:8,
+      border:`1px solid ${drill.custom?"rgba(232,160,32,0.2)":C.border}`,
+      overflow:"hidden",
+    }}>
+      <div style={{padding:"10px 14px",cursor:"pointer",display:"flex",gap:10,alignItems:"center"}} onClick={onToggle}>
+        {drill.image && (
+          <div style={{width:48,height:48,borderRadius:7,overflow:"hidden",flexShrink:0}}>
+            <img src={drill.image} alt="" style={{width:"100%",height:"100%",objectFit:"cover"}}/>
+          </div>
+        )}
+        <div style={{flex:1,minWidth:0}}>
+          <div style={{fontWeight:600,fontSize:13,color:C.text}}>
+            {drill.name}
+            {drill.custom && <span style={{marginLeft:6,fontSize:9,background:"rgba(232,160,32,0.2)",color:C.gold,padding:"1px 5px",borderRadius:3,fontWeight:700}}>CUSTOM</span>}
+          </div>
+          <div style={{fontSize:11,color:C.muted}}>{drill.category} · {drill.duration}min · {drill.ageMin}–{drill.ageMax||"Adult"}</div>
+          <div style={{display:"flex",gap:4,marginTop:3,flexWrap:"wrap"}}>
+            {(drill.skills||[]).slice(0,4).map(s=>(
+              <span key={s} style={{fontSize:9,background:"rgba(255,255,255,0.08)",color:C.muted,padding:"1px 5px",borderRadius:3}}>{s}</span>
+            ))}
+          </div>
+        </div>
+        <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:4,flexShrink:0}}>
+          <span style={{fontSize:9,fontWeight:700,color:diffColor,background:`${diffColor}22`,padding:"2px 6px",borderRadius:3}}>{drill.difficulty}</span>
+          <span style={{fontSize:11,color:C.muted}}>{expanded?"▲":"▼"}</span>
+        </div>
+      </div>
+
+      {expanded && (
+        <div style={{borderTop:`1px solid ${C.border}`}}>
+          {drill.image && (
+            <img src={drill.image} alt={drill.name}
+              style={{width:"100%",maxHeight:160,objectFit:"cover",display:"block"}}/>
+          )}
+          <div style={{padding:"12px 14px"}}>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
+              <div>
+                <div style={{fontSize:11,color:C.gold,fontWeight:700,marginBottom:4}}>SETUP</div>
+                <div style={{fontSize:12,color:C.muted,lineHeight:1.6}}>{drill.setup}</div>
+              </div>
+              <div>
+                <div style={{fontSize:11,color:C.gold,fontWeight:700,marginBottom:4}}>EQUIPMENT</div>
+                {(drill.equipment||[]).map((e,i)=><div key={i} style={{fontSize:12,color:C.muted}}>• {e}</div>)}
+                {(!drill.equipment||drill.equipment.length===0) && <div style={{fontSize:12,color:C.muted}}>Standard equipment</div>}
+              </div>
+            </div>
+            <div style={{marginBottom:10}}>
+              <div style={{fontSize:11,color:C.gold,fontWeight:700,marginBottom:4}}>INSTRUCTIONS</div>
+              <div style={{fontSize:12,color:C.text,lineHeight:1.7}}>{drill.instructions}</div>
+            </div>
+            <div style={{marginBottom:10}}>
+              <div style={{fontSize:11,color:C.gold,fontWeight:700,marginBottom:4}}>COACHING POINTS</div>
+              <div style={{fontSize:12,color:C.text,lineHeight:1.7}}>{drill.coaching}</div>
+            </div>
+            {(drill.progressions||[]).length > 0 && (
+              <div style={{marginBottom:10}}>
+                <div style={{fontSize:11,color:C.gold,fontWeight:700,marginBottom:4}}>PROGRESSIONS</div>
+                {drill.progressions.map((p,i)=>(
+                  <div key={i} style={{fontSize:12,color:C.muted,marginBottom:3}}>→ {p}</div>
+                ))}
+              </div>
+            )}
+            {onRemove && <Btn sm danger onClick={onRemove}>🗑️ Remove Custom Drill</Btn>}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// TAB: PRACTICE GENERATOR
+// ═══════════════════════════════════════════════════════════════════
+const FOCUS_AREAS = ["General","Passing","Dribbling","Shooting","Defense","Possession","Fitness","Set Pieces","Goalkeeping","Heading"];
+
+function TabPractice({ drills, league }) {
+  const [focus,     setFocus]     = useState("General");
+  const [skills,    setSkills]    = useState([]);
+  const [duration,  setDuration]  = useState(60);
+  const [plan,      setPlan]      = useState(null);
+  const [notes,     setNotes]     = useState("");
+  const [swapDrill, setSwapDrill] = useState(null); // index being swapped
+
+  const isYoung = LEAGUES.indexOf(league) <= 1; // U6, U8
+  const level = LEAGUES.indexOf(league) <= 2 ? "Beginner" : LEAGUES.indexOf(league) <= 4 ? "Intermediate" : "Advanced";
+
+  const generate = () => {
+    const sections = generatePractice(league, focus, skills, duration, drills);
+    setPlan({ focus, skills, duration, sections, league });
+    setNotes("");
+  };
+
+  const swapDrillInPlan = (sectionIdx, newDrill) => {
+    setPlan(prev => {
+      const sections = [...prev.sections];
+      sections[sectionIdx] = { ...sections[sectionIdx], drill: newDrill };
+      return { ...prev, sections };
+    });
+    setSwapDrill(null);
+  };
+
+  const toggleSkill = s => setSkills(prev => prev.includes(s)?prev.filter(x=>x!==s):[...prev,s]);
+
+  const ageOrder = LEAGUES;
+  const leagueIdx = ageOrder.indexOf(league);
+
+  return (
+    <div>
+      {/* Config */}
+      <Card style={{marginBottom:14}}>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr auto",gap:10,marginBottom:12,alignItems:"flex-end"}}>
+          <div>
+            <label style={lbl}>Focus Area</label>
+            <select value={focus} onChange={e=>setFocus(e.target.value)} style={SS}>
+              {FOCUS_AREAS.map(f=><option key={f}>{f}</option>)}
+            </select>
+          </div>
+          <div>
+            <label style={lbl}>Duration (minutes)</label>
+            <select value={duration} onChange={e=>setDuration(+e.target.value)} style={SS}>
+              {[30,45,60,75,90].map(d=><option key={d}>{d}</option>)}
+            </select>
+          </div>
+          <Btn primary onClick={generate}>⚡ Generate</Btn>
+        </div>
+        <div>
+          <label style={lbl}>Skill Focus Tags (optional — refines drill selection)</label>
+          <div style={{display:"flex",flexWrap:"wrap",gap:4}}>
+            {SKILL_TAGS.map(s=>(
+              <FilterPill key={s} label={s} active={skills.includes(s)} onClick={()=>toggleSkill(s)}/>
+            ))}
+          </div>
+        </div>
+      </Card>
+
+      {/* Age level indicator */}
+      <div style={{display:"flex",gap:8,marginBottom:14,alignItems:"center"}}>
+        <div style={{fontSize:11,color:C.muted}}>Practice level for <b style={{color:C.text}}>{league}</b>:</div>
+        <div style={{
+          fontSize:10,fontWeight:700,padding:"3px 9px",borderRadius:4,
+          background:level==="Beginner"?`${C.ok}22`:level==="Intermediate"?`${C.gold}22`:`${C.warn}22`,
+          color:level==="Beginner"?C.ok:level==="Intermediate"?C.gold:C.warn,
+        }}>{level} Level</div>
+        {isYoung && <div style={{fontSize:11,color:C.muted}}>· Fun-focused · Short activities · Simple instructions</div>}
+      </div>
+
+      {plan && (
+        <div>
+          {/* Header */}
+          <div style={{
+            background:`linear-gradient(135deg,rgba(232,160,32,0.1),rgba(30,77,43,0.1))`,
+            border:`1px solid rgba(232,160,32,0.2)`,
+            borderRadius:12,padding:"14px 18px",marginBottom:14,
+          }}>
+            <div style={{fontWeight:800,fontSize:16,color:C.gold}}>{plan.league} Practice — {plan.focus}</div>
+            <div style={{fontSize:12,color:C.muted,marginTop:2}}>
+              ~{plan.duration}min · {plan.sections.filter(s=>s.drill).length} activities
+              {plan.skills.length>0 && ` · Focus: ${plan.skills.join(", ")}`}
+            </div>
+          </div>
+
+          {/* Sections */}
+          {plan.sections.map((sec, i) => (
+            <div key={i} style={{
+              display:"flex",gap:12,marginBottom:10,
+              background:C.surface,borderRadius:10,padding:"12px 14px",
+              border:`1px solid ${C.border}`,
+            }}>
+              <div style={{
+                width:34,height:34,borderRadius:"50%",flexShrink:0,
+                background:`linear-gradient(135deg,${C.gold},${C.goldDark})`,
+                display:"flex",alignItems:"center",justifyContent:"center",
+                fontWeight:800,fontSize:12,color:"#0a0d0f",
+              }}>{i+1}</div>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontWeight:700,fontSize:12,color:C.gold,marginBottom:2}}>
+                  {sec.type} <span style={{color:C.muted,fontWeight:400}}>({sec.time} min)</span>
+                </div>
+                {sec.drill ? (
+                  <>
+                    <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4}}>
+                      {sec.drill.image && <img src={sec.drill.image} alt="" style={{width:36,height:36,borderRadius:5,objectFit:"cover",flexShrink:0}}/>}
+                      <div>
+                        <div style={{fontSize:13,color:C.text,fontWeight:600}}>{sec.drill.name}</div>
+                        <div style={{fontSize:11,color:C.muted}}>{sec.drill.category} · {sec.drill.difficulty}</div>
+                      </div>
+                    </div>
+                    <div style={{fontSize:11,color:C.muted,lineHeight:1.5,marginBottom:6}}>
+                      {(sec.drill.instructions||"").slice(0,120)}{sec.drill.instructions?.length>120?"…":""}
+                    </div>
+                    {swapDrill===i ? (
+                      <div style={{background:"rgba(0,0,0,0.3)",borderRadius:8,padding:10,marginBottom:6}}>
+                        <div style={{fontSize:11,color:C.gold,marginBottom:6,fontWeight:700}}>Swap drill:</div>
+                        <div style={{maxHeight:180,overflowY:"auto"}}>
+                          {drills.filter(d=>{
+                            const minI=ageOrder.indexOf(d.ageMin||"U6");
+                            const maxI=ageOrder.indexOf(d.ageMax||"Adult");
+                            return leagueIdx>=minI && leagueIdx<=maxI && d.id!==sec.drill.id;
+                          }).map(d=>(
+                            <div key={d.id} onClick={()=>swapDrillInPlan(i,d)}
+                              style={{padding:"5px 8px",borderRadius:5,cursor:"pointer",fontSize:12,color:C.text,marginBottom:2,
+                                background:"rgba(255,255,255,0.04)"}}
+                              onMouseEnter={e=>e.currentTarget.style.background="rgba(232,160,32,0.1)"}
+                              onMouseLeave={e=>e.currentTarget.style.background="rgba(255,255,255,0.04)"}>
+                              {d.name} <span style={{color:C.muted,fontSize:10}}>({d.category})</span>
+                            </div>
+                          ))}
+                        </div>
+                        <Btn sm onClick={()=>setSwapDrill(null)} style={{marginTop:6}}>✕ Cancel</Btn>
+                      </div>
+                    ) : (
+                      <Btn sm ghost onClick={()=>setSwapDrill(i)}>🔄 Swap Drill</Btn>
+                    )}
+                  </>
+                ) : (
+                  <div style={{fontSize:12,color:C.muted}}>{sec.notes||"Cool down, stretching, and Q&A with players."}</div>
+                )}
+              </div>
+            </div>
+          ))}
+
+          <div style={{marginTop:12}}>
+            <label style={lbl}>Coach Notes</label>
+            <textarea value={notes} onChange={e=>setNotes(e.target.value)}
+              placeholder="Add notes for this session…" rows={3}
+              style={{...IS,resize:"vertical"}}/>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// MAIN APP
+// ═══════════════════════════════════════════════════════════════════
+const TABS = [
+  {id:"game",     icon:"⚽", label:"Game Day"},
+  {id:"roster",   icon:"👥", label:"Roster"},
+  {id:"season",   icon:"📊", label:"Season"},
+  {id:"team",     icon:"👨‍👩‍👧", label:"Team"},
+  {id:"rules",    icon:"📋", label:"Rules"},
+  {id:"drills",   icon:"🏃", label:"Drills"},
+  {id:"practice", icon:"📅", label:"Practice"},
+];
+
+// FORMATION TEMPLATES per format
+const FORMATION_TEMPLATES = {
+  "4v4":  [{ name:"2-1",    slots:["GK","DEF","MID","FWD"] },{ name:"1-2",    slots:["GK","DEF","FWD","FWD"] }],
+  "5v5":  [{ name:"2-2",    slots:["GK","DEF","DEF","MID","FWD"] },{ name:"1-2-1",  slots:["GK","DEF","MID","MID","FWD"] }],
+  "6v6":  [{ name:"2-2-1",  slots:["GK","DEF","DEF","MID","MID","FWD"] },{ name:"3-2",    slots:["GK","DEF","DEF","DEF","MID","FWD"] },{ name:"2-1-2",  slots:["GK","DEF","DEF","MID","FWD","FWD"] }],
+  "7v7":  [{ name:"3-2-1",  slots:["GK","DEF","DEF","DEF","MID","MID","FWD"] },{ name:"2-3-1",  slots:["GK","DEF","DEF","MID","MID","MID","FWD"] },{ name:"2-2-2",  slots:["GK","DEF","DEF","MID","MID","FWD","FWD"] }],
+  "8v8":  [{ name:"3-3-1",  slots:["GK","DEF","DEF","DEF","MID","MID","MID","FWD"] },{ name:"3-2-2",  slots:["GK","DEF","DEF","DEF","MID","MID","FWD","FWD"] }],
+  "9v9":  [{ name:"3-3-2",  slots:["GK","DEF","DEF","DEF","MID","MID","MID","FWD","FWD"] },{ name:"4-3-1",  slots:["GK","DEF","DEF","DEF","DEF","MID","MID","MID","FWD"] }],
+  "11v11":[{ name:"4-4-2",  slots:["GK","DEF","DEF","DEF","DEF","MID","MID","MID","MID","FWD","FWD"] },{ name:"4-3-3",  slots:["GK","DEF","DEF","DEF","DEF","MID","MID","MID","FWD","FWD","FWD"] },{ name:"3-5-2",  slots:["GK","DEF","DEF","DEF","MID","MID","MID","MID","MID","FWD","FWD"] }],
+};
+
+const SAMPLE_PLAYERS = [
+  {id:"p1",name:"Alex Johnson",number:"1", positions:["GK"],         injured:false,out:false,ratings:{Speed:3,Technique:4,Positioning:5,Teamwork:4,Effort:4}, parentName:"Chris Johnson", parentPhone:"513-555-0101", devNotes:""},
+  {id:"p2",name:"Sam Torres",  number:"4", positions:["DEF","CB"],   injured:false,out:false,ratings:{Speed:3,Technique:3,Positioning:4,Teamwork:5,Effort:4}, parentName:"Maria Torres",  parentPhone:"513-555-0102", devNotes:""},
+  {id:"p3",name:"Jordan Lee",  number:"5", positions:["DEF","MID"],  injured:false,out:false,ratings:{Speed:4,Technique:3,Positioning:3,Teamwork:4,Effort:5}, parentName:"Pat Lee",       parentPhone:"513-555-0103", devNotes:""},
+  {id:"p4",name:"Casey Morgan",number:"8", positions:["MID","CAM"],  injured:false,out:false,ratings:{Speed:4,Technique:5,Positioning:4,Teamwork:4,Effort:3}, parentName:"Dana Morgan",   parentPhone:"513-555-0104", devNotes:""},
+  {id:"p5",name:"Riley Chen",  number:"10",positions:["MID","FWD"],  injured:false,out:false,ratings:{Speed:5,Technique:4,Positioning:3,Teamwork:3,Effort:4}, parentName:"Wei Chen",      parentPhone:"513-555-0105", devNotes:""},
+  {id:"p6",name:"Taylor Kim",  number:"9", positions:["FWD","ST"],   injured:false,out:false,ratings:{Speed:5,Technique:5,Positioning:4,Teamwork:3,Effort:5}, parentName:"Jin Kim",       parentPhone:"513-555-0106", devNotes:""},
+  {id:"p7",name:"Jamie Park",  number:"7", positions:["FWD","Wing"], injured:false,out:false,ratings:{Speed:4,Technique:4,Positioning:3,Teamwork:4,Effort:4}, parentName:"Sun Park",      parentPhone:"513-555-0107", devNotes:""},
+  {id:"p8",name:"Drew Patel",  number:"3", positions:["DEF","LB"],   injured:false,out:false,ratings:{Speed:3,Technique:3,Positioning:4,Teamwork:5,Effort:5}, parentName:"Priya Patel",   parentPhone:"513-555-0108", devNotes:""},
+  {id:"p9",name:"Morgan Walsh",number:"11",positions:["FWD","Wing","MID"],injured:false,out:false,ratings:{Speed:5,Technique:4,Positioning:4,Teamwork:4,Effort:4}, parentName:"Sean Walsh",    parentPhone:"513-555-0109", devNotes:""},
+];
+
+// ── Wrap entire app in Clerk auth gate ──────────────────────────────
+export default function App() {
+  return (
+    <AuthGate>
+      <CoachKitApp />
+    </AuthGate>
+  );
+}
+
+function CoachKitApp() {
+  const { user } = useUser();
+  const uid_prefix = user?.id ? `ck_${user.id}_` : "ck_guest_";
+
+  const [tab,             setTab]             = useState("game");
+  const [league,          setLeague]          = useState("U10 / Wings");
+  const [format,          setFormat]          = useState("7v7");
+  const [lineupsByQuarter,setLineupsByQuarter]= useState({});
+
+  const [players,            setPlayers]            = usePersistedState(uid_prefix+"players",      SAMPLE_PLAYERS);
+  const [customDrills,       setCustomDrills]       = usePersistedState(uid_prefix+"customDrills", []);
+  const [playerStats,        setPlayerStats]        = usePersistedState(uid_prefix+"playerStats",  (() => { const s = {}; SAMPLE_PLAYERS.forEach(p => { s[p.id] = {goals:0,assists:0,gamesPlayed:0}; }); return s; })());
+  const [games,              setGames]              = usePersistedState(uid_prefix+"games", [
+    {id:"g1", date:"2026-03-08", opponent:"FC Milford",   homeScore:3, oppScore:1, notes:"Great passing game."},
+    {id:"g2", date:"2026-03-15", opponent:"Blue Wave SC", homeScore:2, oppScore:2, notes:"Tied in last minute."},
+  ]);
+  const [practiceAttendance, setPracticeAttendance] = usePersistedState(uid_prefix+"practiceAtt",   {});
+  const [practiceDates,      setPracticeDates]      = usePersistedState(uid_prefix+"practiceDates", [
+    {id:"pr1", date:"2026-03-10", notes:"Passing & positioning"},
+    {id:"pr2", date:"2026-03-03", notes:"Shooting drills"},
+  ]);
+
+  const allDrills = [...DRILLS, ...customDrills];
+
+  const addPlayer    = p  => {
+    const pid = uid();
+    setPlayers(prev => [...prev, {...p, id:pid}]);
+    setPlayerStats(prev => ({...prev, [pid]:{goals:0,assists:0,gamesPlayed:0}}));
+  };
+  const updatePlayer = p  => setPlayers(prev => prev.map(x => x.id===p.id?p:x));
+  const removePlayer = id => {
+    setPlayers(prev => prev.filter(x=>x.id!==id));
+    setPlayerStats(prev => { const n={...prev}; delete n[id]; return n; });
+  };
+  const addCustomDrill    = d => setCustomDrills(prev=>[...prev,{...d,id:uid(),custom:true,image:null}]);
+  const removeCustomDrill = id=> setCustomDrills(prev=>prev.filter(d=>d.id!==id));
+
+  const handleLeagueChange = l => { setLeague(l); setLineupsByQuarter({}); };
+  const handleFormatChange = f => { setFormat(f); setLineupsByQuarter({}); };
+
+  const injured      = players.filter(p=>p.injured).length;
+  const midGameCount = players.filter(p=>p.midGameInjury).length;
+  const out          = players.filter(p=>p.out).length;
+
+  return (
+    <div style={{
+      minHeight:"100vh",
+      background: C.bg,
+      fontFamily:"'Palatino Linotype','Book Antiqua',Palatino,Georgia,serif",
+      color: C.text,
+    }}>
+      {/* ── HEADER ── */}
+      <div style={{
+        background:"linear-gradient(180deg,#111810 0%,#0c140a 100%)",
+        borderBottom:`1px solid rgba(232,160,32,0.18)`,
+        position:"sticky",top:0,zIndex:100,
+      }}>
+        <div style={{maxWidth:960,margin:"0 auto",padding:"0 16px"}}>
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:10,padding:"12px 0 8px"}}>
+            <div style={{display:"flex",alignItems:"center",gap:12}}>
+              <div style={{
+                width:44,height:44,borderRadius:11,
+                background:`linear-gradient(135deg,${C.gold},${C.goldDark})`,
+                display:"flex",alignItems:"center",justifyContent:"center",fontSize:22,
+                boxShadow:`0 4px 12px ${C.gold}44`,
+              }}>⚽</div>
+              <div>
+                <div style={{fontSize:19,fontWeight:800,color:C.text,letterSpacing:"-0.01em"}}>CoachKit</div>
+                <div style={{fontSize:9,color:C.muted,letterSpacing:"0.1em",textTransform:"uppercase"}}>Youth Soccer Manager</div>
+              </div>
+            </div>
+
+            <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
+              <div>
+                <label style={{...lbl,marginBottom:2}}>League</label>
+                <select value={league} onChange={e=>handleLeagueChange(e.target.value)} style={{...SS,width:"auto",padding:"5px 8px",fontSize:12}}>
+                  {LEAGUES.map(l=><option key={l}>{l}</option>)}
+                </select>
+              </div>
+              <div>
+                <label style={{...lbl,marginBottom:2}}>Format</label>
+                <select value={format} onChange={e=>handleFormatChange(e.target.value)} style={{...SS,width:"auto",padding:"5px 8px",fontSize:12}}>
+                  {FORMATS.map(f=><option key={f}>{f}</option>)}
+                </select>
+              </div>
+              <div style={{display:"flex",gap:10,alignItems:"center"}}>
+                <Stat label="Roster"   val={players.length}    color={C.text}/>
+                {injured>0&&<Stat label="🤕 Injured" val={injured} color="#e74c3c"/>}
+                {midGameCount>0&&<Stat label="🚨 Mid-Game" val={midGameCount} color="#e74c3c"/>}
+                {out>0    &&<Stat label="🚫 Out"     val={out}     color="#e67e22"/>}
+              </div>
+              <UserMenu />
+            </div>
+          </div>
+
+          {/* Tab bar */}
+          <div style={{display:"flex",gap:0,overflowX:"auto",scrollbarWidth:"none"}}>
+            {TABS.map(t=>(
+              <button key={t.id} onClick={()=>setTab(t.id)} style={{
+                padding:"8px 14px",border:"none",cursor:"pointer",fontWeight:600,
+                fontSize:12,background:"transparent",whiteSpace:"nowrap",fontFamily:"inherit",
+                color:tab===t.id?C.gold:C.muted,
+                borderBottom:tab===t.id?`2px solid ${C.gold}`:"2px solid transparent",
+                transition:"color 0.15s",
+              }}>{t.icon} {t.label}</button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* ── BODY ── */}
+      <div style={{maxWidth:960,margin:"0 auto",padding:"20px 16px"}}>
+        {tab==="game"     && <TabGame     format={format} league={league} players={players} setPlayers={setPlayers} lineupsByQuarter={lineupsByQuarter} setLineupsByQuarter={setLineupsByQuarter}/>}
+        {tab==="roster"   && <TabRoster   players={players} addPlayer={addPlayer} updatePlayer={updatePlayer} removePlayer={removePlayer} format={format}/>}
+        {tab==="season"   && <TabSeason   players={players} playerStats={playerStats} setPlayerStats={setPlayerStats} games={games} setGames={setGames} practiceDates={practiceDates} setPracticeDates={setPracticeDates} practiceAttendance={practiceAttendance} setPracticeAttendance={setPracticeAttendance}/>}
+        {tab==="team"     && <TabTeam     players={players} updatePlayer={updatePlayer} league={league} games={games}/>}
+        {tab==="rules"    && <TabRules    league={league} setLeague={setLeague}/>}
+        {tab==="drills"   && <TabDrills   drills={allDrills} league={league} addCustomDrill={addCustomDrill} removeCustomDrill={removeCustomDrill}/>}
+        {tab==="practice" && <TabPractice drills={allDrills} league={league}/>}
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// TAB: SEASON STATS
+// ═══════════════════════════════════════════════════════════════════
+function TabSeason({ players, playerStats, setPlayerStats, games, setGames, practiceDates, setPracticeDates, practiceAttendance, setPracticeAttendance }) {
+  const [view, setView] = useState("stats"); // stats | games | practice
+  const [editGame, setEditGame] = useState(null);
+  const [newGame, setNewGame] = useState({date:"",opponent:"",homeScore:"",oppScore:"",notes:""});
+  const [showAddGame, setShowAddGame] = useState(false);
+  const [newPractice, setNewPractice] = useState({date:"",notes:""});
+  const [showAddPractice, setShowAddPractice] = useState(false);
+  const [editStatPlayer, setEditStatPlayer] = useState(null);
+
+  const wins   = games.filter(g=>g.homeScore>g.oppScore).length;
+  const losses = games.filter(g=>g.homeScore<g.oppScore).length;
+  const draws  = games.filter(g=>g.homeScore===g.oppScore).length;
+  const totalGoals = games.reduce((s,g)=>s+Number(g.homeScore||0),0);
+  const totalConceded = games.reduce((s,g)=>s+Number(g.oppScore||0),0);
+
+  const updateStat = (pid, field, val) => {
+    setPlayerStats(prev=>({...prev,[pid]:{...prev[pid],[field]:Math.max(0,Number(val)||0)}}));
+  };
+
+  const saveGame = () => {
+    if (!newGame.opponent) return;
+    setGames(prev=>[...prev,{...newGame,id:uid(),homeScore:Number(newGame.homeScore)||0,oppScore:Number(newGame.oppScore)||0}]);
+    setNewGame({date:"",opponent:"",homeScore:"",oppScore:"",notes:""});
+    setShowAddGame(false);
+  };
+
+  const savePractice = () => {
+    if (!newPractice.date) return;
+    const id = uid();
+    setPracticeDates(prev=>[...prev,{...newPractice,id}]);
+    // Init attendance for all players
+    const att = {};
+    players.forEach(p=>{att[p.id]=false;});
+    setPracticeAttendance(prev=>({...prev,[id]:att}));
+    setNewPractice({date:"",notes:""});
+    setShowAddPractice(false);
+  };
+
+  const toggleAttendance = (practiceId, playerId) => {
+    setPracticeAttendance(prev=>({
+      ...prev,
+      [practiceId]:{...prev[practiceId],[playerId]:!prev[practiceId]?.[playerId]},
+    }));
+  };
+
+  const practiceAttCount = (pid) => practiceDates.filter(pr=>practiceAttendance[pr.id]?.[pid]).length;
+
+  const sortedByGoals = [...players].sort((a,b)=>(playerStats[b.id]?.goals||0)-(playerStats[a.id]?.goals||0));
+
+  return (
+    <div>
+      {/* Season record banner */}
+      <div style={{
+        display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:8,marginBottom:16,
+        background:"rgba(232,160,32,0.06)",border:"1px solid rgba(232,160,32,0.2)",
+        borderRadius:12,padding:"14px 16px",
+      }}>
+        {[
+          {label:"Wins",   val:wins,   color:C.ok},
+          {label:"Draws",  val:draws,  color:C.gold},
+          {label:"Losses", val:losses, color:"#e74c3c"},
+          {label:"Goals",  val:totalGoals,    color:C.text},
+          {label:"Conceded",val:totalConceded, color:C.muted},
+        ].map(({label,val,color})=>(
+          <div key={label} style={{textAlign:"center"}}>
+            <div style={{fontSize:22,fontWeight:800,color,lineHeight:1}}>{val}</div>
+            <div style={{fontSize:9,color:C.muted,textTransform:"uppercase",letterSpacing:"0.05em",marginTop:2}}>{label}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Sub tabs */}
+      <div style={{display:"flex",gap:4,marginBottom:14}}>
+        {[["stats","📊 Player Stats"],["games","⚽ Game Log"],["practice","📅 Practice Log"]].map(([k,l])=>(
+          <button key={k} onClick={()=>setView(k)} style={{
+            padding:"6px 14px",borderRadius:7,border:"none",cursor:"pointer",fontSize:12,fontWeight:600,fontFamily:"inherit",
+            background:view===k?`linear-gradient(135deg,${C.gold},${C.goldDark})`:C.surface,
+            color:view===k?"#0a0d0f":C.muted,
+          }}>{l}</button>
+        ))}
+      </div>
+
+      {/* PLAYER STATS */}
+      {view==="stats" && (
+        <div>
+          <div style={{fontSize:11,color:C.muted,marginBottom:10}}>
+            Tap a player to edit their stats. Stats are cumulative for the current season.
+          </div>
+          {/* Header row */}
+          <div style={{display:"grid",gridTemplateColumns:"1fr 60px 60px 60px 60px",gap:6,padding:"4px 10px",marginBottom:4}}>
+            {["Player","Goals","Assists","Games","Prac"].map(h=>(
+              <div key={h} style={{fontSize:10,color:C.muted,fontWeight:700,textTransform:"uppercase",textAlign:h==="Player"?"left":"center"}}>{h}</div>
+            ))}
+          </div>
+          {sortedByGoals.map(p=>{
+            const st = playerStats[p.id]||{goals:0,assists:0,gamesPlayed:0};
+            const prac = practiceAttCount(p.id);
+            const isEditing = editStatPlayer===p.id;
+            return (
+              <div key={p.id} style={{
+                background:C.surface,borderRadius:9,padding:"10px 12px",marginBottom:6,
+                border:`1px solid ${isEditing?C.gold:C.border}`,
+              }}>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 60px 60px 60px 60px",gap:6,alignItems:"center"}}
+                  onClick={()=>setEditStatPlayer(isEditing?null:p.id)}>
+                  <div style={{cursor:"pointer"}}>
+                    <div style={{fontSize:13,fontWeight:600,color:C.text}}>{p.name.split(" ")[0]} <span style={{color:C.muted,fontWeight:400}}>#{p.number}</span></div>
+                    <div style={{fontSize:10,color:C.muted}}>{(p.positions||[]).slice(0,2).join(", ")}</div>
+                  </div>
+                  {[["goals",st.goals],["assists",st.assists],["gamesPlayed",st.gamesPlayed],["prac",prac]].map(([field,val])=>(
+                    <div key={field} style={{textAlign:"center"}}>
+                      <div style={{fontSize:16,fontWeight:800,color:field==="goals"?C.gold:C.text}}>{val}</div>
+                    </div>
+                  ))}
+                </div>
+                {isEditing && (
+                  <div style={{marginTop:10,paddingTop:10,borderTop:`1px solid ${C.border}`,display:"flex",gap:16,alignItems:"center",flexWrap:"wrap"}}>
+                    {[["goals","⚽ Goals"],["assists","🅰 Assists"],["gamesPlayed","🎮 Games"]].map(([field,label])=>(
+                      <div key={field} style={{display:"flex",alignItems:"center",gap:6}}>
+                        <span style={{fontSize:11,color:C.muted}}>{label}</span>
+                        <button onClick={()=>updateStat(p.id,field,(st[field]||0)-1)} style={{
+                          width:22,height:22,borderRadius:4,border:"none",cursor:"pointer",
+                          background:"rgba(255,255,255,0.1)",color:C.text,fontWeight:700,fontSize:13,lineHeight:1,
+                        }}>−</button>
+                        <span style={{fontSize:15,fontWeight:700,color:C.gold,minWidth:18,textAlign:"center"}}>{st[field]||0}</span>
+                        <button onClick={()=>updateStat(p.id,field,(st[field]||0)+1)} style={{
+                          width:22,height:22,borderRadius:4,border:"none",cursor:"pointer",
+                          background:"rgba(255,255,255,0.1)",color:C.text,fontWeight:700,fontSize:13,lineHeight:1,
+                        }}>+</button>
+                      </div>
+                    ))}
+                    <button onClick={()=>setEditStatPlayer(null)} style={{
+                      marginLeft:"auto",padding:"3px 10px",borderRadius:5,border:"none",cursor:"pointer",
+                      background:C.gold,color:"#0a0d0f",fontSize:11,fontWeight:700,fontFamily:"inherit",
+                    }}>Done</button>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* GAME LOG */}
+      {view==="games" && (
+        <div>
+          <div style={{display:"flex",justifyContent:"flex-end",marginBottom:10}}>
+            <Btn primary onClick={()=>setShowAddGame(true)}>+ Add Game</Btn>
+          </div>
+          {showAddGame && (
+            <Card style={{marginBottom:12,border:`1px solid ${C.gold}44`}}>
+              <div style={{fontSize:12,fontWeight:700,color:C.gold,marginBottom:10}}>New Game Result</div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
+                <div><label style={lbl}>Date</label><input type="date" value={newGame.date} onChange={e=>setNewGame(p=>({...p,date:e.target.value}))} style={IS}/></div>
+                <div><label style={lbl}>Opponent</label><input value={newGame.opponent} onChange={e=>setNewGame(p=>({...p,opponent:e.target.value}))} placeholder="Team name" style={IS}/></div>
+                <div><label style={lbl}>Our Score</label><input type="number" min="0" value={newGame.homeScore} onChange={e=>setNewGame(p=>({...p,homeScore:e.target.value}))} style={IS}/></div>
+                <div><label style={lbl}>Their Score</label><input type="number" min="0" value={newGame.oppScore} onChange={e=>setNewGame(p=>({...p,oppScore:e.target.value}))} style={IS}/></div>
+              </div>
+              <div style={{marginBottom:10}}><label style={lbl}>Notes</label><input value={newGame.notes} onChange={e=>setNewGame(p=>({...p,notes:e.target.value}))} placeholder="Key moments, lessons..." style={IS}/></div>
+              <div style={{display:"flex",gap:8}}>
+                <Btn primary onClick={saveGame}>Save Game</Btn>
+                <Btn ghost onClick={()=>setShowAddGame(false)}>Cancel</Btn>
+              </div>
+            </Card>
+          )}
+          {games.length===0 && <div style={{textAlign:"center",color:C.muted,padding:40}}>No games logged yet.</div>}
+          {[...games].sort((a,b)=>b.date.localeCompare(a.date)).map(g=>{
+            const result = g.homeScore>g.oppScore?"W":g.homeScore<g.oppScore?"L":"D";
+            const resultColor = result==="W"?C.ok:result==="L"?"#e74c3c":C.gold;
+            return (
+              <div key={g.id} style={{
+                display:"flex",alignItems:"center",gap:12,padding:"10px 14px",
+                background:C.surface,borderRadius:9,marginBottom:6,border:`1px solid ${C.border}`,
+              }}>
+                <div style={{
+                  width:32,height:32,borderRadius:7,flexShrink:0,
+                  background:`${resultColor}22`,border:`1px solid ${resultColor}44`,
+                  display:"flex",alignItems:"center",justifyContent:"center",
+                  fontWeight:800,fontSize:14,color:resultColor,
+                }}>{result}</div>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontSize:13,fontWeight:600,color:C.text}}>vs {g.opponent}</div>
+                  <div style={{fontSize:11,color:C.muted}}>{g.date} · <b style={{color:g.homeScore>g.oppScore?C.ok:"#e74c3c"}}>{g.homeScore}</b> – {g.oppScore}</div>
+                  {g.notes && <div style={{fontSize:11,color:C.muted,marginTop:2,fontStyle:"italic"}}>{g.notes}</div>}
+                </div>
+                <button onClick={()=>setGames(prev=>prev.filter(x=>x.id!==g.id))} style={{
+                  background:"none",border:"none",cursor:"pointer",color:"rgba(255,255,255,0.2)",
+                  fontSize:16,lineHeight:1,padding:"4px 6px",
+                }}>✕</button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* PRACTICE LOG */}
+      {view==="practice" && (
+        <div>
+          <div style={{display:"flex",justifyContent:"flex-end",marginBottom:10}}>
+            <Btn primary onClick={()=>setShowAddPractice(true)}>+ Add Practice</Btn>
+          </div>
+          {showAddPractice && (
+            <Card style={{marginBottom:12,border:`1px solid ${C.gold}44`}}>
+              <div style={{fontSize:12,fontWeight:700,color:C.gold,marginBottom:10}}>New Practice Session</div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
+                <div><label style={lbl}>Date</label><input type="date" value={newPractice.date} onChange={e=>setNewPractice(p=>({...p,date:e.target.value}))} style={IS}/></div>
+                <div><label style={lbl}>Notes</label><input value={newPractice.notes} onChange={e=>setNewPractice(p=>({...p,notes:e.target.value}))} placeholder="Focus area..." style={IS}/></div>
+              </div>
+              <div style={{display:"flex",gap:8}}>
+                <Btn primary onClick={savePractice}>Save</Btn>
+                <Btn ghost onClick={()=>setShowAddPractice(false)}>Cancel</Btn>
+              </div>
+            </Card>
+          )}
+          {practiceDates.length===0 && <div style={{textAlign:"center",color:C.muted,padding:40}}>No practices logged yet.</div>}
+          {[...practiceDates].sort((a,b)=>b.date.localeCompare(a.date)).map(pr=>{
+            const att = practiceAttendance[pr.id]||{};
+            const present = players.filter(p=>att[p.id]).length;
+            return (
+              <Card key={pr.id} style={{marginBottom:10}}>
+                <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}}>
+                  <div>
+                    <div style={{fontSize:13,fontWeight:700,color:C.text}}>{pr.date}</div>
+                    {pr.notes && <div style={{fontSize:11,color:C.muted}}>{pr.notes}</div>}
+                  </div>
+                  <div style={{display:"flex",alignItems:"center",gap:8}}>
+                    <div style={{fontSize:12,fontWeight:700,color:C.ok}}>{present}/{players.length} present</div>
+                    <button onClick={()=>setPracticeDates(prev=>prev.filter(x=>x.id!==pr.id))} style={{
+                      background:"none",border:"none",cursor:"pointer",color:"rgba(255,255,255,0.2)",fontSize:14,
+                    }}>✕</button>
+                  </div>
+                </div>
+                <div style={{display:"flex",flexWrap:"wrap",gap:4}}>
+                  {players.map(p=>{
+                    const here = att[p.id]||false;
+                    return (
+                      <button key={p.id} onClick={()=>toggleAttendance(pr.id,p.id)} style={{
+                        padding:"4px 9px",borderRadius:5,border:"none",cursor:"pointer",fontSize:11,fontWeight:600,fontFamily:"inherit",
+                        background:here?`rgba(39,174,96,0.2)`:"rgba(255,255,255,0.06)",
+                        color:here?C.ok:C.muted,
+                        outline:here?`1px solid ${C.ok}33`:"none",
+                      }}>
+                        {here?"✓ ":""}{p.name.split(" ")[0]}
+                      </button>
+                    );
+                  })}
+                </div>
+              </Card>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// TAB: TEAM MANAGEMENT
+// ═══════════════════════════════════════════════════════════════════
+function TabTeam({ players, updatePlayer, league, games }) {
+  const [view, setView] = useState("contacts"); // contacts | schedule | dev
+  const [showPrintModal, setShowPrintModal] = useState(false);
+  const [editPlayer, setEditPlayer] = useState(null);
+  const [newScheduleItem, setNewScheduleItem] = useState({date:"",type:"game",opponent:"",location:"",notes:""});
+  const [schedule, setSchedule] = useState([
+    {id:"s1",date:"2026-03-22",type:"game",opponent:"FC Milford",location:"East Side Park, Field 2",notes:"Bring extra water"},
+    {id:"s2",date:"2026-03-25",type:"practice",opponent:"",location:"SAY East Complex",notes:"Focus on positioning"},
+    {id:"s3",date:"2026-03-29",type:"game",opponent:"Blue Wave SC",location:"Lunken Fields",notes:"Away game — carpool"},
+  ]);
+  const [showAddEvent, setShowAddEvent] = useState(false);
+
+  const saveEvent = () => {
+    if (!newScheduleItem.date) return;
+    setSchedule(prev=>[...prev,{...newScheduleItem,id:uid()}]);
+    setNewScheduleItem({date:"",type:"game",opponent:"",location:"",notes:""});
+    setShowAddEvent(false);
+  };
+
+  return (
+    <div>
+      {/* Sub tabs */}
+      <div style={{display:"flex",gap:4,marginBottom:14,flexWrap:"wrap"}}>
+        {[["contacts","📞 Parent Contacts"],["schedule","📆 Schedule"],["dev","📝 Dev Notes"]].map(([k,l])=>(
+          <button key={k} onClick={()=>setView(k)} style={{
+            padding:"6px 14px",borderRadius:7,border:"none",cursor:"pointer",fontSize:12,fontWeight:600,fontFamily:"inherit",
+            background:view===k?`linear-gradient(135deg,${C.gold},${C.goldDark})`:C.surface,
+            color:view===k?"#0a0d0f":C.muted,
+          }}>{l}</button>
+        ))}
+        <button onClick={()=>setShowPrintModal(true)} style={{
+          marginLeft:"auto",padding:"6px 14px",borderRadius:7,border:`1px solid ${C.border}`,
+          cursor:"pointer",fontSize:12,fontWeight:600,fontFamily:"inherit",
+          background:"transparent",color:C.muted,display:"flex",alignItems:"center",gap:5,
+        }}>🖨 Print Lineup</button>
+      </div>
+
+      {/* CONTACTS */}
+      {view==="contacts" && (
+        <div>
+          <div style={{fontSize:11,color:C.muted,marginBottom:10}}>
+            Parent/guardian contact info. Tap a row to edit.
+          </div>
+          {players.map(p=>{
+            const isEditing = editPlayer===p.id;
+            return (
+              <div key={p.id} style={{
+                background:C.surface,borderRadius:9,padding:"10px 14px",marginBottom:6,
+                border:`1px solid ${isEditing?C.gold:C.border}`,cursor:"pointer",
+              }} onClick={()=>setEditPlayer(isEditing?null:p.id)}>
+                <div style={{display:"flex",alignItems:"center",gap:10}}>
+                  <div style={{
+                    width:32,height:32,borderRadius:"50%",flexShrink:0,
+                    background:`linear-gradient(135deg,${C.gold},${C.goldDark})`,
+                    display:"flex",alignItems:"center",justifyContent:"center",
+                    fontWeight:700,fontSize:12,color:"#0a0d0f",
+                  }}>{p.number}</div>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{fontSize:13,fontWeight:600,color:C.text}}>{p.name}</div>
+                    <div style={{fontSize:11,color:C.muted}}>
+                      {p.parentName||<span style={{fontStyle:"italic",opacity:0.5}}>No contact info</span>}
+                      {p.parentPhone&&` · ${p.parentPhone}`}
+                    </div>
+                  </div>
+                  <span style={{fontSize:11,color:C.muted}}>{isEditing?"▲":"▼"}</span>
+                </div>
+                {isEditing && (
+                  <div style={{marginTop:10,paddingTop:10,borderTop:`1px solid ${C.border}`,display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}
+                    onClick={e=>e.stopPropagation()}>
+                    <div>
+                      <label style={lbl}>Parent / Guardian Name</label>
+                      <input defaultValue={p.parentName||""} onBlur={e=>updatePlayer({...p,parentName:e.target.value})}
+                        style={IS} placeholder="Full name"/>
+                    </div>
+                    <div>
+                      <label style={lbl}>Phone Number</label>
+                      <input defaultValue={p.parentPhone||""} onBlur={e=>updatePlayer({...p,parentPhone:e.target.value})}
+                        style={IS} placeholder="513-555-0100"/>
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* SCHEDULE */}
+      {view==="schedule" && (
+        <div>
+          <div style={{display:"flex",justifyContent:"flex-end",marginBottom:10}}>
+            <Btn primary onClick={()=>setShowAddEvent(true)}>+ Add Event</Btn>
+          </div>
+          {showAddEvent && (
+            <Card style={{marginBottom:12,border:`1px solid ${C.gold}44`}}>
+              <div style={{fontSize:12,fontWeight:700,color:C.gold,marginBottom:10}}>New Event</div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
+                <div><label style={lbl}>Date</label><input type="date" value={newScheduleItem.date} onChange={e=>setNewScheduleItem(p=>({...p,date:e.target.value}))} style={IS}/></div>
+                <div>
+                  <label style={lbl}>Type</label>
+                  <select value={newScheduleItem.type} onChange={e=>setNewScheduleItem(p=>({...p,type:e.target.value}))} style={SS}>
+                    <option value="game">Game</option>
+                    <option value="practice">Practice</option>
+                    <option value="other">Other</option>
+                  </select>
+                </div>
+                <div><label style={lbl}>Opponent / Title</label><input value={newScheduleItem.opponent} onChange={e=>setNewScheduleItem(p=>({...p,opponent:e.target.value}))} placeholder="Team / event name" style={IS}/></div>
+                <div><label style={lbl}>Location</label><input value={newScheduleItem.location} onChange={e=>setNewScheduleItem(p=>({...p,location:e.target.value}))} placeholder="Field name, address" style={IS}/></div>
+              </div>
+              <div style={{marginBottom:10}}><label style={lbl}>Notes</label><input value={newScheduleItem.notes} onChange={e=>setNewScheduleItem(p=>({...p,notes:e.target.value}))} placeholder="Reminders, carpool notes..." style={IS}/></div>
+              <div style={{display:"flex",gap:8}}>
+                <Btn primary onClick={saveEvent}>Save</Btn>
+                <Btn ghost onClick={()=>setShowAddEvent(false)}>Cancel</Btn>
+              </div>
+            </Card>
+          )}
+          {[...schedule].sort((a,b)=>a.date.localeCompare(b.date)).map(ev=>{
+            const typeIcon = ev.type==="game"?"⚽":ev.type==="practice"?"🏃":"📅";
+            const typeColor = ev.type==="game"?C.gold:ev.type==="practice"?C.ok:C.muted;
+            const isPast = ev.date < new Date().toISOString().slice(0,10);
+            return (
+              <div key={ev.id} style={{
+                display:"flex",alignItems:"flex-start",gap:12,padding:"12px 14px",
+                background:C.surface,borderRadius:9,marginBottom:6,
+                border:`1px solid ${C.border}`,
+                opacity:isPast?0.55:1,
+              }}>
+                <div style={{
+                  width:36,height:36,borderRadius:8,flexShrink:0,
+                  background:`${typeColor}18`,border:`1px solid ${typeColor}33`,
+                  display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",
+                }}>
+                  <div style={{fontSize:14}}>{typeIcon}</div>
+                </div>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{display:"flex",gap:8,alignItems:"baseline"}}>
+                    <div style={{fontSize:13,fontWeight:600,color:C.text}}>
+                      {ev.type==="game"?`vs ${ev.opponent}`:ev.opponent||ev.type.charAt(0).toUpperCase()+ev.type.slice(1)}
+                    </div>
+                    <div style={{fontSize:10,color:typeColor,fontWeight:700,textTransform:"uppercase"}}>{ev.type}</div>
+                  </div>
+                  <div style={{fontSize:11,color:C.muted}}>{ev.date}{ev.location&&` · ${ev.location}`}</div>
+                  {ev.notes&&<div style={{fontSize:11,color:C.muted,marginTop:2,fontStyle:"italic"}}>{ev.notes}</div>}
+                </div>
+                <button onClick={()=>setSchedule(prev=>prev.filter(x=>x.id!==ev.id))} style={{
+                  background:"none",border:"none",cursor:"pointer",color:"rgba(255,255,255,0.2)",fontSize:14,flexShrink:0,
+                }}>✕</button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* DEV NOTES */}
+      {view==="dev" && (
+        <div>
+          <div style={{fontSize:11,color:C.muted,marginBottom:10}}>
+            Private development notes per player — what to work on, progress, observations.
+          </div>
+          {players.map(p=>(
+            <div key={p.id} style={{
+              background:C.surface,borderRadius:9,padding:"12px 14px",marginBottom:8,
+              border:`1px solid ${C.border}`,
+            }}>
+              <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:8}}>
+                <div style={{
+                  width:30,height:30,borderRadius:"50%",flexShrink:0,
+                  background:`linear-gradient(135deg,${C.gold},${C.goldDark})`,
+                  display:"flex",alignItems:"center",justifyContent:"center",
+                  fontWeight:700,fontSize:11,color:"#0a0d0f",
+                }}>{p.number}</div>
+                <div style={{fontWeight:600,fontSize:13,color:C.text}}>{p.name}</div>
+                <div style={{fontSize:10,color:C.muted,marginLeft:"auto"}}>{(p.positions||[]).slice(0,2).join(", ")}</div>
+              </div>
+              <textarea
+                defaultValue={p.devNotes||""}
+                onBlur={e=>updatePlayer({...p,devNotes:e.target.value})}
+                placeholder="Notes for this player... (e.g. needs work on left foot, great leadership, wants to try GK)"
+                rows={2}
+                style={{
+                  ...IS, resize:"vertical", lineHeight:1.5, fontSize:12,
+                  color:C.muted,
+                }}
+              />
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* PRINT LINEUP MODAL */}
+      {showPrintModal && <PrintLineupModal players={players} onClose={()=>setShowPrintModal(false)}/>}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// PRINT LINEUP MODAL
+// ═══════════════════════════════════════════════════════════════════
+function PrintLineupModal({ players, onClose }) {
+  const [quarter, setQuarter] = useState(1);
+  // We'll get the lineup from window if passed; for standalone we recreate the field
+  // The modal shows a field diagram with player names — user can print via browser
+  const activePlayers = players.filter(p=>!p.injured&&!p.out);
+
+  const handlePrint = () => {
+    const printContent = document.getElementById("print-lineup-content");
+    if (!printContent) return;
+    const win = window.open("","_blank","width=800,height=600");
+    win.document.write(`<html><head><title>Lineup Card</title>
+      <style>
+        body{margin:0;background:#fff;font-family:Georgia,serif;}
+        .field{position:relative;width:340px;height:520px;background:linear-gradient(180deg,#1e4d1a,#1a4518);border-radius:12px;margin:0 auto;}
+        .player-dot{position:absolute;text-align:center;transform:translate(-50%,-50%);}
+        .circle{width:48px;height:48px;border-radius:50%;background:#e8a020;display:flex;align-items:center;justify-content:center;flex-direction:column;margin:0 auto;border:2px solid #fff;}
+        .num{font-size:10px;font-weight:800;color:#0a0d0f;}
+        .name{font-size:8px;color:#1a1a1a;font-weight:600;white-space:nowrap;}
+        .pos-label{font-size:9px;color:#fff;font-weight:700;margin-top:2px;text-shadow:0 1px 3px rgba(0,0,0,0.9);}
+        h1{text-align:center;font-size:18px;color:#0a0d0f;margin:16px 0 4px;}
+        .meta{text-align:center;font-size:12px;color:#555;margin-bottom:12px;}
+        .bench{max-width:340px;margin:12px auto 0;padding:10px;border:1px solid #ddd;border-radius:8px;}
+        .bench h3{font-size:13px;margin:0 0 6px;color:#333;}
+        .bench-player{display:inline-block;margin:2px 4px;font-size:11px;background:#f5f5f5;padding:2px 8px;border-radius:4px;}
+      </style></head><body>
+      ${printContent.innerHTML}
+      </body></html>`);
+    win.document.close();
+    setTimeout(()=>win.print(),400);
+  };
+
+  // Build a field diagram with the active roster spread across positions
+  // We use sample positions for the first 11 slots
+  const fieldPositions = [
+    {pos:"GK",x:50,y:90},{pos:"DEF",x:25,y:75},{pos:"DEF",x:50,y:72},{pos:"DEF",x:75,y:75},
+    {pos:"MID",x:20,y:52},{pos:"MID",x:50,y:50},{pos:"MID",x:80,y:52},
+    {pos:"FWD",x:25,y:28},{pos:"FWD",x:50,y:22},{pos:"FWD",x:75,y:28},{pos:"CAM",x:50,y:38},
+  ];
+
+  const assignedPositions = fieldPositions.slice(0,activePlayers.length);
+  const bench = activePlayers.slice(assignedPositions.length);
+  const starters = activePlayers.slice(0,assignedPositions.length);
+  const today = new Date().toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"});
+
+  return (
+    <div style={{
+      position:"fixed",inset:0,zIndex:9000,
+      background:"rgba(0,0,0,0.8)",display:"flex",alignItems:"center",justifyContent:"center",padding:20,
+    }}>
+      <div style={{
+        background:"#1a1f1a",borderRadius:14,maxWidth:500,width:"100%",
+        maxHeight:"90vh",overflow:"auto",border:`1px solid ${C.border}`,
+      }}>
+        <div style={{
+          display:"flex",justifyContent:"space-between",alignItems:"center",
+          padding:"14px 18px",borderBottom:`1px solid ${C.border}`,
+        }}>
+          <div style={{fontSize:15,fontWeight:800,color:C.gold}}>🖨 Print Lineup Card</div>
+          <button onClick={onClose} style={{background:"none",border:"none",cursor:"pointer",color:C.muted,fontSize:20}}>✕</button>
+        </div>
+
+        <div style={{padding:"16px 18px"}}>
+          <div style={{fontSize:11,color:C.muted,marginBottom:16,lineHeight:1.6}}>
+            A printable field diagram with player positions. Click <b style={{color:C.text}}>Print</b> to open the print dialog.
+          </div>
+
+          {/* Preview */}
+          <div id="print-lineup-content">
+            <h1 style={{textAlign:"center",fontSize:18,color:"#e8e4dc",margin:"0 0 4px",fontFamily:"Georgia,serif"}}>⚽ Lineup Card</h1>
+            <div style={{textAlign:"center",fontSize:11,color:C.muted,marginBottom:14}}>{today} · {activePlayers.length} players active</div>
+
+            {/* Field diagram */}
+            <div style={{position:"relative",width:300,height:450,margin:"0 auto",
+              background:"linear-gradient(180deg,#1e4d1a,#1a4518)",borderRadius:10,
+              border:"2px solid rgba(255,255,255,0.3)"}}>
+              {/* Field lines */}
+              <div style={{position:"absolute",top:"50%",left:10,right:10,height:1,background:"rgba(255,255,255,0.4)"}}/>
+              <div style={{position:"absolute",top:10,left:"25%",right:"25%",height:60,border:"1px solid rgba(255,255,255,0.4)"}}/>
+              <div style={{position:"absolute",bottom:10,left:"25%",right:"25%",height:60,border:"1px solid rgba(255,255,255,0.4)"}}/>
+
+              {starters.map((p,i)=>{
+                const fp = assignedPositions[i];
+                if (!fp) return null;
+                const px = (fp.x/100)*300;
+                const py = (fp.y/100)*450;
+                return (
+                  <div key={p.id} style={{
+                    position:"absolute",left:px,top:py,transform:"translate(-50%,-50%)",
+                    textAlign:"center",width:50,
+                  }}>
+                    <div style={{
+                      width:36,height:36,borderRadius:"50%",margin:"0 auto",
+                      background:"linear-gradient(135deg,#e8a020,#b87818)",
+                      display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column",
+                      border:"2px solid rgba(255,255,255,0.8)",boxShadow:"0 2px 8px rgba(0,0,0,0.5)",
+                    }}>
+                      <div style={{fontSize:9,fontWeight:800,color:"#0a0d0f",lineHeight:1}}>{p.number}</div>
+                      <div style={{fontSize:6,color:"#2a1a0a",lineHeight:1,fontWeight:600,maxWidth:32,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                        {p.name.split(" ")[0]}
+                      </div>
+                    </div>
+                    <div style={{fontSize:7,color:"#fff",fontWeight:700,textShadow:"0 1px 2px rgba(0,0,0,0.9)",marginTop:1}}>{fp.pos}</div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Bench */}
+            {bench.length>0&&(
+              <div style={{marginTop:14,padding:"10px 12px",background:C.surface,borderRadius:8,border:`1px solid ${C.border}`}}>
+                <div style={{fontSize:11,fontWeight:700,color:C.gold,marginBottom:6}}>🪑 Bench</div>
+                <div style={{display:"flex",flexWrap:"wrap",gap:4}}>
+                  {bench.map(p=>(
+                    <div key={p.id} style={{
+                      padding:"3px 8px",borderRadius:4,background:"rgba(255,255,255,0.08)",
+                      fontSize:11,color:C.text,
+                    }}>#{p.number} {p.name.split(" ")[0]}</div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Roster list */}
+            <div style={{marginTop:14,display:"grid",gridTemplateColumns:"1fr 1fr",gap:3}}>
+              {activePlayers.map(p=>(
+                <div key={p.id} style={{
+                  display:"flex",gap:6,alignItems:"center",padding:"3px 6px",
+                  borderRadius:4,background:"rgba(255,255,255,0.04)",fontSize:11,
+                }}>
+                  <span style={{color:C.gold,fontWeight:700,minWidth:22}}>#{p.number}</span>
+                  <span style={{color:C.text}}>{p.name}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div style={{marginTop:16,display:"flex",gap:8}}>
+            <Btn primary full onClick={handlePrint}>🖨 Print</Btn>
+            <Btn ghost onClick={onClose}>Close</Btn>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+function Stat({label,val,color}) {
+  return (
+    <div style={{textAlign:"center"}}>
+      <div style={{fontSize:16,fontWeight:800,color,lineHeight:1}}>{val}</div>
+      <div style={{fontSize:9,color:C.muted,textTransform:"uppercase",letterSpacing:"0.05em"}}>{label}</div>
+    </div>
+  );
+}
