@@ -18,11 +18,11 @@ function usePersistedState(key, defaultValue) {
   return [state, setState];
 }
 
-// ═══════════════════════════════════════════════════════════════════
+// 
 // DATA LAYER
-// ═══════════════════════════════════════════════════════════════════
+// 
 
-// SAY East division names & age mappings (Silver Matrix, birth-year based Aug 1–Jul 31)
+// SAY East division names & age mappings (Silver Matrix, birth-year based Aug 1Jul 31)
 // Instructional=U6(ages4-5), Passers=U8(6-7), Wings=U10(8-9),
 // Strikers=U12(10-11), Kickers=U14(12-13), Minors=U16(14-15), Seniors=U19(16-18)
 const LEAGUES = [
@@ -76,12 +76,12 @@ const FIELD_BASE = {
 // Source: SAY East Playing Laws Rulebook (Updated Jan 2026), Rule 12
 const PLAY_TIME_RULES = {
   "U6 / Instructional": { minFraction: 1.0, note: "All players play the entire game (Instructional only)" },
-  "U8 / Passers":       { minFraction: 0.5, note: "SAY Rule 12: Every player must play ≈ half the game" },
-  "U10 / Wings":        { minFraction: 0.5, note: "SAY Rule 12: Every player must play ≈ half the game" },
-  "U12 / Strikers":     { minFraction: 0.5, note: "SAY Rule 12: Every player must play ≈ half the game" },
-  "U14 / Kickers":      { minFraction: 0.5, note: "SAY Rule 12: Every player must play ≈ half the game" },
-  "U16 / Minors":       { minFraction: 0.5, note: "SAY Rule 12: Every player must play ≈ half the game" },
-  "U19 / Seniors":      { minFraction: 0.5, note: "SAY Rule 12: Every player must play ≈ half the game" },
+  "U8 / Passers":       { minFraction: 0.5, note: "SAY Rule 12: Every player must play  half the game" },
+  "U10 / Wings":        { minFraction: 0.5, note: "SAY Rule 12: Every player must play  half the game" },
+  "U12 / Strikers":     { minFraction: 0.5, note: "SAY Rule 12: Every player must play  half the game" },
+  "U14 / Kickers":      { minFraction: 0.5, note: "SAY Rule 12: Every player must play  half the game" },
+  "U16 / Minors":       { minFraction: 0.5, note: "SAY Rule 12: Every player must play  half the game" },
+  "U19 / Seniors":      { minFraction: 0.5, note: "SAY Rule 12: Every player must play  half the game" },
 };
 
 // -- SAY East League Rules --
@@ -89,32 +89,32 @@ const PLAY_TIME_RULES = {
 // SAY East specific exceptions: Silver Matrix age chart, SAY East formats, GK punting allowed, no blowouts
 const LEAGUE_RULES = {
   "U6 / Instructional": {
-    divisionName: "Instructional", ageRange: "Ages 4–5",
+    divisionName: "Instructional", ageRange: "Ages 45",
     format: "4v4", ballSize: 3,
-    fieldLength: "25–35 yds", fieldWidth: "15–25 yds",
-    goalSize: "4×6 ft",
+    fieldLength: "2535 yds", fieldWidth: "1525 yds",
+    goalSize: "46 ft",
     heading: false, offside: false, slideTackle: false, buildOut: false,
     gkPunt: false, throwIns: false, penaltyKick: false, yellowRedCards: false,
     periods: 4, periodMin: 8,
     quickRules: [
-      { icon:"🎯", text:"Development only — score is NOT kept", important: true },
-      { icon:"🚫", text:"No heading — IFK awarded to opponents if it occurs", important: true },
-      { icon:"⏱", text:"4 × 8 min quarters (32 min total)" },
-      { icon:"👟", text:"Kick-ins replace throw-ins (no throw-ins)" },
-      { icon:"⚽", text:"No offside rule applies" },
-      { icon:"🔄", text:"All players play the entire game" },
-      { icon:"🧤", text:"GK may NOT punt — roll or throw only" },
-      { icon:"🟢", text:"No yellow or red cards — verbal guidance only" },
-      { icon:"⚽", text:"Size 3 ball" },
-      { icon:"🏟", text:"Small field: 25–35 × 15–25 yards" },
+      { icon:"", text:"Development only  score is NOT kept", important: true },
+      { icon:"", text:"No heading  IFK awarded to opponents if it occurs", important: true },
+      { icon:"", text:"4  8 min quarters (32 min total)" },
+      { icon:"", text:"Kick-ins replace throw-ins (no throw-ins)" },
+      { icon:"", text:"No offside rule applies" },
+      { icon:"", text:"All players play the entire game" },
+      { icon:"", text:"GK may NOT punt  roll or throw only" },
+      { icon:"", text:"No yellow or red cards  verbal guidance only" },
+      { icon:"", text:"Size 3 ball" },
+      { icon:"", text:"Small field: 2535  1525 yards" },
     ],
     unknownRules: [
-      "Coaches are often allowed near the field to guide young players — SAY encourages teaching moments",
+      "Coaches are often allowed near the field to guide young players  SAY encourages teaching moments",
       "Even 'accidental' heading results in an IFK for the other team at this age",
-      "No penalty kicks in Instructional play — all free kicks are indirect",
-      "If a team is winning by more than 5 goals, SAY East's 'no blowout' rule requires adjustments — coaches must act",
+      "No penalty kicks in Instructional play  all free kicks are indirect",
+      "If a team is winning by more than 5 goals, SAY East's 'no blowout' rule requires adjustments  coaches must act",
       "The build-out line is NOT used at U6/Instructional; it begins at U8/Passers",
-      "Referees at this age are there to educate, not just officiate — expect teaching stoppages",
+      "Referees at this age are there to educate, not just officiate  expect teaching stoppages",
     ],
     officialLinks: [
       { label: "SAY East Official Site", url: "https://www.sayeast.org" },
@@ -124,33 +124,33 @@ const LEAGUE_RULES = {
   },
 
   "U8 / Passers": {
-    divisionName: "Passers", ageRange: "Ages 6–7 (Silver Matrix)",
+    divisionName: "Passers", ageRange: "Ages 67 (Silver Matrix)",
     format: "6v6 (SAY East)", ballSize: 3,
-    fieldLength: "55–65 yds", fieldWidth: "35–45 yds",
-    goalSize: "12–18 ft wide × 6–7 ft high",
+    fieldLength: "5565 yds", fieldWidth: "3545 yds",
+    goalSize: "1218 ft wide  67 ft high",
     heading: false, offside: false, slideTackle: false, buildOut: true,
     gkPunt: true, throwIns: true, penaltyKick: false, yellowRedCards: true,
     periods: 4, periodMin: 12,
     quickRules: [
-      { icon:"🚫", text:"No heading — IFK awarded to opponents", important: true },
-      { icon:"📏", text:"Build-out line: all opponents must retreat on GK ball or goal kick", important: true },
-      { icon:"⏱", text:"4 × 12 min quarters (48 min total)" },
-      { icon:"⚽", text:"SAY East: 6v6 format (spring & fall)" },
-      { icon:"🔄", text:"Every player must play ≈ half the game (SAY Rule 12)" },
-      { icon:"🧤", text:"GK may punt (SAY East exception to national rule)" },
-      { icon:"⚽", text:"No offside rule — open play encouraged" },
-      { icon:"🔁", text:"Unlimited subs: goal kicks, after goals, injuries, between periods, cautions" },
-      { icon:"⚽", text:"Size 3 ball" },
-      { icon:"🏟", text:"7v7 small-sided field: 55–65 × 35–45 yards" },
+      { icon:"", text:"No heading  IFK awarded to opponents", important: true },
+      { icon:"", text:"Build-out line: all opponents must retreat on GK ball or goal kick", important: true },
+      { icon:"", text:"4  12 min quarters (48 min total)" },
+      { icon:"", text:"SAY East: 6v6 format (spring & fall)" },
+      { icon:"", text:"Every player must play  half the game (SAY Rule 12)" },
+      { icon:"", text:"GK may punt (SAY East exception to national rule)" },
+      { icon:"", text:"No offside rule  open play encouraged" },
+      { icon:"", text:"Unlimited subs: goal kicks, after goals, injuries, between periods, cautions" },
+      { icon:"", text:"Size 3 ball" },
+      { icon:"", text:"7v7 small-sided field: 5565  3545 yards" },
     ],
     unknownRules: [
-      "SAY East uses 6v6 format, not the SAY national standard of 7v7 — plan your roster accordingly",
+      "SAY East uses 6v6 format, not the SAY national standard of 7v7  plan your roster accordingly",
       "Build-out line: when the GK has the ball OR on a goal kick, all opponents must retreat behind the build-out line before the ball is played",
       "GK cannot score directly from a punt (ball must touch another player first)",
-      "No penalty kicks at this age — direct free kicks from outside the penalty area only",
-      "SAY East 'no blowout' rule: winning by more than 5 goals is a violation — coaches must rotate and adjust",
+      "No penalty kicks at this age  direct free kicks from outside the penalty area only",
+      "SAY East 'no blowout' rule: winning by more than 5 goals is a violation  coaches must rotate and adjust",
       "A player ejected (Red Card for fighting) is suspended for the next 2 games per SAY East rules",
-      "Players who re-enter after subbing are fully allowed — re-entry is unlimited",
+      "Players who re-enter after subbing are fully allowed  re-entry is unlimited",
     ],
     officialLinks: [
       { label: "SAY East Official Site", url: "https://www.sayeast.org" },
@@ -160,31 +160,31 @@ const LEAGUE_RULES = {
   },
 
   "U10 / Wings": {
-    divisionName: "Wings", ageRange: "Ages 8–9 (Silver Matrix)",
+    divisionName: "Wings", ageRange: "Ages 89 (Silver Matrix)",
     format: "8v8 (SAY East)", ballSize: 4,
-    fieldLength: "55–65 yds", fieldWidth: "35–45 yds",
-    goalSize: "12–18 ft wide × 6–7 ft high",
+    fieldLength: "5565 yds", fieldWidth: "3545 yds",
+    goalSize: "1218 ft wide  67 ft high",
     heading: false, offside: false, slideTackle: false, buildOut: true,
     gkPunt: true, throwIns: true, penaltyKick: true, yellowRedCards: true,
     periods: 4, periodMin: 15,
     quickRules: [
-      { icon:"🚫", text:"No heading — IFK awarded to opponents", important: true },
-      { icon:"📏", text:"Build-out line used — opponents retreat on GK possession / goal kicks", important: true },
-      { icon:"⏱", text:"4 × 15 min quarters (60 min total)" },
-      { icon:"⚽", text:"SAY East: 8v8 format (spring & fall)" },
-      { icon:"🔄", text:"Every player must play ≈ half the game (SAY Rule 12)" },
-      { icon:"🧤", text:"GK may punt (SAY East exception)" },
-      { icon:"⚽", text:"No offside rule at this age" },
-      { icon:"🔁", text:"Unlimited substitutions (with referee permission)" },
-      { icon:"🟡", text:"Yellow & red cards apply" },
-      { icon:"⚽", text:"Size 4 ball" },
-      { icon:"🏟", text:"7v7 small-sided field: 55–65 × 35–45 yards" },
+      { icon:"", text:"No heading  IFK awarded to opponents", important: true },
+      { icon:"", text:"Build-out line used  opponents retreat on GK possession / goal kicks", important: true },
+      { icon:"", text:"4  15 min quarters (60 min total)" },
+      { icon:"", text:"SAY East: 8v8 format (spring & fall)" },
+      { icon:"", text:"Every player must play  half the game (SAY Rule 12)" },
+      { icon:"", text:"GK may punt (SAY East exception)" },
+      { icon:"", text:"No offside rule at this age" },
+      { icon:"", text:"Unlimited substitutions (with referee permission)" },
+      { icon:"", text:"Yellow & red cards apply" },
+      { icon:"", text:"Size 4 ball" },
+      { icon:"", text:"7v7 small-sided field: 5565  3545 yards" },
     ],
     unknownRules: [
-      "SAY East uses 8v8 format — this is larger than the national 7v7 standard",
+      "SAY East uses 8v8 format  this is larger than the national 7v7 standard",
       "Build-out line is still active: opponents must retreat when GK has the ball or on goal kicks",
       "Even though penalty kicks are possible, they are taken from the 7v7 penalty mark (10 yards), not the full 12 yards",
-      "No offside is called at Wings — the build-out line is the only positional restriction",
+      "No offside is called at Wings  the build-out line is the only positional restriction",
       "SAY East 'no blowout' rule: winning margin over 5 goals requires coaches to adjust strategy",
       "A red card for fighting means a 2-game suspension under SAY East rules",
       "Goal kick ball does not have to leave the penalty area to be in play (SAY rule)",
@@ -197,32 +197,32 @@ const LEAGUE_RULES = {
   },
 
   "U12 / Strikers": {
-    divisionName: "Strikers", ageRange: "Ages 10–11 (Silver Matrix)",
+    divisionName: "Strikers", ageRange: "Ages 1011 (Silver Matrix)",
     format: "9v9 (SAY East)", ballSize: 4,
-    fieldLength: "70–80 yds", fieldWidth: "45–55 yds",
-    goalSize: "18–21 ft wide × 6–7 ft high",
+    fieldLength: "7080 yds", fieldWidth: "4555 yds",
+    goalSize: "1821 ft wide  67 ft high",
     heading: false, offside: true, slideTackle: false, buildOut: false,
     gkPunt: true, throwIns: true, penaltyKick: true, yellowRedCards: true,
     periods: 4, periodMin: 20,
     quickRules: [
-      { icon:"🚫", text:"NO heading — banned in games & practices through U12", important: true },
-      { icon:"📏", text:"Full offside rule applies (from defensive line, whole field)", important: true },
-      { icon:"⏱", text:"4 × 20 min quarters (80 min total)" },
-      { icon:"⚽", text:"SAY East: 9v9 format (spring & fall)" },
-      { icon:"🔄", text:"Every player must play ≈ half the game (SAY Rule 12)" },
-      { icon:"🧤", text:"GK may punt (SAY East exception)" },
-      { icon:"⚽", text:"No build-out line at this age — full field offside" },
-      { icon:"🔁", text:"Unlimited substitutions with referee permission" },
-      { icon:"🟡", text:"Full yellow/red card system" },
-      { icon:"⚽", text:"Size 4 ball" },
-      { icon:"🏟", text:"9v9 field: 70–80 × 45–55 yards" },
+      { icon:"", text:"NO heading  banned in games & practices through U12", important: true },
+      { icon:"", text:"Full offside rule applies (from defensive line, whole field)", important: true },
+      { icon:"", text:"4  20 min quarters (80 min total)" },
+      { icon:"", text:"SAY East: 9v9 format (spring & fall)" },
+      { icon:"", text:"Every player must play  half the game (SAY Rule 12)" },
+      { icon:"", text:"GK may punt (SAY East exception)" },
+      { icon:"", text:"No build-out line at this age  full field offside" },
+      { icon:"", text:"Unlimited substitutions with referee permission" },
+      { icon:"", text:"Full yellow/red card system" },
+      { icon:"", text:"Size 4 ball" },
+      { icon:"", text:"9v9 field: 7080  4555 yards" },
     ],
     unknownRules: [
-      "Heading is STILL banned at U12 — any deliberate header results in an IFK for the other team, even in games and at practice",
+      "Heading is STILL banned at U12  any deliberate header results in an IFK for the other team, even in games and at practice",
       "This is the first SAY age group where the full FIFA offside rule applies from the defensive line",
-      "No build-out line at Strikers — opponents no longer need to retreat for GK possession",
-      "SAY East 'no blowout' rule still applies — win margin over 5 is a violation",
-      "Slide tackling: SAY rules do not expressly prohibit it but refs may restrict it locally — ask your referee before games",
+      "No build-out line at Strikers  opponents no longer need to retreat for GK possession",
+      "SAY East 'no blowout' rule still applies  win margin over 5 is a violation",
+      "Slide tackling: SAY rules do not expressly prohibit it but refs may restrict it locally  ask your referee before games",
       "Penalty mark is at 10 yards (9v9 field), not the full 12-yard FIFA spot",
       "Red card for fighting = 2-game suspension under SAY East rules",
     ],
@@ -234,34 +234,34 @@ const LEAGUE_RULES = {
   },
 
   "U14 / Kickers": {
-    divisionName: "Kickers", ageRange: "Ages 12–13 (Silver Matrix)",
-    format: "9v9 (spring) / 11v11 (fall) — SAY East", ballSize: 5,
-    fieldLength: "80–130 yds (11v11) / 70–80 yds (9v9)", fieldWidth: "50–100 yds (11v11)",
-    goalSize: "24 ft wide × 8 ft high (11v11)",
+    divisionName: "Kickers", ageRange: "Ages 1213 (Silver Matrix)",
+    format: "9v9 (spring) / 11v11 (fall)  SAY East", ballSize: 5,
+    fieldLength: "80130 yds (11v11) / 7080 yds (9v9)", fieldWidth: "50100 yds (11v11)",
+    goalSize: "24 ft wide  8 ft high (11v11)",
     heading: true, offside: true, slideTackle: true, buildOut: false,
     gkPunt: true, throwIns: true, penaltyKick: true, yellowRedCards: true,
     periods: 2, periodMin: 35,
     quickRules: [
-      { icon:"✅", text:"Heading is allowed — limit practice headers per SAY policy", important: true },
-      { icon:"📏", text:"Full offside rule (FIFA standard from defensive line)" },
-      { icon:"⏱", text:"2 × 35 min halves (70 min total)" },
-      { icon:"⚽", text:"SAY East: 9v9 spring / 11v11 fall" },
-      { icon:"🔄", text:"Every player must play ≈ half the game (SAY Rule 12)" },
-      { icon:"🧤", text:"GK may punt" },
-      { icon:"🔁", text:"Unlimited substitutions with referee permission" },
-      { icon:"🟡", text:"Full yellow/red card system — cards carry across games" },
-      { icon:"⚽", text:"Size 5 ball" },
-      { icon:"🏟", text:"Full-sided field (11v11): 80–130 × 50–100 yards" },
+      { icon:"", text:"Heading is allowed  limit practice headers per SAY policy", important: true },
+      { icon:"", text:"Full offside rule (FIFA standard from defensive line)" },
+      { icon:"", text:"2  35 min halves (70 min total)" },
+      { icon:"", text:"SAY East: 9v9 spring / 11v11 fall" },
+      { icon:"", text:"Every player must play  half the game (SAY Rule 12)" },
+      { icon:"", text:"GK may punt" },
+      { icon:"", text:"Unlimited substitutions with referee permission" },
+      { icon:"", text:"Full yellow/red card system  cards carry across games" },
+      { icon:"", text:"Size 5 ball" },
+      { icon:"", text:"Full-sided field (11v11): 80130  50100 yards" },
     ],
     unknownRules: [
-      "Heading is now allowed but SAY limits practice headers to max 15–20 reps and 30 minutes per week at U14",
-      "SAY East uses 9v9 in spring and 11v11 in fall — confirm format with your district coordinator each season",
-      "Yellow cards can accumulate across games — check your district's suspension threshold (often 3 yellows = 1 game ban)",
-      "Slide tackling is permitted at U14+ under SAY rules — referees will still penalize dangerous challenges",
+      "Heading is now allowed but SAY limits practice headers to max 1520 reps and 30 minutes per week at U14",
+      "SAY East uses 9v9 in spring and 11v11 in fall  confirm format with your district coordinator each season",
+      "Yellow cards can accumulate across games  check your district's suspension threshold (often 3 yellows = 1 game ban)",
+      "Slide tackling is permitted at U14+ under SAY rules  referees will still penalize dangerous challenges",
       "Penalty kicks are from the full 12-yard FIFA spot on 11v11 fields",
-      "SAY East 'no blowout' rule still technically applies — coaches should manage score differential sportsmanly",
+      "SAY East 'no blowout' rule still technically applies  coaches should manage score differential sportsmanly",
       "Red card for fighting = 2-game suspension (SAY East local rule, same for all divisions)",
-      "GK cannot be replaced by a field player mid-play without referee notification — must wait for a stoppage",
+      "GK cannot be replaced by a field player mid-play without referee notification  must wait for a stoppage",
     ],
     officialLinks: [
       { label: "SAY East Official Site", url: "https://www.sayeast.org" },
@@ -272,31 +272,31 @@ const LEAGUE_RULES = {
   },
 
   "U16 / Minors": {
-    divisionName: "Minors", ageRange: "Ages 14–15 (Silver Matrix)",
+    divisionName: "Minors", ageRange: "Ages 1415 (Silver Matrix)",
     format: "11v11", ballSize: 5,
-    fieldLength: "80–130 yds", fieldWidth: "50–100 yds",
-    goalSize: "24 ft wide × 8 ft high",
+    fieldLength: "80130 yds", fieldWidth: "50100 yds",
+    goalSize: "24 ft wide  8 ft high",
     heading: true, offside: true, slideTackle: true, buildOut: false,
     gkPunt: true, throwIns: true, penaltyKick: true, yellowRedCards: true,
     periods: 2, periodMin: 40,
     quickRules: [
-      { icon:"⚽", text:"Full SAY/FIFA Laws of the Game apply", important: true },
-      { icon:"⏱", text:"2 × 40 min halves (80 min total)" },
-      { icon:"✅", text:"Heading fully allowed — no practice limits" },
-      { icon:"📏", text:"Full offside rule — FIFA standard" },
-      { icon:"🔄", text:"Every player must play ≈ half the game (SAY Rule 12)" },
-      { icon:"🔁", text:"Unlimited substitutions with referee permission" },
-      { icon:"🟡", text:"Yellow/red cards — accumulation rules apply" },
-      { icon:"⚽", text:"Size 5 ball" },
-      { icon:"🏟", text:"Full-sided field: 80–130 × 50–100 yards" },
+      { icon:"", text:"Full SAY/FIFA Laws of the Game apply", important: true },
+      { icon:"", text:"2  40 min halves (80 min total)" },
+      { icon:"", text:"Heading fully allowed  no practice limits" },
+      { icon:"", text:"Full offside rule  FIFA standard" },
+      { icon:"", text:"Every player must play  half the game (SAY Rule 12)" },
+      { icon:"", text:"Unlimited substitutions with referee permission" },
+      { icon:"", text:"Yellow/red cards  accumulation rules apply" },
+      { icon:"", text:"Size 5 ball" },
+      { icon:"", text:"Full-sided field: 80130  50100 yards" },
     ],
     unknownRules: [
-      "No heading restrictions at U16 — practice and game headers are unlimited",
+      "No heading restrictions at U16  practice and game headers are unlimited",
       "Referees at this level are expected to use a stricter interpretation of Laws 12 (fouls) and 11 (offside)",
-      "A player ejected (Red Card for fighting) is suspended for 2 games — SAY East local rule",
-      "Goal kicks: ball is in play once it is kicked and clearly moves — does not need to leave the penalty area",
+      "A player ejected (Red Card for fighting) is suspended for 2 games  SAY East local rule",
+      "Goal kicks: ball is in play once it is kicked and clearly moves  does not need to leave the penalty area",
       "GK has 6 seconds to distribute from hands before an IFK is awarded to opponents",
-      "Yellow card accumulation suspensions apply — confirm threshold with your district",
+      "Yellow card accumulation suspensions apply  confirm threshold with your district",
       "Coaches receiving a red card must leave the vicinity of the field",
     ],
     officialLinks: [
@@ -308,31 +308,31 @@ const LEAGUE_RULES = {
   },
 
   "U19 / Seniors": {
-    divisionName: "Seniors", ageRange: "Ages 16–18 (Silver Matrix)",
+    divisionName: "Seniors", ageRange: "Ages 1618 (Silver Matrix)",
     format: "11v11", ballSize: 5,
-    fieldLength: "80–130 yds", fieldWidth: "50–100 yds",
-    goalSize: "24 ft wide × 8 ft high",
+    fieldLength: "80130 yds", fieldWidth: "50100 yds",
+    goalSize: "24 ft wide  8 ft high",
     heading: true, offside: true, slideTackle: true, buildOut: false,
     gkPunt: true, throwIns: true, penaltyKick: true, yellowRedCards: true,
     periods: 2, periodMin: 45,
     quickRules: [
-      { icon:"⚽", text:"Full SAY/FIFA Laws of the Game apply", important: true },
-      { icon:"⏱", text:"2 × 45 min halves (90 min total)" },
-      { icon:"✅", text:"Heading fully allowed" },
-      { icon:"📏", text:"Full offside rule — FIFA standard" },
-      { icon:"🔄", text:"Every player must play ≈ half the game (SAY Rule 12)" },
-      { icon:"🔁", text:"Unlimited substitutions with referee permission" },
-      { icon:"🟡", text:"Full yellow/red card system — suspensions carry across games" },
-      { icon:"⚽", text:"Size 5 ball" },
-      { icon:"🏟", text:"Full-sided field: 80–130 × 50–100 yards" },
+      { icon:"", text:"Full SAY/FIFA Laws of the Game apply", important: true },
+      { icon:"", text:"2  45 min halves (90 min total)" },
+      { icon:"", text:"Heading fully allowed" },
+      { icon:"", text:"Full offside rule  FIFA standard" },
+      { icon:"", text:"Every player must play  half the game (SAY Rule 12)" },
+      { icon:"", text:"Unlimited substitutions with referee permission" },
+      { icon:"", text:"Full yellow/red card system  suspensions carry across games" },
+      { icon:"", text:"Size 5 ball" },
+      { icon:"", text:"Full-sided field: 80130  50100 yards" },
     ],
     unknownRules: [
-      "SAY Seniors is for ages 16–18 — this is the highest SAY recreational division",
-      "SAY Rule 12 still applies at Seniors — every player must get approximately half the game",
+      "SAY Seniors is for ages 1618  this is the highest SAY recreational division",
+      "SAY Rule 12 still applies at Seniors  every player must get approximately half the game",
       "A player receiving a red card for fighting is suspended for 2 games per SAY East rules",
       "The 'no blowout' culture is still encouraged at SAY East, even at the senior level",
       "Deliberate handball leading to the prevention of a goal can result in a Red Card (DOGSO-H)",
-      "GK is allowed 6 seconds to release the ball from hands — IFK awarded if exceeded",
+      "GK is allowed 6 seconds to release the ball from hands  IFK awarded if exceeded",
       "Coaches can be cautioned or sent off by the referee for misconduct on the sideline",
     ],
     officialLinks: [
@@ -347,25 +347,25 @@ const LEAGUE_RULES = {
 // Player skill ratings (1-5 per category)
 const SKILL_CATEGORIES = ["Speed","Technique","Positioning","Teamwork","Effort"];
 
-// ═══════════════════════════════════════════════════════════════════
-// DRILL LIBRARY — 30+ drills with diagram descriptions & images
-// ═══════════════════════════════════════════════════════════════════
+// 
+// DRILL LIBRARY  30+ drills with diagram descriptions & images
+// 
 const DRILLS = [
   {
     id:"d1", name:"Rondo 4v2", category:"Possession", skills:["Passing","First Touch"],
     ageMin:"U8", ageMax:"Adult", difficulty:"Beginner", duration:12,
     image:"https://images.unsplash.com/photo-1553778263-73a83bab9b0c?w=400&q=80",
-    setup:"10×10 grid. 4 on outside, 2 inside.",
+    setup:"1010 grid. 4 on outside, 2 inside.",
     instructions:"Outside players keep possession. Each defender switch after losing the ball twice or 90 seconds.",
     coaching:"Open body shape. Quick 1-touch when possible. Move to give passing angles.",
-    progressions:["Shrink grid to 8×8","3-touch max","One-touch only","Add 3v3 in center"],
+    progressions:["Shrink grid to 88","3-touch max","One-touch only","Add 3v3 in center"],
     equipment:["8 cones","1 ball per group"]
   },
   {
     id:"d2", name:"1v1 Defending Gates", category:"Defense", skills:["Defending","1v1"],
     ageMin:"U8", ageMax:"Adult", difficulty:"Beginner", duration:10,
     image:"https://images.unsplash.com/photo-1431324155629-1a6deb1dec8d?w=400&q=80",
-    setup:"15×15 grid with 4 small cone gates on edges.",
+    setup:"1515 grid with 4 small cone gates on edges.",
     instructions:"Attacker dribbles through any gate. Defender prevents this. Switch every 90s.",
     coaching:"Defender: jockey, stay goal-side, wait for touch. Don't dive in.",
     progressions:["Add second attacker","Limit dribble touches","Score points system"],
@@ -376,7 +376,7 @@ const DRILLS = [
     ageMin:"U6", ageMax:"Adult", difficulty:"Beginner", duration:10,
     image:"https://images.unsplash.com/photo-1574629810360-7efbbe195018?w=400&q=80",
     setup:"3 cones in triangle, 8 yards apart.",
-    instructions:"A→B, B one-touch to C, C dribbles to A's cone. Rotate. Both directions.",
+    instructions:"AB, B one-touch to C, C dribbles to A's cone. Rotate. Both directions.",
     coaching:"Weight of pass. First touch direction. Arrive early to cone.",
     progressions:["Add 4th player","Two balls","Add defender"],
     equipment:["3 cones","1 ball"]
@@ -395,7 +395,7 @@ const DRILLS = [
     id:"d5", name:"3v3 + GK Small-Sided", category:"Scrimmage", skills:["All"],
     ageMin:"U8", ageMax:"Adult", difficulty:"Beginner", duration:20,
     image:"https://images.unsplash.com/photo-1560272564-c83b66b1ad12?w=400&q=80",
-    setup:"25×35 grid, small goals, GK each end.",
+    setup:"2535 grid, small goals, GK each end.",
     instructions:"3v3 + GK. Free subs every 4 mins. Winner stays, loser rotates.",
     coaching:"Width, depth, communication. GK distribution. Quick transitions.",
     progressions:["No GK","Add neutral player","Goals only from crosses"],
@@ -445,10 +445,10 @@ const DRILLS = [
     id:"d10", name:"Pressing Triggers", category:"Defense", skills:["Pressing","Teamwork"],
     ageMin:"U12", ageMax:"Adult", difficulty:"Advanced", duration:12,
     image:"https://images.unsplash.com/photo-1431324155629-1a6deb1dec8d?w=400&q=80",
-    setup:"30×20 grid. Defensive team of 4. 5 attackers keep possession.",
+    setup:"3020 grid. Defensive team of 4. 5 attackers keep possession.",
     instructions:"Coach calls trigger: 'GK', 'backward pass', 'miscontrol'. Defenders press immediately on trigger.",
-    coaching:"Compact shape. Cover shadow. Ball-near player presses — others support.",
-    progressions:["No trigger calls — players read it","Wider grid","Add goals to counter-attack"],
+    coaching:"Compact shape. Cover shadow. Ball-near player presses  others support.",
+    progressions:["No trigger calls  players read it","Wider grid","Add goals to counter-attack"],
     equipment:["8 cones","2 balls","bibs"]
   },
   {
@@ -485,7 +485,7 @@ const DRILLS = [
     id:"d14", name:"Possession 5v2 Rondo", category:"Possession", skills:["Passing","First Touch","Decision Making"],
     ageMin:"U10", ageMax:"Adult", difficulty:"Intermediate", duration:12,
     image:"https://images.unsplash.com/photo-1553778263-73a83bab9b0c?w=400&q=80",
-    setup:"12×12 grid. 5 outside, 2 press.",
+    setup:"1212 grid. 5 outside, 2 press.",
     instructions:"2-touch max. If defenders win ball they join outside and two worst performers go in.",
     coaching:"Constant movement. Create triangles. Switch point of attack. Never square pass under pressure.",
     progressions:["1-touch only","Directional rondo (score through gates)","Add 3rd defender"],
@@ -496,7 +496,7 @@ const DRILLS = [
     ageMin:"U6", ageMax:"U16", difficulty:"Beginner", duration:8,
     image:"https://images.unsplash.com/photo-1556056504-5c7696c4c28d?w=400&q=80",
     setup:"Open space. Each player with ball.",
-    instructions:"All passing, dribbling, shooting done with weaker foot only. Friendly competition — most successful passes in 3 minutes.",
+    instructions:"All passing, dribbling, shooting done with weaker foot only. Friendly competition  most successful passes in 3 minutes.",
     coaching:"No rush. Slow controlled touches. Celebrate effort not just success.",
     progressions:["Dribble races weak foot","Shoot on goal weak foot only","1v1 weak foot"],
     equipment:["1 ball per player","4 cones"]
@@ -526,7 +526,7 @@ const DRILLS = [
     ageMin:"U10", ageMax:"Adult", difficulty:"Intermediate", duration:20,
     image:"https://images.unsplash.com/photo-1560272564-c83b66b1ad12?w=400&q=80",
     setup:"Half field. Teams of 6-8.",
-    instructions:"Every 5 mins, coach calls rotation — all field players shift position clockwise. GK stays.",
+    instructions:"Every 5 mins, coach calls rotation  all field players shift position clockwise. GK stays.",
     coaching:"Adaptability. Learn what teammates need. Call for ball constantly.",
     progressions:["Free play after rotation period","Score bonus for play from new position","Coach assigns specific formations"],
     equipment:["Bibs","4 cones","2 goals","4 balls"]
@@ -548,11 +548,11 @@ const DRILLS = [
     setup:"Sideline. Pairs of players.",
     instructions:"Practice legal throw-in technique. Both feet on ground, ball behind/over head. Target near and far.",
     coaching:"Both feet on or behind line. Full arc over head. Accuracy before distance.",
-    progressions:["Long throw specialist training","Throw-in to set piece combination","Pressure — defender marks receiver"],
+    progressions:["Long throw specialist training","Throw-in to set piece combination","Pressure  defender marks receiver"],
     equipment:["4 balls","cones marking sideline"]
   },
   {
-    id:"d21", name:"Shadow Play — Shape & Movement", category:"Possession", skills:["Positioning","Teamwork"],
+    id:"d21", name:"Shadow Play  Shape & Movement", category:"Possession", skills:["Positioning","Teamwork"],
     ageMin:"U12", ageMax:"Adult", difficulty:"Advanced", duration:15,
     image:"https://images.unsplash.com/photo-1553778263-73a83bab9b0c?w=400&q=80",
     setup:"Full field. Two full teams.",
@@ -562,7 +562,7 @@ const DRILLS = [
     equipment:["4 balls","bibs","cones","2 goals"]
   },
   {
-    id:"d22", name:"Defensive Shape — 4-block", category:"Defense", skills:["Defending","Teamwork","Positioning"],
+    id:"d22", name:"Defensive Shape  4-block", category:"Defense", skills:["Defending","Teamwork","Positioning"],
     ageMin:"U12", ageMax:"Adult", difficulty:"Advanced", duration:12,
     image:"https://images.unsplash.com/photo-1431324155629-1a6deb1dec8d?w=400&q=80",
     setup:"Half field. Defensive team of 4 vs 5 attackers.",
@@ -586,7 +586,7 @@ const DRILLS = [
     ageMin:"U12", ageMax:"Adult", difficulty:"Intermediate", duration:10,
     image:"https://images.unsplash.com/photo-1508098682722-e99c43a406b2?w=400&q=80",
     setup:"Corner flags, full goal, GK.",
-    instructions:"Practice 2 attacking corner routines (near post flick, far post delivery). Also: defending corners — zonal vs man-mark.",
+    instructions:"Practice 2 attacking corner routines (near post flick, far post delivery). Also: defending corners  zonal vs man-mark.",
     coaching:"Delivery consistency. Runners attack space not the ball. Defenders: don't ball-watch.",
     progressions:["Live defense","Mix in short corners","Score competition"],
     equipment:["10 balls","1 full goal","bibs"]
@@ -596,7 +596,7 @@ const DRILLS = [
     ageMin:"U6", ageMax:"U8", difficulty:"Beginner", duration:10,
     image:"https://images.unsplash.com/photo-1556056504-5c7696c4c28d?w=400&q=80",
     setup:"Open space. Each child with ball.",
-    instructions:"Follow the coach: toe taps, sole rolls, inside-outside, 'stop the ball' freeze. Make it a game — coach calls animal movements.",
+    instructions:"Follow the coach: toe taps, sole rolls, inside-outside, 'stop the ball' freeze. Make it a game  coach calls animal movements.",
     coaching:"Make it FUN. Every child should be laughing. Praise all attempts.",
     progressions:["Add freeze tag with ball","Musical cones","Coach says (Simon says)"],
     equipment:["1 ball per child","10 cones"]
@@ -618,7 +618,7 @@ const DRILLS = [
     setup:"Two groups, 35-40 yards apart.",
     instructions:"Player A drives a long ball. Player B must settle in 1-2 touches and return. Compete for cleanest first touch.",
     coaching:"Non-kicking foot direction. Strike through center. Receiver: soften the touch, cushion it.",
-    progressions:["Add defender at receiver end","Settle then beat defender","Vary delivery — lofted and driven"],
+    progressions:["Add defender at receiver end","Settle then beat defender","Vary delivery  lofted and driven"],
     equipment:["8 balls","cones"]
   },
   {
@@ -626,7 +626,7 @@ const DRILLS = [
     ageMin:"U6", ageMax:"Adult", difficulty:"Beginner", duration:8,
     image:"https://images.unsplash.com/photo-1556056504-5c7696c4c28d?w=400&q=80",
     setup:"Open space. 1 ball per player.",
-    instructions:"Progression: 1 touch & catch → 2 touches → alternating feet → knees → head. Personal best counting.",
+    instructions:"Progression: 1 touch & catch  2 touches  alternating feet  knees  head. Personal best counting.",
     coaching:"Relax. Small touches. Strike through center of ball. No rushing.",
     progressions:["Juggle while moving","Partner juggling","Tricks competition"],
     equipment:["1 ball per player"]
@@ -636,7 +636,7 @@ const DRILLS = [
     ageMin:"U10", ageMax:"Adult", difficulty:"Intermediate", duration:10,
     image:"https://images.unsplash.com/photo-1508098682722-e99c43a406b2?w=400&q=80",
     setup:"Penalty spot. Full-size or small goal. GK.",
-    instructions:"Each player takes a penalty. Elimination format — miss = out. Discuss pre-kick routine first.",
+    instructions:"Each player takes a penalty. Elimination format  miss = out. Discuss pre-kick routine first.",
     coaching:"Decide where you're shooting BEFORE the run-up. Commit fully. Trust your technique.",
     progressions:["Walk-up routine","Shootout simulation","Coach adds verbal pressure"],
     equipment:["8 balls","1 goal"]
@@ -645,7 +645,7 @@ const DRILLS = [
     id:"d30", name:"4-Goal Game", category:"Scrimmage", skills:["Decision Making","Speed","Teamwork"],
     ageMin:"U8", ageMax:"Adult", difficulty:"Intermediate", duration:20,
     image:"https://images.unsplash.com/photo-1560272564-c83b66b1ad12?w=400&q=80",
-    setup:"40×30 grid. 4 small goals (2 per team at each end).",
+    setup:"4030 grid. 4 small goals (2 per team at each end).",
     instructions:"Each team defends 2 goals and attacks 2. Creates constant decision-making and switching play.",
     coaching:"Change point of attack. Track two threats. Communication critical.",
     progressions:["Limit touches","Goals from crosses only","Expand to 5 goals"],
@@ -657,9 +657,9 @@ const SKILL_TAGS = [...new Set(DRILLS.flatMap(d => d.skills))].sort();
 const CATEGORIES = [...new Set(DRILLS.map(d => d.category))].sort();
 const DIFFICULTIES = ["Beginner","Intermediate","Advanced"];
 
-// ═══════════════════════════════════════════════════════════════════
+// 
 // PRACTICE TEMPLATES BY AGE + FOCUS
-// ═══════════════════════════════════════════════════════════════════
+// 
 function generatePractice(league, focus, skills, duration, allDrills) {
   // Map short age codes to full LEAGUES strings for comparison
   const AGE_MAP = {
@@ -691,7 +691,7 @@ function generatePractice(league, focus, skills, duration, allDrills) {
   const scrimmagePool     = pool.filter(d => d.category === "Scrimmage");
   const generalPool       = pool.filter(d => !["Scrimmage"].includes(d.category));
 
-  // Pick drills — shuffle each pool so we get variety on repeated generates
+  // Pick drills  shuffle each pool so we get variety on repeated generates
   const shuffle = arr => [...arr].sort(() => Math.random() - 0.5);
 
   const warmup = shuffle(warmupCandidates)[0] || shuffle(generalPool)[0];
@@ -737,9 +737,9 @@ function generatePractice(league, focus, skills, duration, allDrills) {
   return sections;
 }
 
-// ═══════════════════════════════════════════════════════════════════
+// 
 // UTILITIES
-// ═══════════════════════════════════════════════════════════════════
+// 
 function uid() { return Math.random().toString(36).slice(2,9); }
 
 function computePlayTime(players, lineupsByQuarter, totalQuarters) {
@@ -762,7 +762,7 @@ function computePlayTime(players, lineupsByQuarter, totalQuarters) {
  *
  * Algorithm:
  * 1. Each quarter needs `slotsPerQuarter` players on the field.
- * 2. Total field-slots across 4 quarters = slotsPerQuarter × 4.
+ * 2. Total field-slots across 4 quarters = slotsPerQuarter  4.
  * 3. Each active player gets at least `minQ` quarters guaranteed.
  * 4. Remaining slots are distributed to highest-rated players.
  * 5. Within each quarter, players are sorted to best-fit positions.
@@ -776,7 +776,7 @@ function scheduleWholeGame(players, format, league, lockedLineups = {}, fromQuar
   const minQ     = Math.ceil(rule.minFraction * TOTAL_Q); // e.g. 2 of 4 quarters
 
   // Shuffle active players so bonus-slot distribution isn't biased
-  // by roster order — every fresh plan gives a different player the extra quarter
+  // by roster order  every fresh plan gives a different player the extra quarter
   const shuffle = arr => {
     const a = [...arr];
     for (let i = a.length - 1; i > 0; i--) {
@@ -808,7 +808,7 @@ function scheduleWholeGame(players, format, league, lockedLineups = {}, fromQuar
   const totalSlots = slotsPerQ * R;
 
   // Assign each player a quota for the REMAINING quarters
-  // minQ total — but subtract what they've already played
+  // minQ total  but subtract what they've already played
   const quota = {};
   active.forEach(p => {
     const remaining = Math.max(0, minQ - alreadyPlayed[p.id]);
@@ -855,7 +855,7 @@ function scheduleWholeGame(players, format, league, lockedLineups = {}, fromQuar
   // sits back-to-back unless every other eligible player is already
   // used up for that quarter.
 
-  const quarterId = {}; // playerId → Set of quarters they play
+  const quarterId = {}; // playerId  Set of quarters they play
   active.forEach(p => { quarterId[p.id] = new Set(); });
 
   // Track how many quarters each player still NEEDS to play
@@ -865,7 +865,7 @@ function scheduleWholeGame(players, format, league, lockedLineups = {}, fromQuar
   // For each quarter, who sat the immediately previous quarter?
   // Seed with locked lineups context for the quarter before fromQuarter.
   const prevQ0 = fromQuarter - 1;
-  let sатLastQ = new Set( // players benched in the quarter just before we start
+  let sLastQ = new Set( // players benched in the quarter just before we start
     prevQ0 >= 1 && lockedLineups[prevQ0]
       ? active
           .filter(p => !lockedLineups[prevQ0].starters.some(s => s.player?.id === p.id))
@@ -886,7 +886,7 @@ function scheduleWholeGame(players, format, league, lockedLineups = {}, fromQuar
     // Sort bench-debtors by remaining quota desc (highest need first),
     // then by rating desc as tiebreaker
     const debtors = eligible()
-      .filter(p => sатLastQ.has(p.id))
+      .filter(p => sLastQ.has(p.id))
       .sort((a, b) => qRemaining[b.id] - qRemaining[a.id] || getOverallRating(b) - getOverallRating(a));
 
     for (const p of debtors) {
@@ -894,7 +894,7 @@ function scheduleWholeGame(players, format, league, lockedLineups = {}, fromQuar
       chosen.push(p.id);
     }
 
-    // -- Pass 2: fill remaining spots with players who have most quota left ─
+    // -- Pass 2: fill remaining spots with players who have most quota left 
     const others = eligible()
       .sort((a, b) => qRemaining[b.id] - qRemaining[a.id] || getOverallRating(b) - getOverallRating(a));
 
@@ -910,7 +910,7 @@ function scheduleWholeGame(players, format, league, lockedLineups = {}, fromQuar
     });
 
     // Who sat this quarter? They get priority next quarter.
-    sатLastQ = new Set(active.filter(p => !chosen.includes(p.id)).map(p => p.id));
+    sLastQ = new Set(active.filter(p => !chosen.includes(p.id)).map(p => p.id));
   }
 
   // Build lineups for each remaining quarter
@@ -985,9 +985,9 @@ function getOverallRating(player) {
   return vals.length ? vals.reduce((a,b) => a+b, 0) / vals.length : 0;
 }
 
-// ═══════════════════════════════════════════════════════════════════
+// 
 // STYLE CONSTANTS
-// ═══════════════════════════════════════════════════════════════════
+// 
 const C = {
   bg:       "#0a0d0f",
   surface:  "rgba(255,255,255,0.04)",
@@ -1058,15 +1058,15 @@ function StarRating({ value, onChange, max=5 }) {
           background:"none", border:"none", cursor:"pointer", padding: "1px",
           fontSize: 14, color: i < value ? C.gold : "rgba(255,255,255,0.2)",
           lineHeight: 1,
-        }}>★</button>
+        }}></button>
       ))}
     </div>
   );
 }
 
-// ═══════════════════════════════════════════════════════════════════
+// 
 // SOCCER FIELD with DRAG & DROP
-// ═══════════════════════════════════════════════════════════════════
+// 
 function SoccerField({ lineup, onSwap, format, quarter }) {
   const [dragging, setDragging] = useState(null);
   const [hoverIdx, setHoverIdx] = useState(null);
@@ -1169,9 +1169,9 @@ function SoccerField({ lineup, onSwap, format, quarter }) {
                   <div style={{fontSize:7,color:"#2a1a0a",lineHeight:1,maxWidth:34,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",fontWeight:600}}>
                     {slot.player.name?.split(" ")[0]}
                   </div>
-                  {rating > 0 && <div style={{fontSize:6,color:"#2a1a0a",lineHeight:1}}>{"★".repeat(Math.round(rating))}</div>}
+                  {rating > 0 && <div style={{fontSize:6,color:"#2a1a0a",lineHeight:1}}>{"".repeat(Math.round(rating))}</div>}
                 </>
-              ) : <span style={{color:"rgba(255,255,255,0.4)",fontSize:10}}>—</span>}
+              ) : <span style={{color:"rgba(255,255,255,0.4)",fontSize:10}}></span>}
             </div>
             <div style={{fontSize:8,color:"#fff",fontWeight:700,textShadow:"0 1px 3px rgba(0,0,0,0.9)",marginTop:2,letterSpacing:"0.03em"}}>{pos}</div>
           </div>
@@ -1181,9 +1181,9 @@ function SoccerField({ lineup, onSwap, format, quarter }) {
   );
 }
 
-// ═══════════════════════════════════════════════════════════════════
+// 
 // MID-GAME INJURY BANNER
-// ═══════════════════════════════════════════════════════════════════
+// 
 function InjuryAlert({ player, quarter, onDismiss }) {
   const [visible, setVisible] = useState(true);
   useEffect(() => {
@@ -1203,7 +1203,7 @@ function InjuryAlert({ player, quarter, onDismiss }) {
     }}>
       <style>{`@keyframes slideIn{from{transform:translateX(120%);opacity:0}to{transform:translateX(0);opacity:1}}`}</style>
       <div style={{display:"flex",alignItems:"flex-start",gap:10}}>
-        <span style={{fontSize:24,lineHeight:1}}>🚨</span>
+        <span style={{fontSize:24,lineHeight:1}}></span>
         <div style={{flex:1}}>
           <div style={{fontWeight:800,fontSize:14,color:"#fff",marginBottom:2}}>Mid-Game Injury</div>
           <div style={{fontSize:12,color:"rgba(255,255,255,0.85)"}}>
@@ -1214,15 +1214,15 @@ function InjuryAlert({ player, quarter, onDismiss }) {
         <button onClick={()=>{setVisible(false);onDismiss();}} style={{
           background:"none",border:"none",color:"rgba(255,255,255,0.6)",
           cursor:"pointer",fontSize:16,lineHeight:1,padding:0,
-        }}>✕</button>
+        }}></button>
       </div>
     </div>
   );
 }
 
-// ═══════════════════════════════════════════════════════════════════
+// 
 // TAB: GAME DAY
-// ═══════════════════════════════════════════════════════════════════
+// 
 function TabGame({ format, league, players, setPlayers, lineupsByQuarter, setLineupsByQuarter }) {
   const [quarter,       setQuarter]       = useState(1);
   const [injuryAlerts,  setInjuryAlerts]  = useState([]);
@@ -1255,7 +1255,7 @@ function TabGame({ format, league, players, setPlayers, lineupsByQuarter, setLin
           const res = await fetch(url);
           const data = await res.json();
           const c = data.current;
-          const codeMap = {0:"Clear ☀️",1:"Mostly Clear 🌤",2:"Partly Cloudy ⛅",3:"Overcast ☁️",45:"Foggy 🌫",48:"Foggy 🌫",51:"Drizzle 🌦",53:"Drizzle 🌦",55:"Drizzle 🌦",61:"Rain 🌧",63:"Rain 🌧",65:"Heavy Rain 🌧",71:"Snow 🌨",73:"Snow 🌨",75:"Heavy Snow ❄️",80:"Showers 🌦",81:"Showers 🌦",82:"Heavy Showers ⛈",95:"Thunderstorm ⛈",96:"Thunderstorm ⛈",99:"Thunderstorm ⛈"};
+          const codeMap = {0:"Clear ",1:"Mostly Clear ",2:"Partly Cloudy ",3:"Overcast ",45:"Foggy ",48:"Foggy ",51:"Drizzle ",53:"Drizzle ",55:"Drizzle ",61:"Rain ",63:"Rain ",65:"Heavy Rain ",71:"Snow ",73:"Snow ",75:"Heavy Snow ",80:"Showers ",81:"Showers ",82:"Heavy Showers ",95:"Thunderstorm ",96:"Thunderstorm ",99:"Thunderstorm "};
           setWeather({
             temp: Math.round(c.temperature_2m),
             feels: Math.round(c.apparent_temperature),
@@ -1367,7 +1367,7 @@ function TabGame({ format, league, players, setPlayers, lineupsByQuarter, setLin
     setPlayers(updatedPlayers);
     setInjuryAlerts(prev => [...prev, { player, quarter, id: Date.now() }]);
 
-    // Pull from current quarter immediately — sub in first bench player
+    // Pull from current quarter immediately  sub in first bench player
     const currentL = lineupsByQuarter[quarter];
     let baseLineups = { ...lineupsByQuarter };
     if (currentL) {
@@ -1415,7 +1415,7 @@ function TabGame({ format, league, players, setPlayers, lineupsByQuarter, setLin
     (currentLineup?.starters || []).filter(s => s.player).map(s => s.player.id)
   );
 
-  // Build rotation grid: rows = players, cols = Q1–Q4
+  // Build rotation grid: rows = players, cols = Q1Q4
   const allTrackedPlayers = [...active, ...midGameInjured];
   const rotationGrid = allTrackedPlayers.map(p => ({
     player: p,
@@ -1439,7 +1439,7 @@ function TabGame({ format, league, players, setPlayers, lineupsByQuarter, setLin
           onDismiss={() => setInjuryAlerts(prev => prev.filter(a => a.id !== alert.id))}/>
       ))}
 
-      {/* -- SCORE TRACKER -- */}
+      {/* SCORE TRACKER */}
       <div style={{
         background:"linear-gradient(135deg,rgba(30,77,26,0.4),rgba(10,13,15,0.6))",
         border:`1px solid rgba(232,160,32,0.25)`,
@@ -1454,7 +1454,7 @@ function TabGame({ format, league, players, setPlayers, lineupsByQuarter, setLin
               onChange={e=>setOpponent(e.target.value)}
               onBlur={()=>setEditOpp(false)}
               onKeyDown={e=>e.key==="Enter"&&setEditOpp(false)}
-              placeholder="Opponent name…"
+              placeholder="Opponent name"
               style={{...IS, textAlign:"center", fontSize:13, maxWidth:200, padding:"4px 10px"}}
             />
           ) : (
@@ -1462,7 +1462,7 @@ function TabGame({ format, league, players, setPlayers, lineupsByQuarter, setLin
               fontSize:12,color:C.muted,cursor:"pointer",display:"inline-flex",
               alignItems:"center",gap:5,
             }}>
-              {opponent||"Tap to set opponent"} <span style={{fontSize:10,opacity:0.5}}>✎</span>
+              {opponent||"Tap to set opponent"} <span style={{fontSize:10,opacity:0.5}}></span>
             </div>
           )}
         </div>
@@ -1475,7 +1475,7 @@ function TabGame({ format, league, players, setPlayers, lineupsByQuarter, setLin
               <button onClick={()=>setHomeScore(s=>Math.max(0,s-1))} style={{
                 width:34,height:34,borderRadius:8,border:"none",cursor:"pointer",
                 background:"rgba(255,255,255,0.08)",color:C.text,fontSize:20,fontWeight:300,lineHeight:1,
-              }}>−</button>
+              }}></button>
               <div style={{fontSize:52,fontWeight:900,color:C.gold,lineHeight:1,minWidth:56,textAlign:"center",
                 textShadow:`0 0 30px ${C.gold}66`}}>{homeScore}</div>
               <button onClick={()=>setHomeScore(s=>s+1)} style={{
@@ -1497,7 +1497,7 @@ function TabGame({ format, league, players, setPlayers, lineupsByQuarter, setLin
               <button onClick={()=>setAwayScore(s=>Math.max(0,s-1))} style={{
                 width:34,height:34,borderRadius:8,border:"none",cursor:"pointer",
                 background:"rgba(255,255,255,0.08)",color:C.text,fontSize:20,fontWeight:300,lineHeight:1,
-              }}>−</button>
+              }}></button>
               <div style={{fontSize:52,fontWeight:900,color:homeScore>awayScore?C.text:homeScore<awayScore?"#e74c3c":C.text,
                 lineHeight:1,minWidth:56,textAlign:"center"}}>{awayScore}</div>
               <button onClick={()=>setAwayScore(s=>s+1)} style={{
@@ -1512,24 +1512,24 @@ function TabGame({ format, league, players, setPlayers, lineupsByQuarter, setLin
         <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginTop:10}}>
           <div style={{fontSize:11,fontWeight:700,
             color:homeScore>awayScore?C.ok:homeScore<awayScore?"#e74c3c":C.muted}}>
-            {homeScore>awayScore?"🏆 Winning":homeScore<awayScore?"⚠️ Trailing":"🤝 Tied"}
-            {homeScore-awayScore>5 && <span style={{color:"#e67e22"}}> · ⚠️ Blowout Rule</span>}
+            {homeScore>awayScore?" Winning":homeScore<awayScore?" Trailing":" Tied"}
+            {homeScore-awayScore>5 && <span style={{color:"#e67e22"}}>   Blowout Rule</span>}
           </div>
           <div style={{display:"flex",gap:6}}>
             <button onClick={()=>setShowShare(true)} style={{
               padding:"4px 10px",borderRadius:6,border:`1px solid ${C.border}`,
               background:"transparent",color:C.muted,fontSize:10,fontWeight:700,
               cursor:"pointer",fontFamily:"inherit",
-            }}>📤 Share Lineup</button>
+            }}> Share Lineup</button>
             <button onClick={()=>{setHomeScore(0);setAwayScore(0);}} style={{
               padding:"4px 8px",borderRadius:6,border:`1px solid ${C.border}`,
               background:"transparent",color:C.muted,fontSize:10,cursor:"pointer",fontFamily:"inherit",
-            }}>↺</button>
+            }}></button>
           </div>
         </div>
       </div>
 
-      {/* -- WEATHER -- */}
+      {/* WEATHER */}
       <div style={{marginBottom:12}}>
         {!weather && !weatherLoading && (
           <button onClick={fetchWeather} style={{
@@ -1538,11 +1538,11 @@ function TabGame({ format, league, players, setPlayers, lineupsByQuarter, setLin
             color:C.muted,fontSize:12,fontWeight:600,cursor:"pointer",fontFamily:"inherit",
             display:"flex",alignItems:"center",justifyContent:"center",gap:6,
           }}>
-            🌤 Check Game Day Weather
+             Check Game Day Weather
           </button>
         )}
         {weatherLoading && (
-          <div style={{textAlign:"center",padding:"8px",fontSize:12,color:C.muted}}>Fetching weather…</div>
+          <div style={{textAlign:"center",padding:"8px",fontSize:12,color:C.muted}}>Fetching weather</div>
         )}
         {weatherErr && (
           <div style={{textAlign:"center",padding:"8px",fontSize:11,color:"#e74c3c"}}>{weatherErr}</div>
@@ -1555,21 +1555,21 @@ function TabGame({ format, league, players, setPlayers, lineupsByQuarter, setLin
             <div style={{fontSize:28,lineHeight:1}}>{weather.desc.split(" ").pop()}</div>
             <div style={{flex:1}}>
               <div style={{fontSize:15,fontWeight:800,color:C.text}}>
-                {weather.temp}°F <span style={{fontSize:11,fontWeight:400,color:C.muted}}>feels {weather.feels}°F</span>
+                {weather.temp}F <span style={{fontSize:11,fontWeight:400,color:C.muted}}>feels {weather.feels}F</span>
               </div>
               <div style={{fontSize:11,color:C.muted}}>
-                {weather.desc.split(" ").slice(0,-1).join(" ")} · 💨 {weather.wind} mph · 🌧 {weather.precip}% rain
+                {weather.desc.split(" ").slice(0,-1).join(" ")}   {weather.wind} mph   {weather.precip}% rain
               </div>
             </div>
             <div style={{display:"flex",flexDirection:"column",gap:4,alignItems:"flex-end"}}>
-              {weather.precip >= 60 && <div style={{fontSize:10,color:"#3498db",fontWeight:700}}>⚠️ Wet field likely</div>}
-              {weather.wind >= 20 && <div style={{fontSize:10,color:C.gold,fontWeight:700}}>💨 High wind</div>}
-              {weather.temp <= 40 && <div style={{fontSize:10,color:"#5dade2",fontWeight:700}}>🥶 Cold — extra layers</div>}
-              {weather.temp >= 85 && <div style={{fontSize:10,color:"#e74c3c",fontWeight:700}}>🥵 Heat — water breaks</div>}
+              {weather.precip >= 60 && <div style={{fontSize:10,color:"#3498db",fontWeight:700}}> Wet field likely</div>}
+              {weather.wind >= 20 && <div style={{fontSize:10,color:C.gold,fontWeight:700}}> High wind</div>}
+              {weather.temp <= 40 && <div style={{fontSize:10,color:"#5dade2",fontWeight:700}}> Cold  extra layers</div>}
+              {weather.temp >= 85 && <div style={{fontSize:10,color:"#e74c3c",fontWeight:700}}> Heat  water breaks</div>}
               <button onClick={fetchWeather} style={{
                 background:"none",border:"none",cursor:"pointer",
                 color:C.muted,fontSize:10,padding:0,
-              }}>↺ refresh</button>
+              }}> refresh</button>
             </div>
           </div>
         )}
@@ -1582,7 +1582,7 @@ function TabGame({ format, league, players, setPlayers, lineupsByQuarter, setLin
           borderRadius:9, padding:"10px 14px", marginBottom:14,
           fontSize:12, color:"#2ecc71", fontWeight:600,
         }}>
-          ✅ All quarters planned — every eligible player meets the minimum play-time rule.
+           All quarters planned  every eligible player meets the minimum play-time rule.
         </div>
       )}
 
@@ -1592,7 +1592,7 @@ function TabGame({ format, league, players, setPlayers, lineupsByQuarter, setLin
           background:"rgba(211,84,0,0.1)", border:"1px solid rgba(211,84,0,0.35)",
           borderRadius:9, padding:"10px 14px", marginBottom:14, fontSize:12, color:C.gold,
         }}>
-          ⚠️ <b>{violations.length} player{violations.length>1?"s":""}</b> still below the {minQ}-quarter minimum:&nbsp;
+           <b>{violations.length} player{violations.length>1?"s":""}</b> still below the {minQ}-quarter minimum:&nbsp;
           {violations.map(p=>p.name.split(" ")[0]).join(", ")}. Hit <b>Plan Full Game</b> to fix.
         </div>
       )}
@@ -1604,20 +1604,20 @@ function TabGame({ format, league, players, setPlayers, lineupsByQuarter, setLin
           borderRadius:10, padding:"10px 14px", marginBottom:14,
         }}>
           <div style={{fontSize:11,color:"#e74c3c",fontWeight:700,marginBottom:8,textTransform:"uppercase",letterSpacing:"0.05em"}}>
-            🚨 Mid-Game Injuries
+             Mid-Game Injuries
           </div>
           {midGameInjured.map(p => (
             <div key={p.id} style={{display:"flex",alignItems:"center",gap:10,padding:"5px 0",borderBottom:"1px solid rgba(231,76,60,0.12)"}}>
               <div style={{width:24,height:24,borderRadius:"50%",background:"#7b0000",display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,color:"#fff",fontWeight:700,flexShrink:0}}>{p.number}</div>
               <div style={{flex:1}}>
                 <div style={{fontSize:12,color:"#e74c3c",fontWeight:600}}>{p.name}</div>
-                <div style={{fontSize:10,color:"rgba(231,76,60,0.65)"}}>Injured Q{p.injuredInQuarter} · remaining quarters adjusted</div>
+                <div style={{fontSize:10,color:"rgba(231,76,60,0.65)"}}>Injured Q{p.injuredInQuarter}  remaining quarters adjusted</div>
               </div>
               <button onClick={() => clearMidGameInjury(p.id)} style={{
                 background:"rgba(39,174,96,0.15)",border:"1px solid rgba(39,174,96,0.35)",
                 borderRadius:6,cursor:"pointer",fontSize:11,color:"#2ecc71",
                 padding:"3px 9px",fontWeight:600,fontFamily:"inherit",
-              }}>↩ Return</button>
+              }}> Return</button>
             </div>
           ))}
         </div>
@@ -1628,10 +1628,10 @@ function TabGame({ format, league, players, setPlayers, lineupsByQuarter, setLin
         {/* -- LEFT PANEL -- */}
         <div style={{flex:"0 0 250px",minWidth:210}}>
 
-          {/* -- QUARTER TIMER -- */}
+          {/* QUARTER TIMER */}
           <Card style={{marginBottom:12,border:`1px solid ${timerColor}33`}}>
             <div style={{fontSize:11,color:C.muted,fontWeight:700,textTransform:"uppercase",letterSpacing:"0.05em",marginBottom:8}}>
-              ⏱ Q{quarter} Timer — {periodMin} min
+               Q{quarter} Timer  {periodMin} min
             </div>
             {/* Ring display */}
             <div style={{display:"flex",alignItems:"center",gap:14,marginBottom:10}}>
@@ -1651,7 +1651,7 @@ function TabGame({ format, league, players, setPlayers, lineupsByQuarter, setLin
               </div>
               <div style={{flex:1}}>
                 <div style={{fontSize:timerSec===0?13:11,color:timerSec===0?"#e74c3c":C.muted,fontWeight:timerSec===0?700:400,marginBottom:8}}>
-                  {timerSec===0 ? "⏰ Quarter over! Advance to next quarter." : `${timerMins}:${String(timerSecs).padStart(2,"0")} remaining`}
+                  {timerSec===0 ? " Quarter over! Advance to next quarter." : `${timerMins}:${String(timerSecs).padStart(2,"0")} remaining`}
                 </div>
                 <div style={{display:"flex",gap:5}}>
                   <button onClick={()=>setTimerRunning(r=>!r)} style={{
@@ -1659,18 +1659,18 @@ function TabGame({ format, league, players, setPlayers, lineupsByQuarter, setLin
                     fontWeight:700,fontSize:12,fontFamily:"inherit",
                     background:timerRunning?`rgba(231,76,60,0.2)`:`rgba(39,174,96,0.2)`,
                     color:timerRunning?"#e74c3c":C.ok,
-                  }}>{timerRunning?"⏸ Pause":"▶ Start"}</button>
+                  }}>{timerRunning?" Pause":" Start"}</button>
                   <button onClick={()=>{setTimerSec(periodMin*60);setTimerRunning(false);}} style={{
                     padding:"6px 10px",borderRadius:6,border:"none",cursor:"pointer",
                     fontWeight:600,fontSize:11,fontFamily:"inherit",
                     background:"rgba(255,255,255,0.06)",color:C.muted,
-                  }}>↺</button>
+                  }}></button>
                   {quarter < 4 && timerSec === 0 && (
                     <button onClick={()=>setQuarter(q=>Math.min(4,q+1))} style={{
                       padding:"6px 10px",borderRadius:6,border:"none",cursor:"pointer",
                       fontWeight:700,fontSize:11,fontFamily:"inherit",
                       background:`linear-gradient(135deg,${C.gold},${C.goldDark})`,color:"#0a0d0f",
-                    }}>Q{quarter+1} →</button>
+                    }}>Q{quarter+1} </button>
                   )}
                 </div>
               </div>
@@ -1680,7 +1680,7 @@ function TabGame({ format, league, players, setPlayers, lineupsByQuarter, setLin
           {/* Strategy / Formation Picker */}
           <Card style={{marginBottom:14}}>
             <div style={{fontSize:11,color:C.muted,fontWeight:700,textTransform:"uppercase",letterSpacing:"0.05em",marginBottom:8}}>
-              🗂 Strategy
+               Strategy
             </div>
             <div style={{fontSize:10,color:C.muted,marginBottom:8,lineHeight:1.5}}>
               Pick how many defenders, mids, and forwards. Updates all quarters when you hit Apply.
@@ -1716,7 +1716,7 @@ function TabGame({ format, league, players, setPlayers, lineupsByQuarter, setLin
                           }} style={{
                             width:22,height:22,borderRadius:4,border:"none",cursor:"pointer",
                             background:"rgba(255,255,255,0.1)",color:C.text,fontWeight:700,fontSize:14,lineHeight:1,
-                          }}>−</button>
+                          }}></button>
                           <span style={{fontSize:18,fontWeight:800,color:C.gold,minWidth:20,textAlign:"center"}}>{val}</span>
                           <button onClick={()=>{
                             let d=curD,m=curM,f=curF;
@@ -1744,7 +1744,7 @@ function TabGame({ format, league, players, setPlayers, lineupsByQuarter, setLin
                           {curD}-{curM}-{curF}
                         </div>
                         <div style={{fontSize:10,color:ok?C.muted:"#e74c3c"}}>
-                          {ok ? `${fieldSlots} field + GK ✓` : `${total}/${fieldSlots} field slots`}
+                          {ok ? `${fieldSlots} field + GK ` : `${total}/${fieldSlots} field slots`}
                         </div>
                       </div>
                     );
@@ -1826,7 +1826,7 @@ function TabGame({ format, league, players, setPlayers, lineupsByQuarter, setLin
                 }}>
                   Q{q}
                   <span style={{display:"block",fontSize:8,lineHeight:1.2,opacity:0.75,marginTop:1}}>
-                    {hasLineup ? (hasInjury ? "🚨" : "✓") : "—"}
+                    {hasLineup ? (hasInjury ? "" : "") : ""}
                   </span>
                 </button>
               );
@@ -1836,15 +1836,15 @@ function TabGame({ format, league, players, setPlayers, lineupsByQuarter, setLin
           {/* Status */}
           <Card style={{marginBottom:12}}>
             <div style={{fontSize:11,color:C.muted,marginBottom:6,fontWeight:700,textTransform:"uppercase",letterSpacing:"0.05em"}}>Game Status</div>
-            <div style={{fontSize:12,color:C.text,marginBottom:3}}>{active.length} active · {needed} per side</div>
+            <div style={{fontSize:12,color:C.text,marginBottom:3}}>{active.length} active  {needed} per side</div>
             {active.length > needed && (
               <div style={{fontSize:11,color:C.muted}}>{active.length - needed} rotating through bench</div>
             )}
             {players.filter(p=>p.injured&&!p.midGameInjury).length > 0 && (
-              <div style={{fontSize:11,color:"#e74c3c",marginTop:3}}>🤕 {players.filter(p=>p.injured&&!p.midGameInjury).length} pre-game injured</div>
+              <div style={{fontSize:11,color:"#e74c3c",marginTop:3}}> {players.filter(p=>p.injured&&!p.midGameInjury).length} pre-game injured</div>
             )}
             {midGameInjured.length > 0 && (
-              <div style={{fontSize:11,color:"#e74c3c",marginTop:3}}>🚨 {midGameInjured.length} mid-game injur{midGameInjured.length>1?"ies":"y"}</div>
+              <div style={{fontSize:11,color:"#e74c3c",marginTop:3}}> {midGameInjured.length} mid-game injur{midGameInjured.length>1?"ies":"y"}</div>
             )}
             {minQ > 0 && <div style={{fontSize:11,color:C.muted,marginTop:3}}>Min: {minQ}Q per player ({rule.minFraction*100|0}%)</div>}
           </Card>
@@ -1852,17 +1852,17 @@ function TabGame({ format, league, players, setPlayers, lineupsByQuarter, setLin
           {/* PRIMARY ACTION */}
           <div style={{marginBottom:14}}>
             <Btn primary full onClick={() => planWholeGame(1)} style={{marginBottom:6,padding:"11px 18px",fontSize:13}}>
-              ⚡ Plan Full Game (Q1–Q4)
+               Plan Full Game (Q1Q4)
             </Btn>
             <div style={{fontSize:10,color:C.muted,lineHeight:1.5,textAlign:"center"}}>
-              Schedules all 4 quarters at once, guaranteeing every player gets ≥{minQ} quarter{minQ!==1?"s":""} of play.
+              Schedules all 4 quarters at once, guaranteeing every player gets {minQ} quarter{minQ!==1?"s":""} of play.
             </div>
           </div>
 
           {/* Secondary: regen from current quarter */}
           {allPlanned && (
             <Btn full ghost onClick={() => planWholeGame(quarter)} style={{marginBottom:14,fontSize:11}}>
-              🔄 Replan Q{quarter}–Q4 (keep Q1{quarter>1?`–Q${quarter-1}`:""})
+               Replan Q{quarter}Q4 (keep Q1{quarter>1?`Q${quarter-1}`:""})
             </Btn>
           )}
 
@@ -1872,7 +1872,7 @@ function TabGame({ format, league, players, setPlayers, lineupsByQuarter, setLin
               <div style={{fontSize:11,color:C.muted,fontWeight:700,textTransform:"uppercase",letterSpacing:"0.05em"}}>Play Time</div>
               {allPlanned
                 ? <div style={{fontSize:9,fontWeight:700,color:violations.length===0?C.ok:C.gold,background:violations.length===0?"rgba(39,174,96,0.15)":"rgba(211,84,0,0.15)",padding:"2px 7px",borderRadius:4}}>
-                    {violations.length===0?"✓ ALL MET":"⚠ VIOLATIONS"}
+                    {violations.length===0?" ALL MET":" VIOLATIONS"}
                   </div>
                 : <div style={{fontSize:9,color:C.muted}}>not fully planned</div>
               }
@@ -1889,10 +1889,10 @@ function TabGame({ format, league, players, setPlayers, lineupsByQuarter, setLin
                 <div key={p.id} style={{marginBottom:7,opacity:isMGI?0.5:1}}>
                   <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",fontSize:11,marginBottom:2}}>
                     <span style={{color:isMGI?"#e74c3c":ok?C.text:C.gold,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",maxWidth:"60%"}}>
-                      {isMGI?"🚨 ":""}{p.name.split(" ")[0]} <span style={{color:C.muted}}>#{p.number}</span>
+                      {isMGI?" ":""}{p.name.split(" ")[0]} <span style={{color:C.muted}}>#{p.number}</span>
                     </span>
                     <span style={{fontSize:10,color:ok?C.ok:C.gold,fontWeight:700,flexShrink:0}}>
-                      {allPlanned ? `${planned}/${target}Q` : "—"}
+                      {allPlanned ? `${planned}/${target}Q` : ""}
                     </span>
                   </div>
                   {/* Per-quarter position tiles */}
@@ -1903,7 +1903,7 @@ function TabGame({ format, league, players, setPlayers, lineupsByQuarter, setLin
                       // Look up the actual position this player is slotted into for this quarter
                       const qLineup = lineupsByQuarter[q];
                       const slot = qLineup?.starters?.find(s=>s.player?.id===p.id);
-                      const posLabel = status==="on" && slot ? (POS_LABEL[slot.pos] || slot.pos) : status==="bench" ? "—" : "?";
+                      const posLabel = status==="on" && slot ? (POS_LABEL[slot.pos] || slot.pos) : status==="bench" ? "" : "?";
                       const bg = status==="on" ? C.ok : status==="bench" ? "rgba(255,255,255,0.12)" : "rgba(255,255,255,0.04)";
                       const textColor = status==="on" ? "#0a0d0f" : "rgba(255,255,255,0.3)";
                       const isActive = quarter===q;
@@ -1934,9 +1934,9 @@ function TabGame({ format, league, players, setPlayers, lineupsByQuarter, setLin
 
           {/* Mid-game injury panel */}
           <Card style={{marginBottom:12,border:"1px solid rgba(231,76,60,0.2)"}}>
-            <div style={{fontSize:11,color:"#e74c3c",fontWeight:700,marginBottom:6,textTransform:"uppercase",letterSpacing:"0.05em"}}>🚨 Mark Injury</div>
+            <div style={{fontSize:11,color:"#e74c3c",fontWeight:700,marginBottom:6,textTransform:"uppercase",letterSpacing:"0.05em"}}> Mark Injury</div>
             <div style={{fontSize:10,color:C.muted,marginBottom:8,lineHeight:1.5}}>
-              Tap 🤕 to pull a player now. Remaining quarters auto-replan.
+              Tap  to pull a player now. Remaining quarters auto-replan.
             </div>
             {active.filter(p => !p.midGameInjury).length === 0 && (
               <div style={{fontSize:11,color:C.muted,fontStyle:"italic"}}>No active players</div>
@@ -1954,13 +1954,13 @@ function TabGame({ format, league, players, setPlayers, lineupsByQuarter, setLin
                       fontSize:8,fontWeight:700,color:"#0a0d0f"}}>{p.number}</div>
                     <div style={{flex:1,minWidth:0}}>
                       <div style={{fontSize:11,color:C.text,fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{p.name.split(" ")[0]}</div>
-                      <div style={{fontSize:9,color:C.muted}}>{onField?"🟢 On field":"⚪ Bench"}</div>
+                      <div style={{fontSize:9,color:C.muted}}>{onField?" On field":" Bench"}</div>
                     </div>
                     <button onClick={() => markMidGameInjury(p.id)} style={{
                       background:"rgba(192,57,43,0.2)",border:"1px solid rgba(192,57,43,0.4)",
                       borderRadius:4,cursor:"pointer",fontSize:13,color:"#e74c3c",
                       padding:"2px 6px",fontFamily:"inherit",flexShrink:0,lineHeight:1,
-                    }}>🤕</button>
+                    }}></button>
                   </div>
                 );
               })}
@@ -1970,7 +1970,7 @@ function TabGame({ format, league, players, setPlayers, lineupsByQuarter, setLin
           {/* Bench this quarter */}
           {currentLineup?.bench?.length > 0 && (
             <Card>
-              <div style={{fontSize:11,color:C.gold,fontWeight:700,marginBottom:7,textTransform:"uppercase",letterSpacing:"0.05em"}}>🪑 Q{quarter} Bench</div>
+              <div style={{fontSize:11,color:C.gold,fontWeight:700,marginBottom:7,textTransform:"uppercase",letterSpacing:"0.05em"}}> Q{quarter} Bench</div>
               {currentLineup.bench.map(p => (
                 <div key={p.id} style={{fontSize:12,color:C.text,padding:"4px 0",borderBottom:`1px solid ${C.border}`,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
                   <span>#{p.number} {p.name.split(" ")[0]}</span>
@@ -1984,7 +1984,7 @@ function TabGame({ format, league, players, setPlayers, lineupsByQuarter, setLin
         {/* -- FIELD -- */}
         <div style={{flex:1,minWidth:260}}>
           <div style={{fontSize:11,color:C.gold,fontWeight:700,marginBottom:10,textAlign:"center",textTransform:"uppercase",letterSpacing:"0.07em"}}>
-            ⚽ Q{quarter} Field — Drag to Swap
+             Q{quarter} Field  Drag to Swap
           </div>
           {!allPlanned && !currentLineup && (
             <div style={{
@@ -1992,15 +1992,15 @@ function TabGame({ format, league, players, setPlayers, lineupsByQuarter, setLin
               border:`2px dashed ${C.border}`, display:"flex", flexDirection:"column",
               alignItems:"center", justifyContent:"center", gap:12, padding:24,
             }}>
-              <div style={{fontSize:32}}>⚽</div>
+              <div style={{fontSize:32}}></div>
               <div style={{fontSize:13,color:C.muted,textAlign:"center",lineHeight:1.6}}>
                 Hit <b style={{color:C.gold}}>Plan Full Game</b> to schedule all 4 quarters at once,<br/>
                 guaranteeing fair play time for every player.
               </div>
-              <Btn primary onClick={() => planWholeGame(1)}>⚡ Plan Full Game</Btn>
+              <Btn primary onClick={() => planWholeGame(1)}> Plan Full Game</Btn>
             </div>
           )}
-          {/* Swipeable field — swipe left = next quarter, right = previous */}
+          {/* Swipeable field  swipe left = next quarter, right = previous */}
           {(()=>{
             return (
               <div
@@ -2020,14 +2020,14 @@ function TabGame({ format, league, players, setPlayers, lineupsByQuarter, setLin
                   <button onClick={()=>setQuarter(q=>Math.max(1,q-1))} disabled={quarter===1} style={{
                     background:"none",border:"none",cursor:quarter===1?"default":"pointer",
                     color:quarter===1?"rgba(255,255,255,0.1)":C.gold,fontSize:22,padding:"0 6px",lineHeight:1,
-                  }}>‹</button>
+                  }}></button>
                   <div style={{fontSize:11,color:C.muted,fontWeight:600}}>
-                    Q{quarter} Field View <span style={{opacity:0.4}}>· swipe or tap arrows</span>
+                    Q{quarter} Field View <span style={{opacity:0.4}}> swipe or tap arrows</span>
                   </div>
                   <button onClick={()=>setQuarter(q=>Math.min(4,q+1))} disabled={quarter===4} style={{
                     background:"none",border:"none",cursor:quarter===4?"default":"pointer",
                     color:quarter===4?"rgba(255,255,255,0.1)":C.gold,fontSize:22,padding:"0 6px",lineHeight:1,
-                  }}>›</button>
+                  }}></button>
                 </div>
                 {/* Pip dots */}
                 <div style={{display:"flex",justifyContent:"center",gap:6,marginBottom:8}}>
@@ -2047,7 +2047,7 @@ function TabGame({ format, league, players, setPlayers, lineupsByQuarter, setLin
             <div style={{marginTop:10,padding:"7px 12px",borderRadius:7,
               background:"rgba(120,0,0,0.15)",border:"1px solid rgba(231,76,60,0.2)",
               fontSize:11,color:"rgba(231,76,60,0.75)",textAlign:"center",lineHeight:1.5}}>
-              Open slots left by injured players. Use ↩ Return if they recover.
+              Open slots left by injured players. Use  Return if they recover.
             </div>
           )}
         </div>
@@ -2069,9 +2069,9 @@ function TabGame({ format, league, players, setPlayers, lineupsByQuarter, setLin
   );
 }
 
-// ═══════════════════════════════════════════════════════════════════
-// SHARE LINEUP MODAL — canvas PNG for screenshotting
-// ═══════════════════════════════════════════════════════════════════
+// 
+// SHARE LINEUP MODAL  canvas PNG for screenshotting
+// 
 function ShareLineupModal({ players, lineupsByQuarter, quarter, homeScore, awayScore, opponent, league, onClose }) {
   const canvasRef = useRef(null);
   const [rendered, setRendered] = useState(false);
@@ -2101,7 +2101,7 @@ function ShareLineupModal({ players, lineupsByQuarter, quarter, homeScore, awayS
 
     // Logo
     ctx.fillStyle = "#e8a020"; ctx.beginPath(); ctx.arc(44,39,22,0,Math.PI*2); ctx.fill();
-    ctx.fillStyle="#0a0d0f"; ctx.font="bold 18px Arial"; ctx.textAlign="center"; ctx.fillText("⚽",44,46);
+    ctx.fillStyle="#0a0d0f"; ctx.font="bold 18px Arial"; ctx.textAlign="center"; ctx.fillText("",44,46);
 
     // App name
     ctx.fillStyle="#e8e4dc"; ctx.font="bold 20px Arial"; ctx.textAlign="left"; ctx.fillText("CoachKit",76,33);
@@ -2109,7 +2109,7 @@ function ShareLineupModal({ players, lineupsByQuarter, quarter, homeScore, awayS
 
     // Quarter badge
     ctx.fillStyle="#e8a020"; ctx.font="bold 13px Arial"; ctx.textAlign="right";
-    ctx.fillText(`${league}  ·  Q${quarter} Lineup`, W-18, 44);
+    ctx.fillText(`${league}    Q${quarter} Lineup`, W-18, 44);
 
     // Score card
     ctx.fillStyle="rgba(232,160,32,0.1)";
@@ -2172,7 +2172,7 @@ function ShareLineupModal({ players, lineupsByQuarter, quarter, homeScore, awayS
       const by2=fy+fh+14;
       ctx.fillStyle="#141a12"; roundRect(ctx,fx,by2,fw,16+Math.ceil(bench.length/3)*30,8); ctx.fill();
       ctx.strokeStyle="rgba(255,255,255,0.07)"; roundRect(ctx,fx,by2,fw,16+Math.ceil(bench.length/3)*30,8); ctx.stroke();
-      ctx.fillStyle="#e8a020"; ctx.font="bold 9px Arial"; ctx.textAlign="left"; ctx.fillText("🪑 BENCH",fx+10,by2+14);
+      ctx.fillStyle="#e8a020"; ctx.font="bold 9px Arial"; ctx.textAlign="left"; ctx.fillText(" BENCH",fx+10,by2+14);
       bench.forEach((p,i)=>{
         const bx=fx+10+(i%3)*((fw-20)/3);
         const by3=by2+22+Math.floor(i/3)*30;
@@ -2184,7 +2184,7 @@ function ShareLineupModal({ players, lineupsByQuarter, quarter, homeScore, awayS
 
     // Footer
     ctx.fillStyle="#555"; ctx.font="9px Arial"; ctx.textAlign="center";
-    ctx.fillText(`CoachKit · ${new Date().toLocaleDateString()}`,W/2,H-10);
+    ctx.fillText(`CoachKit  ${new Date().toLocaleDateString()}`,W/2,H-10);
 
     setRendered(true);
   }, []);
@@ -2204,19 +2204,19 @@ function ShareLineupModal({ players, lineupsByQuarter, quarter, homeScore, awayS
         border:`1px solid ${C.border}`,overflow:"hidden"}} onClick={e=>e.stopPropagation()}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",
           padding:"14px 18px",borderBottom:`1px solid ${C.border}`}}>
-          <div style={{fontSize:15,fontWeight:800,color:C.gold}}>📤 Share Lineup</div>
-          <button onClick={onClose} style={{background:"none",border:"none",cursor:"pointer",color:C.muted,fontSize:20}}>✕</button>
+          <div style={{fontSize:15,fontWeight:800,color:C.gold}}> Share Lineup</div>
+          <button onClick={onClose} style={{background:"none",border:"none",cursor:"pointer",color:C.muted,fontSize:20}}></button>
         </div>
         <div style={{padding:"16px 18px"}}>
           <div style={{fontSize:11,color:C.muted,marginBottom:12,lineHeight:1.6}}>
-            Preview below — tap <b style={{color:C.text}}>Save Image</b> to download, then share via Messages or any app.
+            Preview below  tap <b style={{color:C.text}}>Save Image</b> to download, then share via Messages or any app.
           </div>
           <div style={{borderRadius:10,overflow:"hidden",marginBottom:14,
             border:`1px solid ${C.border}`,background:"#0c1409"}}>
             <canvas ref={canvasRef} style={{width:"100%",height:"auto",display:"block"}}/>
           </div>
           <div style={{display:"flex",gap:8}}>
-            <Btn primary full onClick={handleDownload}>💾 Save Image</Btn>
+            <Btn primary full onClick={handleDownload}> Save Image</Btn>
             <Btn ghost onClick={onClose}>Close</Btn>
           </div>
         </div>
@@ -2252,7 +2252,7 @@ function TabRoster({ players, addPlayer, updatePlayer, removePlayer, format }) {
           placeholder="#" style={{...IS,width:55,flex:"0 0 55px"}}/>
         <Btn primary onClick={handleAdd}>+ Add</Btn>
         <div style={{marginLeft:"auto",display:"flex",gap:4}}>
-          {[["name","A-Z"],["rating","⭐"],["position","Pos"]].map(([k,l])=>(
+          {[["name","A-Z"],["rating",""],["position","Pos"]].map(([k,l])=>(
             <button key={k} onClick={()=>setSort(k)} style={{
               padding:"4px 10px",borderRadius:5,border:"none",cursor:"pointer",fontSize:11,fontFamily:"inherit",
               background:sort===k?C.gold:"rgba(255,255,255,0.08)",
@@ -2306,21 +2306,21 @@ function PlayerRow({ player, onUpdate, onRemove }) {
           <div style={{fontWeight:600,fontSize:13,color:C.text}}>{player.name}</div>
           <div style={{fontSize:11,color:C.muted,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
             {(player.positions||[]).join(", ")||"No position"}
-            {rating>0 && <span style={{marginLeft:8,color:C.gold}}>{"★".repeat(Math.round(rating))}</span>}
+            {rating>0 && <span style={{marginLeft:8,color:C.gold}}>{"".repeat(Math.round(rating))}</span>}
           </div>
         </div>
         <div style={{fontSize:9,fontWeight:700,color:sc,background:`${sc}22`,padding:"2px 7px",borderRadius:4}}>
           {player.injured?"INJURED":player.out?"OUT":"ACTIVE"}
         </div>
         <div style={{display:"flex",gap:3}}>
-          <Btn sm onClick={()=>setExpanded(!expanded)}>✏️</Btn>
+          <Btn sm onClick={()=>setExpanded(!expanded)}></Btn>
           <Btn sm warn={!player.injured} onClick={()=>onUpdate({...player,injured:!player.injured,out:false})}>
-            {player.injured?"✅":"🤕"}
+            {player.injured?"":""}
           </Btn>
           <Btn sm warn={!player.out} onClick={()=>onUpdate({...player,out:!player.out,injured:false})}>
-            {player.out?"✅":"🚫"}
+            {player.out?"":""}
           </Btn>
-          <Btn sm danger onClick={onRemove}>✕</Btn>
+          <Btn sm danger onClick={onRemove}></Btn>
         </div>
       </div>
 
@@ -2358,7 +2358,7 @@ function PlayerRow({ player, onUpdate, onRemove }) {
             ))}
           </div>
           {rating>0 && (
-            <div style={{fontSize:11,color:C.gold}}>Overall: {"★".repeat(Math.round(rating))} ({rating.toFixed(1)}/5)</div>
+            <div style={{fontSize:11,color:C.gold}}>Overall: {"".repeat(Math.round(rating))} ({rating.toFixed(1)}/5)</div>
           )}
         </div>
       )}
@@ -2366,9 +2366,9 @@ function PlayerRow({ player, onUpdate, onRemove }) {
   );
 }
 
-// ═══════════════════════════════════════════════════════════════════
+// 
 // TAB: RULES
-// ═══════════════════════════════════════════════════════════════════
+// 
 function TabRules({ league, setLeague }) {
   const [view, setView] = useState("quick");
   const r = LEAGUE_RULES[league] || LEAGUE_RULES["U10 / Wings"];
@@ -2381,10 +2381,10 @@ function TabRules({ league, setLeague }) {
         background:"rgba(232,160,32,0.07)",border:"1px solid rgba(232,160,32,0.2)",
         borderRadius:10,padding:"10px 14px",
       }}>
-        <span style={{fontSize:20}}>⚽</span>
+        <span style={{fontSize:20}}></span>
         <div>
-          <div style={{fontSize:12,fontWeight:800,color:C.gold,letterSpacing:"0.06em"}}>SAY EAST CINCINNATI — OFFICIAL RULES</div>
-          <div style={{fontSize:11,color:C.muted}}>Source: SAY East Playing Laws Rulebook (Updated Jan 2026) · Silver Matrix age chart</div>
+          <div style={{fontSize:12,fontWeight:800,color:C.gold,letterSpacing:"0.06em"}}>SAY EAST CINCINNATI  OFFICIAL RULES</div>
+          <div style={{fontSize:11,color:C.muted}}>Source: SAY East Playing Laws Rulebook (Updated Jan 2026)  Silver Matrix age chart</div>
         </div>
       </div>
 
@@ -2407,18 +2407,18 @@ function TabRules({ league, setLeague }) {
         borderRadius:12,padding:"14px 18px",marginBottom:16,
       }}>
         <div style={{fontSize:18,fontWeight:800,color:C.gold,marginBottom:2}}>
-          {league} {r.divisionName ? `— ${r.divisionName}` : ""}
+          {league} {r.divisionName ? ` ${r.divisionName}` : ""}
         </div>
         {r.ageRange && <div style={{fontSize:11,color:C.muted,marginBottom:10}}>{r.ageRange}</div>}
 
         {/* Key spec badges */}
         <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
           {[
-            ["🏟 Format", r.format || "—"],
-            ["⚽ Ball", `Size ${r.ballSize}`],
-            ["📐 Field", r.fieldLength ? `${r.fieldLength} × ${r.fieldWidth}` : "—"],
-            ["🥅 Goals", r.goalSize || "—"],
-            ["⏱ Duration", r.periods === 4 ? `4 × ${r.periodMin} min quarters` : `2 × ${r.periodMin} min halves`],
+            [" Format", r.format || ""],
+            [" Ball", `Size ${r.ballSize}`],
+            [" Field", r.fieldLength ? `${r.fieldLength}  ${r.fieldWidth}` : ""],
+            [" Goals", r.goalSize || ""],
+            [" Duration", r.periods === 4 ? `4  ${r.periodMin} min quarters` : `2  ${r.periodMin} min halves`],
           ].map(([k,v])=>(
             <div key={k} style={{background:"rgba(0,0,0,0.35)",borderRadius:7,padding:"5px 11px",fontSize:11}}>
               <span style={{color:C.muted}}>{k}: </span><span style={{color:C.text,fontWeight:700}}>{v}</span>
@@ -2429,12 +2429,12 @@ function TabRules({ league, setLeague }) {
         {/* Rule flags row */}
         <div style={{display:"flex",gap:8,flexWrap:"wrap",marginTop:8}}>
           {[
-            ["🤕 Heading",    r.heading  ? "✅ Allowed" : "❌ Banned"],
-            ["📏 Offside",    r.offside  ? "Full rule" : "❌ None"],
-            ["🛝 Build-Out",  r.buildOut ? "✅ Active" : "❌ Not used"],
-            ["🦵 Slide Tackle", r.slideTackle ? "Allowed" : "❌ Restricted"],
-            ["🧤 GK Punt",    r.gkPunt   ? "✅ Allowed (SAY East)" : "❌ Not allowed"],
-            ["🟡 Cards",      r.yellowRedCards ? "Full system" : "❌ No cards"],
+            [" Heading",    r.heading  ? " Allowed" : " Banned"],
+            [" Offside",    r.offside  ? "Full rule" : " None"],
+            [" Build-Out",  r.buildOut ? " Active" : " Not used"],
+            [" Slide Tackle", r.slideTackle ? "Allowed" : " Restricted"],
+            [" GK Punt",    r.gkPunt   ? " Allowed (SAY East)" : " Not allowed"],
+            [" Cards",      r.yellowRedCards ? "Full system" : " No cards"],
           ].map(([k,v])=>(
             <div key={k} style={{background:"rgba(0,0,0,0.25)",borderRadius:6,padding:"4px 9px",fontSize:11}}>
               <span style={{color:C.muted}}>{k}: </span><span style={{color:C.text,fontWeight:600}}>{v}</span>
@@ -2445,7 +2445,7 @@ function TabRules({ league, setLeague }) {
 
       {/* View tabs */}
       <div style={{display:"flex",gap:4,marginBottom:14}}>
-        {[["quick","📌 Quick Reference"],["unknown","💡 Easily Missed Rules"],["links","🔗 Official Links"]].map(([k,l])=>(
+        {[["quick"," Quick Reference"],["unknown"," Easily Missed Rules"],["links"," Official Links"]].map(([k,l])=>(
           <button key={k} onClick={()=>setView(k)} style={{
             padding:"6px 14px",borderRadius:7,border:"none",cursor:"pointer",fontSize:12,fontWeight:600,fontFamily:"inherit",
             background:view===k?`linear-gradient(135deg,${C.gold},${C.goldDark})`:C.surface,
@@ -2474,7 +2474,7 @@ function TabRules({ league, setLeague }) {
             marginBottom:6,borderRadius:9,
             background:"rgba(39,174,96,0.08)",border:"1px solid rgba(39,174,96,0.2)",
           }}>
-            <span style={{fontSize:18}}>⏱</span>
+            <span style={{fontSize:18}}></span>
             <div>
               <div style={{fontSize:13,color:C.text,fontWeight:600}}>Min Play Time (SAY Rule 12)</div>
               <div style={{fontSize:12,color:C.muted}}>{PLAY_TIME_RULES[league]?.note||"Check local rules"}</div>
@@ -2485,10 +2485,10 @@ function TabRules({ league, setLeague }) {
             display:"flex",alignItems:"flex-start",gap:12,padding:"10px 14px",
             borderRadius:9,background:"rgba(211,84,0,0.06)",border:"1px solid rgba(211,84,0,0.2)",
           }}>
-            <span style={{fontSize:18}}>🛑</span>
+            <span style={{fontSize:18}}></span>
             <div>
               <div style={{fontSize:13,color:C.text,fontWeight:600}}>No Blowout Rule (SAY East)</div>
-              <div style={{fontSize:12,color:C.muted}}>Winning by more than 5 goals is a violation. Coaches must have a plan to manage score — rotate, adjust tactics, avoid running up the score.</div>
+              <div style={{fontSize:12,color:C.muted}}>Winning by more than 5 goals is a violation. Coaches must have a plan to manage score  rotate, adjust tactics, avoid running up the score.</div>
             </div>
             <div style={{marginLeft:"auto",fontSize:9,color:C.warn,fontWeight:700,flexShrink:0}}>KEY</div>
           </div>
@@ -2498,7 +2498,7 @@ function TabRules({ league, setLeague }) {
       {view==="unknown" && (
         <div>
           <div style={{fontSize:12,color:C.muted,marginBottom:12,lineHeight:1.6}}>
-            💡 Rules frequently misunderstood by coaches and parents in SAY East.
+             Rules frequently misunderstood by coaches and parents in SAY East.
           </div>
           {(r.unknownRules||[]).map((rule,i)=>(
             <div key={i} style={{
@@ -2531,16 +2531,16 @@ function TabRules({ league, setLeague }) {
             }}
             onMouseEnter={e=>e.currentTarget.style.borderColor=C.gold}
             onMouseLeave={e=>e.currentTarget.style.borderColor=C.border}>
-              <span style={{fontSize:20}}>📄</span>
+              <span style={{fontSize:20}}></span>
               <div style={{flex:1}}>
                 <div style={{fontSize:13,color:C.text,fontWeight:600}}>{link.label}</div>
                 <div style={{fontSize:11,color:C.muted,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{link.url}</div>
               </div>
-              <span style={{color:C.gold,fontSize:14}}>↗</span>
+              <span style={{color:C.gold,fontSize:14}}></span>
             </a>
           ))}
           <div style={{fontSize:11,color:C.muted,marginTop:12,lineHeight:1.6,padding:"10px 14px",background:C.surface,borderRadius:8,border:`1px solid ${C.border}`}}>
-            ℹ️ Rules may vary by local league, state association, or competition. Always verify with your specific league administrator.
+             Rules may vary by local league, state association, or competition. Always verify with your specific league administrator.
           </div>
         </div>
       )}
@@ -2548,9 +2548,9 @@ function TabRules({ league, setLeague }) {
   );
 }
 
-// ═══════════════════════════════════════════════════════════════════
+// 
 // TAB: DRILLS
-// ═══════════════════════════════════════════════════════════════════
+// 
 function TabDrills({ drills, league, addCustomDrill, removeCustomDrill }) {
   const [catFilter,   setCatFilter]   = useState("All");
   const [skillFilter, setSkillFilter] = useState("All");
@@ -2587,7 +2587,7 @@ function TabDrills({ drills, league, addCustomDrill, removeCustomDrill }) {
     <div>
       {/* Filters */}
       <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:12,alignItems:"center"}}>
-        <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="🔍 Search drills…" style={{...IS,width:"auto",flex:"1 1 140px"}}/>
+        <input value={search} onChange={e=>setSearch(e.target.value)} placeholder=" Search drills" style={{...IS,width:"auto",flex:"1 1 140px"}}/>
         <Btn sm primary onClick={()=>setShowAdd(!showAdd)}>+ Custom</Btn>
       </div>
       <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:8}}>
@@ -2645,22 +2645,22 @@ function TabDrills({ drills, league, addCustomDrill, removeCustomDrill }) {
             <div>
               <label style={lbl}>Progressions</label>
               <div style={{display:"flex",gap:4,marginBottom:4}}>
-                <input value={progInput} onChange={e=>setProgInput(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addProg()} style={{...IS,flex:1}} placeholder="Add progression…"/>
+                <input value={progInput} onChange={e=>setProgInput(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addProg()} style={{...IS,flex:1}} placeholder="Add progression"/>
                 <Btn sm onClick={addProg}>+</Btn>
               </div>
-              {newDrill.progressions.map((p,i)=><div key={i} style={{fontSize:11,color:C.muted,marginBottom:2}}>• {p}</div>)}
+              {newDrill.progressions.map((p,i)=><div key={i} style={{fontSize:11,color:C.muted,marginBottom:2}}> {p}</div>)}
             </div>
             <div>
               <label style={lbl}>Equipment</label>
               <div style={{display:"flex",gap:4,marginBottom:4}}>
-                <input value={equipInput} onChange={e=>setEquipInput(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addEquip()} style={{...IS,flex:1}} placeholder="Add equipment…"/>
+                <input value={equipInput} onChange={e=>setEquipInput(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addEquip()} style={{...IS,flex:1}} placeholder="Add equipment"/>
                 <Btn sm onClick={addEquip}>+</Btn>
               </div>
-              {newDrill.equipment.map((e,i)=><div key={i} style={{fontSize:11,color:C.muted,marginBottom:2}}>• {e}</div>)}
+              {newDrill.equipment.map((e,i)=><div key={i} style={{fontSize:11,color:C.muted,marginBottom:2}}> {e}</div>)}
             </div>
           </div>
           <div style={{display:"flex",gap:6}}>
-            <Btn primary sm onClick={()=>{ addCustomDrill(newDrill); setShowAdd(false); setNewDrill({name:"",category:"Passing",skills:[],ageMin:"U6",ageMax:"Adult",difficulty:"Beginner",duration:10,instructions:"",coaching:"",progressions:[],equipment:[]}); }}>💾 Save Drill</Btn>
+            <Btn primary sm onClick={()=>{ addCustomDrill(newDrill); setShowAdd(false); setNewDrill({name:"",category:"Passing",skills:[],ageMin:"U6",ageMax:"Adult",difficulty:"Beginner",duration:10,instructions:"",coaching:"",progressions:[],equipment:[]}); }}> Save Drill</Btn>
             <Btn sm onClick={()=>setShowAdd(false)}>Cancel</Btn>
           </div>
         </Card>
@@ -2689,9 +2689,9 @@ function FilterPill({ label, active, onClick }) {
   );
 }
 
-// ═══════════════════════════════════════════════════════════════════
+// 
 // DRILL DETAIL MODAL
-// ═══════════════════════════════════════════════════════════════════
+// 
 function DrillModal({ drill, onClose }) {
   if (!drill) return null;
   const diffColor = drill.difficulty==="Advanced"?C.warn:drill.difficulty==="Intermediate"?C.gold:C.ok;
@@ -2723,12 +2723,12 @@ function DrillModal({ drill, onClose }) {
               width:32,height:32,borderRadius:"50%",border:"none",cursor:"pointer",
               background:"rgba(0,0,0,0.6)",color:"#fff",fontSize:16,
               display:"flex",alignItems:"center",justifyContent:"center",
-            }}>✕</button>
+            }}></button>
           </div>
         )}
         {!drill.image && (
           <div style={{display:"flex",justifyContent:"flex-end",padding:"12px 16px 0"}}>
-            <button onClick={onClose} style={{background:"none",border:"none",cursor:"pointer",color:C.muted,fontSize:22}}>✕</button>
+            <button onClick={onClose} style={{background:"none",border:"none",cursor:"pointer",color:C.muted,fontSize:22}}></button>
           </div>
         )}
 
@@ -2738,7 +2738,7 @@ function DrillModal({ drill, onClose }) {
             <div>
               <div style={{fontSize:20,fontWeight:800,color:C.text,lineHeight:1.2}}>{drill.name}</div>
               <div style={{fontSize:12,color:C.muted,marginTop:4}}>
-                {drill.category} · {drill.duration} min · {drill.ageMin}–{drill.ageMax||"Adult"}
+                {drill.category}  {drill.duration} min  {drill.ageMin}{drill.ageMax||"Adult"}
               </div>
             </div>
             <span style={{
@@ -2762,7 +2762,7 @@ function DrillModal({ drill, onClose }) {
           {/* Setup */}
           {drill.setup && (
             <div style={{marginBottom:16,padding:"12px 14px",background:"rgba(30,77,43,0.2)",borderRadius:9,border:"1px solid rgba(39,174,96,0.2)"}}>
-              <div style={{fontSize:10,color:C.ok,fontWeight:800,textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:6}}>📐 Setup</div>
+              <div style={{fontSize:10,color:C.ok,fontWeight:800,textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:6}}> Setup</div>
               <div style={{fontSize:13,color:C.text,lineHeight:1.7}}>{drill.setup}</div>
             </div>
           )}
@@ -2770,7 +2770,7 @@ function DrillModal({ drill, onClose }) {
           {/* Instructions */}
           {drill.instructions && (
             <div style={{marginBottom:16}}>
-              <div style={{fontSize:10,color:C.gold,fontWeight:800,textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:8}}>▶ Instructions</div>
+              <div style={{fontSize:10,color:C.gold,fontWeight:800,textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:8}}> Instructions</div>
               <div style={{fontSize:13,color:C.text,lineHeight:1.8}}>{drill.instructions}</div>
             </div>
           )}
@@ -2778,7 +2778,7 @@ function DrillModal({ drill, onClose }) {
           {/* Coaching Points */}
           {drill.coaching && (
             <div style={{marginBottom:16,padding:"12px 14px",background:"rgba(232,160,32,0.07)",borderRadius:9,border:"1px solid rgba(232,160,32,0.15)"}}>
-              <div style={{fontSize:10,color:C.gold,fontWeight:800,textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:6}}>🎯 Coaching Points</div>
+              <div style={{fontSize:10,color:C.gold,fontWeight:800,textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:6}}> Coaching Points</div>
               <div style={{fontSize:13,color:C.text,lineHeight:1.8}}>{drill.coaching}</div>
             </div>
           )}
@@ -2786,13 +2786,13 @@ function DrillModal({ drill, onClose }) {
           {/* Progressions */}
           {(drill.progressions||[]).length>0 && (
             <div style={{marginBottom:16}}>
-              <div style={{fontSize:10,color:C.gold,fontWeight:800,textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:8}}>📈 Progressions</div>
+              <div style={{fontSize:10,color:C.gold,fontWeight:800,textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:8}}> Progressions</div>
               {drill.progressions.map((p,i)=>(
                 <div key={i} style={{
                   display:"flex",gap:8,alignItems:"flex-start",marginBottom:6,
                   padding:"8px 12px",background:C.surface,borderRadius:7,
                 }}>
-                  <span style={{color:C.gold,fontWeight:800,fontSize:12,flexShrink:0}}>→</span>
+                  <span style={{color:C.gold,fontWeight:800,fontSize:12,flexShrink:0}}></span>
                   <span style={{fontSize:13,color:C.muted,lineHeight:1.5}}>{p}</span>
                 </div>
               ))}
@@ -2802,14 +2802,14 @@ function DrillModal({ drill, onClose }) {
           {/* Equipment */}
           {(drill.equipment||[]).length>0 && (
             <div style={{padding:"12px 14px",background:C.surface,borderRadius:9,border:`1px solid ${C.border}`}}>
-              <div style={{fontSize:10,color:C.muted,fontWeight:800,textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:8}}>🎒 Equipment</div>
+              <div style={{fontSize:10,color:C.muted,fontWeight:800,textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:8}}> Equipment</div>
               <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
                 {drill.equipment.map((e,i)=>(
                   <span key={i} style={{
                     fontSize:12,color:C.text,
                     background:"rgba(255,255,255,0.06)",
                     padding:"4px 10px",borderRadius:5,
-                  }}>• {e}</span>
+                  }}> {e}</span>
                 ))}
               </div>
             </div>
@@ -2839,7 +2839,7 @@ function DrillCard({ drill, expanded, onToggle, onRemove, onOpenModal }) {
             {drill.name}
             {drill.custom && <span style={{marginLeft:6,fontSize:9,background:"rgba(232,160,32,0.2)",color:C.gold,padding:"1px 5px",borderRadius:3,fontWeight:700}}>CUSTOM</span>}
           </div>
-          <div style={{fontSize:11,color:C.muted}}>{drill.category} · {drill.duration}min · {drill.ageMin}–{drill.ageMax||"Adult"}</div>
+          <div style={{fontSize:11,color:C.muted}}>{drill.category}  {drill.duration}min  {drill.ageMin}{drill.ageMax||"Adult"}</div>
           <div style={{display:"flex",gap:4,marginTop:3,flexWrap:"wrap"}}>
             {(drill.skills||[]).slice(0,4).map(s=>(
               <span key={s} style={{fontSize:9,background:"rgba(255,255,255,0.08)",color:C.muted,padding:"1px 5px",borderRadius:3}}>{s}</span>
@@ -2848,7 +2848,7 @@ function DrillCard({ drill, expanded, onToggle, onRemove, onOpenModal }) {
         </div>
         <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:4,flexShrink:0}}>
           <span style={{fontSize:9,fontWeight:700,color:diffColor,background:`${diffColor}22`,padding:"2px 6px",borderRadius:3}}>{drill.difficulty}</span>
-          <span style={{fontSize:11,color:C.muted}}>{expanded?"▲":"▼"}</span>
+          <span style={{fontSize:11,color:C.muted}}>{expanded?"":""}</span>
         </div>
       </div>
 
@@ -2860,13 +2860,13 @@ function DrillCard({ drill, expanded, onToggle, onRemove, onOpenModal }) {
             </div>
           )}
           <div style={{fontSize:12,color:C.text,lineHeight:1.6,marginBottom:10}}>
-            {(drill.instructions||"").slice(0,140)}{(drill.instructions||"").length>140?"…":""}
+            {(drill.instructions||"").slice(0,140)}{(drill.instructions||"").length>140?"":""}
           </div>
           <div style={{display:"flex",gap:6}}>
             <Btn sm primary onClick={e=>{e.stopPropagation();onOpenModal&&onOpenModal(drill);}}>
-              📖 Full Details
+               Full Details
             </Btn>
-            {onRemove && <Btn sm danger onClick={onRemove}>🗑️ Remove</Btn>}
+            {onRemove && <Btn sm danger onClick={onRemove}> Remove</Btn>}
           </div>
         </div>
       )}
@@ -2874,9 +2874,9 @@ function DrillCard({ drill, expanded, onToggle, onRemove, onOpenModal }) {
   );
 }
 
-// ═══════════════════════════════════════════════════════════════════
+// 
 // TAB: PRACTICE GENERATOR
-// ═══════════════════════════════════════════════════════════════════
+// 
 const FOCUS_AREAS = ["General","Passing","Dribbling","Shooting","Defense","Possession","Fitness","Set Pieces","Goalkeeping","Heading"];
 
 function TabPractice({ drills, league }) {
@@ -2928,10 +2928,10 @@ function TabPractice({ drills, league }) {
               {[30,45,60,75,90].map(d=><option key={d}>{d}</option>)}
             </select>
           </div>
-          <Btn primary onClick={generate}>⚡ Generate</Btn>
+          <Btn primary onClick={generate}> Generate</Btn>
         </div>
         <div>
-          <label style={lbl}>Skill Focus Tags (optional — refines drill selection)</label>
+          <label style={lbl}>Skill Focus Tags (optional  refines drill selection)</label>
           <div style={{display:"flex",flexWrap:"wrap",gap:4}}>
             {SKILL_TAGS.map(s=>(
               <FilterPill key={s} label={s} active={skills.includes(s)} onClick={()=>toggleSkill(s)}/>
@@ -2948,7 +2948,7 @@ function TabPractice({ drills, league }) {
           background:level==="Beginner"?`${C.ok}22`:level==="Intermediate"?`${C.gold}22`:`${C.warn}22`,
           color:level==="Beginner"?C.ok:level==="Intermediate"?C.gold:C.warn,
         }}>{level} Level</div>
-        {isYoung && <div style={{fontSize:11,color:C.muted}}>· Fun-focused · Short activities · Simple instructions</div>}
+        {isYoung && <div style={{fontSize:11,color:C.muted}}> Fun-focused  Short activities  Simple instructions</div>}
       </div>
 
       {plan && (
@@ -2959,11 +2959,11 @@ function TabPractice({ drills, league }) {
             border:`1px solid rgba(232,160,32,0.2)`,
             borderRadius:12,padding:"14px 18px",marginBottom:14,
           }}>
-            <div style={{fontWeight:800,fontSize:16,color:C.gold}}>{plan.league} Practice — {plan.focus}</div>
+            <div style={{fontWeight:800,fontSize:16,color:C.gold}}>{plan.league} Practice  {plan.focus}</div>
             <div style={{fontSize:12,color:C.muted,marginTop:2}}>
               {plan.sections.reduce((s,x)=>s+x.time,0)} min total
-              · {plan.sections.filter(s=>s.drill).length} activities
-              {plan.skills.length>0 && ` · Skill focus: ${plan.skills.join(", ")}`}
+               {plan.sections.filter(s=>s.drill).length} activities
+              {plan.skills.length>0 && `  Skill focus: ${plan.skills.join(", ")}`}
             </div>
           </div>
 
@@ -2989,12 +2989,12 @@ function TabPractice({ drills, league }) {
                     <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4}}>
                       {sec.drill.image && <img src={sec.drill.image} alt="" style={{width:36,height:36,borderRadius:5,objectFit:"cover",flexShrink:0}}/>}
                       <div style={{flex:1,cursor:"pointer"}} onClick={()=>setModalDrill(sec.drill)}>
-                        <div style={{fontSize:13,color:C.text,fontWeight:600}}>{sec.drill.name} <span style={{fontSize:10,color:C.gold}}>📖</span></div>
-                        <div style={{fontSize:11,color:C.muted}}>{sec.drill.category} · {sec.drill.difficulty}</div>
+                        <div style={{fontSize:13,color:C.text,fontWeight:600}}>{sec.drill.name} <span style={{fontSize:10,color:C.gold}}></span></div>
+                        <div style={{fontSize:11,color:C.muted}}>{sec.drill.category}  {sec.drill.difficulty}</div>
                       </div>
                     </div>
                     <div style={{fontSize:11,color:C.muted,lineHeight:1.5,marginBottom:6}}>
-                      {(sec.drill.instructions||"").slice(0,120)}{sec.drill.instructions?.length>120?"…":""}
+                      {(sec.drill.instructions||"").slice(0,120)}{sec.drill.instructions?.length>120?"":""}
                     </div>
                     {swapDrill===i ? (
                       <div style={{background:"rgba(0,0,0,0.3)",borderRadius:8,padding:10,marginBottom:6}}>
@@ -3014,10 +3014,10 @@ function TabPractice({ drills, league }) {
                             </div>
                           ))}
                         </div>
-                        <Btn sm onClick={()=>setSwapDrill(null)} style={{marginTop:6}}>✕ Cancel</Btn>
+                        <Btn sm onClick={()=>setSwapDrill(null)} style={{marginTop:6}}> Cancel</Btn>
                       </div>
                     ) : (
-                      <Btn sm ghost onClick={()=>setSwapDrill(i)}>🔄 Swap Drill</Btn>
+                      <Btn sm ghost onClick={()=>setSwapDrill(i)}> Swap Drill</Btn>
                     )}
                   </>
                 ) : (
@@ -3030,7 +3030,7 @@ function TabPractice({ drills, league }) {
           <div style={{marginTop:12}}>
             <label style={lbl}>Coach Notes</label>
             <textarea value={notes} onChange={e=>setNotes(e.target.value)}
-              placeholder="Add notes for this session…" rows={3}
+              placeholder="Add notes for this session" rows={3}
               style={{...IS,resize:"vertical"}}/>
           </div>
         </div>
@@ -3040,17 +3040,17 @@ function TabPractice({ drills, league }) {
   );
 }
 
-// ═══════════════════════════════════════════════════════════════════
+// 
 // MAIN APP
-// ═══════════════════════════════════════════════════════════════════
+// 
 const TABS = [
-  {id:"game",     icon:"⚽", label:"Game Day"},
-  {id:"roster",   icon:"👥", label:"Roster"},
-  {id:"season",   icon:"📊", label:"Season"},
-  {id:"team",     icon:"👨‍👩‍👧", label:"Team"},
-  {id:"rules",    icon:"📋", label:"Rules"},
-  {id:"drills",   icon:"🏃", label:"Drills"},
-  {id:"practice", icon:"📅", label:"Practice"},
+  {id:"game",     icon:"", label:"Game Day"},
+  {id:"roster",   icon:"", label:"Roster"},
+  {id:"season",   icon:"", label:"Season"},
+  {id:"team",     icon:"", label:"Team"},
+  {id:"rules",    icon:"", label:"Rules"},
+  {id:"drills",   icon:"", label:"Drills"},
+  {id:"practice", icon:"", label:"Practice"},
 ];
 
 // FORMATION TEMPLATES per format
@@ -3131,7 +3131,7 @@ function CoachKitApp() {
       fontFamily:"'Palatino Linotype','Book Antiqua',Palatino,Georgia,serif",
       color: C.text,
     }}>
-      {/* -- HEADER -- */}
+      {/* HEADER */}
       <div style={{
         background:"linear-gradient(180deg,#111810 0%,#0c140a 100%)",
         borderBottom:`1px solid rgba(232,160,32,0.18)`,
@@ -3145,7 +3145,7 @@ function CoachKitApp() {
                 background:`linear-gradient(135deg,${C.gold},${C.goldDark})`,
                 display:"flex",alignItems:"center",justifyContent:"center",fontSize:22,
                 boxShadow:`0 4px 12px ${C.gold}44`,
-              }}>⚽</div>
+              }}></div>
               <div>
                 <div style={{fontSize:19,fontWeight:800,color:C.text,letterSpacing:"-0.01em"}}>CoachKit</div>
                 <div style={{fontSize:9,color:C.muted,letterSpacing:"0.1em",textTransform:"uppercase"}}>Youth Soccer Manager</div>
@@ -3167,9 +3167,9 @@ function CoachKitApp() {
               </div>
               <div style={{display:"flex",gap:10,alignItems:"center"}}>
                 <Stat label="Roster"   val={players.length}    color={C.text}/>
-                {injured>0&&<Stat label="🤕 Injured" val={injured} color="#e74c3c"/>}
-                {midGameCount>0&&<Stat label="🚨 Mid-Game" val={midGameCount} color="#e74c3c"/>}
-                {out>0    &&<Stat label="🚫 Out"     val={out}     color="#e67e22"/>}
+                {injured>0&&<Stat label=" Injured" val={injured} color="#e74c3c"/>}
+                {midGameCount>0&&<Stat label=" Mid-Game" val={midGameCount} color="#e74c3c"/>}
+                {out>0    &&<Stat label=" Out"     val={out}     color="#e67e22"/>}
               </div>
               <UserMenu />
               </div>
@@ -3191,7 +3191,7 @@ function CoachKitApp() {
         </div>
       </div>
 
-      {/* -- BODY -- */}
+      {/* BODY */}
       <div style={{maxWidth:960,margin:"0 auto",padding:"20px 16px"}}>
         {tab==="game"     && <TabGame     format={format} league={league} players={players} setPlayers={setPlayers} lineupsByQuarter={lineupsByQuarter} setLineupsByQuarter={setLineupsByQuarter}/>}
         {tab==="roster"   && <TabRoster   players={players} addPlayer={addPlayer} updatePlayer={updatePlayer} removePlayer={removePlayer} format={format}/>}
@@ -3205,9 +3205,9 @@ function CoachKitApp() {
   );
 }
 
-// ═══════════════════════════════════════════════════════════════════
+// 
 // TAB: SEASON STATS
-// ═══════════════════════════════════════════════════════════════════
+// 
 function TabSeason({ players, playerStats, setPlayerStats, games, setGames, practiceDates, setPracticeDates, practiceAttendance, setPracticeAttendance }) {
   const [view, setView] = useState("stats"); // stats | games | practice
   const [editGame, setEditGame] = useState(null);
@@ -3281,7 +3281,7 @@ function TabSeason({ players, playerStats, setPlayerStats, games, setGames, prac
 
       {/* Sub tabs */}
       <div style={{display:"flex",gap:4,marginBottom:14}}>
-        {[["stats","📊 Player Stats"],["games","⚽ Game Log"],["practice","📅 Practice Log"]].map(([k,l])=>(
+        {[["stats"," Player Stats"],["games"," Game Log"],["practice"," Practice Log"]].map(([k,l])=>(
           <button key={k} onClick={()=>setView(k)} style={{
             padding:"6px 14px",borderRadius:7,border:"none",cursor:"pointer",fontSize:12,fontWeight:600,fontFamily:"inherit",
             background:view===k?`linear-gradient(135deg,${C.gold},${C.goldDark})`:C.surface,
@@ -3325,13 +3325,13 @@ function TabSeason({ players, playerStats, setPlayerStats, games, setGames, prac
                 </div>
                 {isEditing && (
                   <div style={{marginTop:10,paddingTop:10,borderTop:`1px solid ${C.border}`,display:"flex",gap:16,alignItems:"center",flexWrap:"wrap"}}>
-                    {[["goals","⚽ Goals"],["assists","🅰 Assists"],["gamesPlayed","🎮 Games"]].map(([field,label])=>(
+                    {[["goals"," Goals"],["assists"," Assists"],["gamesPlayed"," Games"]].map(([field,label])=>(
                       <div key={field} style={{display:"flex",alignItems:"center",gap:6}}>
                         <span style={{fontSize:11,color:C.muted}}>{label}</span>
                         <button onClick={()=>updateStat(p.id,field,(st[field]||0)-1)} style={{
                           width:22,height:22,borderRadius:4,border:"none",cursor:"pointer",
                           background:"rgba(255,255,255,0.1)",color:C.text,fontWeight:700,fontSize:13,lineHeight:1,
-                        }}>−</button>
+                        }}></button>
                         <span style={{fontSize:15,fontWeight:700,color:C.gold,minWidth:18,textAlign:"center"}}>{st[field]||0}</span>
                         <button onClick={()=>updateStat(p.id,field,(st[field]||0)+1)} style={{
                           width:22,height:22,borderRadius:4,border:"none",cursor:"pointer",
@@ -3390,13 +3390,13 @@ function TabSeason({ players, playerStats, setPlayerStats, games, setGames, prac
                 }}>{result}</div>
                 <div style={{flex:1,minWidth:0}}>
                   <div style={{fontSize:13,fontWeight:600,color:C.text}}>vs {g.opponent}</div>
-                  <div style={{fontSize:11,color:C.muted}}>{g.date} · <b style={{color:g.homeScore>g.oppScore?C.ok:"#e74c3c"}}>{g.homeScore}</b> – {g.oppScore}</div>
+                  <div style={{fontSize:11,color:C.muted}}>{g.date}  <b style={{color:g.homeScore>g.oppScore?C.ok:"#e74c3c"}}>{g.homeScore}</b>  {g.oppScore}</div>
                   {g.notes && <div style={{fontSize:11,color:C.muted,marginTop:2,fontStyle:"italic"}}>{g.notes}</div>}
                 </div>
                 <button onClick={()=>setGames(prev=>prev.filter(x=>x.id!==g.id))} style={{
                   background:"none",border:"none",cursor:"pointer",color:"rgba(255,255,255,0.2)",
                   fontSize:16,lineHeight:1,padding:"4px 6px",
-                }}>✕</button>
+                }}></button>
               </div>
             );
           })}
@@ -3437,7 +3437,7 @@ function TabSeason({ players, playerStats, setPlayerStats, games, setGames, prac
                     <div style={{fontSize:12,fontWeight:700,color:C.ok}}>{present}/{players.length} present</div>
                     <button onClick={()=>setPracticeDates(prev=>prev.filter(x=>x.id!==pr.id))} style={{
                       background:"none",border:"none",cursor:"pointer",color:"rgba(255,255,255,0.2)",fontSize:14,
-                    }}>✕</button>
+                    }}></button>
                   </div>
                 </div>
                 <div style={{display:"flex",flexWrap:"wrap",gap:4}}>
@@ -3450,7 +3450,7 @@ function TabSeason({ players, playerStats, setPlayerStats, games, setGames, prac
                         color:here?C.ok:C.muted,
                         outline:here?`1px solid ${C.ok}33`:"none",
                       }}>
-                        {here?"✓ ":""}{p.name.split(" ")[0]}
+                        {here?" ":""}{p.name.split(" ")[0]}
                       </button>
                     );
                   })}
@@ -3464,9 +3464,9 @@ function TabSeason({ players, playerStats, setPlayerStats, games, setGames, prac
   );
 }
 
-// ═══════════════════════════════════════════════════════════════════
+// 
 // TAB: TEAM MANAGEMENT
-// ═══════════════════════════════════════════════════════════════════
+// 
 function TabTeam({ players, updatePlayer, league, games }) {
   const [view, setView] = useState("contacts"); // contacts | schedule | dev
   const [showPrintModal, setShowPrintModal] = useState(false);
@@ -3475,7 +3475,7 @@ function TabTeam({ players, updatePlayer, league, games }) {
   const [schedule, setSchedule] = useState([
     {id:"s1",date:"2026-03-22",type:"game",opponent:"FC Milford",location:"East Side Park, Field 2",notes:"Bring extra water"},
     {id:"s2",date:"2026-03-25",type:"practice",opponent:"",location:"SAY East Complex",notes:"Focus on positioning"},
-    {id:"s3",date:"2026-03-29",type:"game",opponent:"Blue Wave SC",location:"Lunken Fields",notes:"Away game — carpool"},
+    {id:"s3",date:"2026-03-29",type:"game",opponent:"Blue Wave SC",location:"Lunken Fields",notes:"Away game  carpool"},
   ]);
   const [showAddEvent, setShowAddEvent] = useState(false);
 
@@ -3490,7 +3490,7 @@ function TabTeam({ players, updatePlayer, league, games }) {
     <div>
       {/* Sub tabs */}
       <div style={{display:"flex",gap:4,marginBottom:14,flexWrap:"wrap"}}>
-        {[["contacts","📞 Parent Contacts"],["schedule","📆 Schedule"],["dev","📝 Dev Notes"]].map(([k,l])=>(
+        {[["contacts"," Parent Contacts"],["schedule"," Schedule"],["dev"," Dev Notes"]].map(([k,l])=>(
           <button key={k} onClick={()=>setView(k)} style={{
             padding:"6px 14px",borderRadius:7,border:"none",cursor:"pointer",fontSize:12,fontWeight:600,fontFamily:"inherit",
             background:view===k?`linear-gradient(135deg,${C.gold},${C.goldDark})`:C.surface,
@@ -3501,7 +3501,7 @@ function TabTeam({ players, updatePlayer, league, games }) {
           marginLeft:"auto",padding:"6px 14px",borderRadius:7,border:`1px solid ${C.border}`,
           cursor:"pointer",fontSize:12,fontWeight:600,fontFamily:"inherit",
           background:"transparent",color:C.muted,display:"flex",alignItems:"center",gap:5,
-        }}>🖨 Print Lineup</button>
+        }}> Print Lineup</button>
       </div>
 
       {/* CONTACTS */}
@@ -3528,10 +3528,10 @@ function TabTeam({ players, updatePlayer, league, games }) {
                     <div style={{fontSize:13,fontWeight:600,color:C.text}}>{p.name}</div>
                     <div style={{fontSize:11,color:C.muted}}>
                       {p.parentName||<span style={{fontStyle:"italic",opacity:0.5}}>No contact info</span>}
-                      {p.parentPhone&&` · ${p.parentPhone}`}
+                      {p.parentPhone&&`  ${p.parentPhone}`}
                     </div>
                   </div>
-                  <span style={{fontSize:11,color:C.muted}}>{isEditing?"▲":"▼"}</span>
+                  <span style={{fontSize:11,color:C.muted}}>{isEditing?"":""}</span>
                 </div>
                 {isEditing && (
                   <div style={{marginTop:10,paddingTop:10,borderTop:`1px solid ${C.border}`,display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}
@@ -3584,7 +3584,7 @@ function TabTeam({ players, updatePlayer, league, games }) {
             </Card>
           )}
           {[...schedule].sort((a,b)=>a.date.localeCompare(b.date)).map(ev=>{
-            const typeIcon = ev.type==="game"?"⚽":ev.type==="practice"?"🏃":"📅";
+            const typeIcon = ev.type==="game"?"":ev.type==="practice"?"":"";
             const typeColor = ev.type==="game"?C.gold:ev.type==="practice"?C.ok:C.muted;
             const isPast = ev.date < new Date().toISOString().slice(0,10);
             return (
@@ -3608,12 +3608,12 @@ function TabTeam({ players, updatePlayer, league, games }) {
                     </div>
                     <div style={{fontSize:10,color:typeColor,fontWeight:700,textTransform:"uppercase"}}>{ev.type}</div>
                   </div>
-                  <div style={{fontSize:11,color:C.muted}}>{ev.date}{ev.location&&` · ${ev.location}`}</div>
+                  <div style={{fontSize:11,color:C.muted}}>{ev.date}{ev.location&&`  ${ev.location}`}</div>
                   {ev.notes&&<div style={{fontSize:11,color:C.muted,marginTop:2,fontStyle:"italic"}}>{ev.notes}</div>}
                 </div>
                 <button onClick={()=>setSchedule(prev=>prev.filter(x=>x.id!==ev.id))} style={{
                   background:"none",border:"none",cursor:"pointer",color:"rgba(255,255,255,0.2)",fontSize:14,flexShrink:0,
-                }}>✕</button>
+                }}></button>
               </div>
             );
           })}
@@ -3624,7 +3624,7 @@ function TabTeam({ players, updatePlayer, league, games }) {
       {view==="dev" && (
         <div>
           <div style={{fontSize:11,color:C.muted,marginBottom:10}}>
-            Private development notes per player — what to work on, progress, observations.
+            Private development notes per player  what to work on, progress, observations.
           </div>
           {players.map(p=>(
             <div key={p.id} style={{
@@ -3662,13 +3662,13 @@ function TabTeam({ players, updatePlayer, league, games }) {
   );
 }
 
-// ═══════════════════════════════════════════════════════════════════
+// 
 // PRINT LINEUP MODAL
-// ═══════════════════════════════════════════════════════════════════
+// 
 function PrintLineupModal({ players, onClose }) {
   const [quarter, setQuarter] = useState(1);
   // We'll get the lineup from window if passed; for standalone we recreate the field
-  // The modal shows a field diagram with player names — user can print via browser
+  // The modal shows a field diagram with player names  user can print via browser
   const activePlayers = players.filter(p=>!p.injured&&!p.out);
 
   const handlePrint = () => {
@@ -3722,8 +3722,8 @@ function PrintLineupModal({ players, onClose }) {
           display:"flex",justifyContent:"space-between",alignItems:"center",
           padding:"14px 18px",borderBottom:`1px solid ${C.border}`,
         }}>
-          <div style={{fontSize:15,fontWeight:800,color:C.gold}}>🖨 Print Lineup Card</div>
-          <button onClick={onClose} style={{background:"none",border:"none",cursor:"pointer",color:C.muted,fontSize:20}}>✕</button>
+          <div style={{fontSize:15,fontWeight:800,color:C.gold}}> Print Lineup Card</div>
+          <button onClick={onClose} style={{background:"none",border:"none",cursor:"pointer",color:C.muted,fontSize:20}}></button>
         </div>
 
         <div style={{padding:"16px 18px"}}>
@@ -3733,8 +3733,8 @@ function PrintLineupModal({ players, onClose }) {
 
           {/* Preview */}
           <div id="print-lineup-content">
-            <h1 style={{textAlign:"center",fontSize:18,color:"#e8e4dc",margin:"0 0 4px",fontFamily:"Georgia,serif"}}>⚽ Lineup Card</h1>
-            <div style={{textAlign:"center",fontSize:11,color:C.muted,marginBottom:14}}>{today} · {activePlayers.length} players active</div>
+            <h1 style={{textAlign:"center",fontSize:18,color:"#e8e4dc",margin:"0 0 4px",fontFamily:"Georgia,serif"}}> Lineup Card</h1>
+            <div style={{textAlign:"center",fontSize:11,color:C.muted,marginBottom:14}}>{today}  {activePlayers.length} players active</div>
 
             {/* Field diagram */}
             <div style={{position:"relative",width:300,height:450,margin:"0 auto",
@@ -3775,7 +3775,7 @@ function PrintLineupModal({ players, onClose }) {
             {/* Bench */}
             {bench.length>0&&(
               <div style={{marginTop:14,padding:"10px 12px",background:C.surface,borderRadius:8,border:`1px solid ${C.border}`}}>
-                <div style={{fontSize:11,fontWeight:700,color:C.gold,marginBottom:6}}>🪑 Bench</div>
+                <div style={{fontSize:11,fontWeight:700,color:C.gold,marginBottom:6}}> Bench</div>
                 <div style={{display:"flex",flexWrap:"wrap",gap:4}}>
                   {bench.map(p=>(
                     <div key={p.id} style={{
@@ -3802,7 +3802,7 @@ function PrintLineupModal({ players, onClose }) {
           </div>
 
           <div style={{marginTop:16,display:"flex",gap:8}}>
-            <Btn primary full onClick={handlePrint}>🖨 Print</Btn>
+            <Btn primary full onClick={handlePrint}> Print</Btn>
             <Btn ghost onClick={onClose}>Close</Btn>
           </div>
         </div>
