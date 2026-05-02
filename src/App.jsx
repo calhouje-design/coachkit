@@ -1934,9 +1934,9 @@ function TabGame({ format, league, players, setPlayers, lineupsByQuarter, setLin
 
           {/* Mid-game injury panel */}
           <Card style={{marginBottom:12,border:"1px solid rgba(231,76,60,0.2)"}}>
-            <div style={{fontSize:11,color:"#e74c3c",fontWeight:700,marginBottom:6,textTransform:"uppercase",letterSpacing:"0.05em"}}> Mark Injury</div>
+            <div style={{fontSize:11,color:"#e74c3c",fontWeight:700,marginBottom:6,textTransform:"uppercase",letterSpacing:"0.05em"}}>Mark Injury</div>
             <div style={{fontSize:10,color:C.muted,marginBottom:8,lineHeight:1.5}}>
-              Tap  to pull a player now. Remaining quarters auto-replan.
+              Tap "Pull" to remove a player now. Remaining quarters auto-replan.
             </div>
             {active.filter(p => !p.midGameInjury).length === 0 && (
               <div style={{fontSize:11,color:C.muted,fontStyle:"italic"}}>No active players</div>
@@ -1954,13 +1954,13 @@ function TabGame({ format, league, players, setPlayers, lineupsByQuarter, setLin
                       fontSize:8,fontWeight:700,color:"#0a0d0f"}}>{p.number}</div>
                     <div style={{flex:1,minWidth:0}}>
                       <div style={{fontSize:11,color:C.text,fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{p.name.split(" ")[0]}</div>
-                      <div style={{fontSize:9,color:C.muted}}>{onField?" On field":" Bench"}</div>
+                      <div style={{fontSize:9,color:C.muted}}>{onField?"On field":"Bench"}</div>
                     </div>
                     <button onClick={() => markMidGameInjury(p.id)} style={{
-                      background:"rgba(192,57,43,0.2)",border:"1px solid rgba(192,57,43,0.4)",
-                      borderRadius:4,cursor:"pointer",fontSize:13,color:"#e74c3c",
-                      padding:"2px 6px",fontFamily:"inherit",flexShrink:0,lineHeight:1,
-                    }}></button>
+                      background:"rgba(192,57,43,0.2)",border:"1px solid rgba(192,57,43,0.5)",
+                      borderRadius:5,cursor:"pointer",fontSize:11,color:"#e74c3c",
+                      padding:"4px 10px",fontFamily:"inherit",flexShrink:0,fontWeight:700,
+                    }}>Pull</button>
                   </div>
                 );
               })}
@@ -2312,15 +2312,29 @@ function PlayerRow({ player, onUpdate, onRemove }) {
         <div style={{fontSize:9,fontWeight:700,color:sc,background:`${sc}22`,padding:"2px 7px",borderRadius:4}}>
           {player.injured?"INJURED":player.out?"OUT":"ACTIVE"}
         </div>
-        <div style={{display:"flex",gap:3}}>
-          <Btn sm onClick={()=>setExpanded(!expanded)}></Btn>
-          <Btn sm warn={!player.injured} onClick={()=>onUpdate({...player,injured:!player.injured,out:false})}>
-            {player.injured?"":""}
-          </Btn>
-          <Btn sm warn={!player.out} onClick={()=>onUpdate({...player,out:!player.out,injured:false})}>
-            {player.out?"":""}
-          </Btn>
-          <Btn sm danger onClick={onRemove}></Btn>
+        <div style={{display:"flex",gap:4}}>
+          <button onClick={()=>setExpanded(!expanded)} style={{
+            padding:"5px 10px",borderRadius:6,border:`1px solid rgba(255,255,255,0.15)`,
+            cursor:"pointer",fontSize:11,fontWeight:700,fontFamily:"inherit",
+            background:"rgba(255,255,255,0.08)",color:C.text,
+          }}>{expanded?"Hide":"Edit"}</button>
+          <button onClick={()=>onUpdate({...player,injured:!player.injured,out:false})} style={{
+            padding:"5px 10px",borderRadius:6,border:`1px solid ${player.injured?"#e74c3c":"rgba(255,255,255,0.15)"}`,
+            cursor:"pointer",fontSize:11,fontWeight:700,fontFamily:"inherit",
+            background:player.injured?"rgba(231,76,60,0.25)":"rgba(255,255,255,0.08)",
+            color:player.injured?"#e74c3c":C.muted,
+          }}>{player.injured?"Return":"Inj"}</button>
+          <button onClick={()=>onUpdate({...player,out:!player.out,injured:false})} style={{
+            padding:"5px 10px",borderRadius:6,border:`1px solid ${player.out?"#e67e22":"rgba(255,255,255,0.15)"}`,
+            cursor:"pointer",fontSize:11,fontWeight:700,fontFamily:"inherit",
+            background:player.out?"rgba(230,126,34,0.25)":"rgba(255,255,255,0.08)",
+            color:player.out?"#e67e22":C.muted,
+          }}>{player.out?"Active":"Out"}</button>
+          <button onClick={onRemove} style={{
+            padding:"5px 10px",borderRadius:6,border:"1px solid rgba(192,57,43,0.4)",
+            cursor:"pointer",fontSize:11,fontWeight:700,fontFamily:"inherit",
+            background:"rgba(192,57,43,0.15)",color:"#e74c3c",
+          }}>Del</button>
         </div>
       </div>
 
