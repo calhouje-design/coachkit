@@ -1475,7 +1475,7 @@ function TabGame({ format, league, players, setPlayers, lineupsByQuarter, setLin
               <button onClick={()=>setHomeScore(s=>Math.max(0,s-1))} style={{
                 width:34,height:34,borderRadius:8,border:"none",cursor:"pointer",
                 background:"rgba(255,255,255,0.08)",color:C.text,fontSize:20,fontWeight:300,lineHeight:1,
-              }}></button>
+              }}>-</button>
               <div style={{fontSize:52,fontWeight:900,color:C.gold,lineHeight:1,minWidth:56,textAlign:"center",
                 textShadow:`0 0 30px ${C.gold}66`}}>{homeScore}</div>
               <button onClick={()=>setHomeScore(s=>s+1)} style={{
@@ -1497,7 +1497,7 @@ function TabGame({ format, league, players, setPlayers, lineupsByQuarter, setLin
               <button onClick={()=>setAwayScore(s=>Math.max(0,s-1))} style={{
                 width:34,height:34,borderRadius:8,border:"none",cursor:"pointer",
                 background:"rgba(255,255,255,0.08)",color:C.text,fontSize:20,fontWeight:300,lineHeight:1,
-              }}></button>
+              }}>-</button>
               <div style={{fontSize:52,fontWeight:900,color:homeScore>awayScore?C.text:homeScore<awayScore?"#e74c3c":C.text,
                 lineHeight:1,minWidth:56,textAlign:"center"}}>{awayScore}</div>
               <button onClick={()=>setAwayScore(s=>s+1)} style={{
@@ -1716,7 +1716,7 @@ function TabGame({ format, league, players, setPlayers, lineupsByQuarter, setLin
                           }} style={{
                             width:22,height:22,borderRadius:4,border:"none",cursor:"pointer",
                             background:"rgba(255,255,255,0.1)",color:C.text,fontWeight:700,fontSize:14,lineHeight:1,
-                          }}></button>
+                          }}>-</button>
                           <span style={{fontSize:18,fontWeight:800,color:C.gold,minWidth:20,textAlign:"center"}}>{val}</span>
                           <button onClick={()=>{
                             let d=curD,m=curM,f=curF;
@@ -2074,124 +2074,105 @@ function TabGame({ format, league, players, setPlayers, lineupsByQuarter, setLin
 // 
 function ShareLineupModal({ players, lineupsByQuarter, quarter, homeScore, awayScore, opponent, league, onClose }) {
   const canvasRef = useRef(null);
-  const [rendered, setRendered] = useState(false);
+
+  const FBASE = {
+    GK:{x:50,y:88},LD:{x:22,y:75},CD:{x:50,y:72},RD:{x:78,y:75},
+    LM:{x:18,y:52},CM:{x:50,y:50},RM:{x:82,y:52},
+    LF:{x:28,y:22},CF:{x:50,y:18},RF:{x:72,y:22},
+  };
 
   const roundRect = (ctx, x, y, w, h, r) => {
     ctx.beginPath();
-    ctx.moveTo(x+r, y);
-    ctx.lineTo(x+w-r, y); ctx.quadraticCurveTo(x+w, y, x+w, y+r);
-    ctx.lineTo(x+w, y+h-r); ctx.quadraticCurveTo(x+w, y+h, x+w-r, y+h);
-    ctx.lineTo(x+r, y+h); ctx.quadraticCurveTo(x, y+h, x, y+h-r);
-    ctx.lineTo(x, y+r); ctx.quadraticCurveTo(x, y, x+r, y);
+    ctx.moveTo(x+r,y); ctx.lineTo(x+w-r,y); ctx.quadraticCurveTo(x+w,y,x+w,y+r);
+    ctx.lineTo(x+w,y+h-r); ctx.quadraticCurveTo(x+w,y+h,x+w-r,y+h);
+    ctx.lineTo(x+r,y+h); ctx.quadraticCurveTo(x,y+h,x,y+h-r);
+    ctx.lineTo(x,y+r); ctx.quadraticCurveTo(x,y,x+r,y);
     ctx.closePath();
+  };
+
+  const drawField = (ctx, fx, fy, fw, fh, qNum) => {
+    const fg = ctx.createLinearGradient(fx,fy,fx,fy+fh);
+    fg.addColorStop(0,"#1e4d1a"); fg.addColorStop(1,"#163d13");
+    ctx.fillStyle=fg; roundRect(ctx,fx,fy,fw,fh,8); ctx.fill();
+    ctx.strokeStyle="rgba(255,255,255,0.25)"; ctx.lineWidth=1;
+    roundRect(ctx,fx,fy,fw,fh,8); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(fx+8,fy+fh/2); ctx.lineTo(fx+fw-8,fy+fh/2); ctx.stroke();
+    ctx.beginPath(); ctx.arc(fx+fw/2,fy+fh/2,22,0,Math.PI*2); ctx.stroke();
+    ctx.strokeRect(fx+fw*0.28,fy+4,fw*0.44,36);
+    ctx.strokeRect(fx+fw*0.28,fy+fh-40,fw*0.44,36);
+    ctx.fillStyle="rgba(0,0,0,0.45)"; roundRect(ctx,fx+5,fy+5,24,15,3); ctx.fill();
+    ctx.fillStyle="#e8a020"; ctx.font="bold 10px Arial"; ctx.textAlign="center";
+    ctx.fillText("Q"+qNum,fx+17,fy+16);
+    const lineup = lineupsByQuarter[qNum];
+    if (lineup && lineup.starters) {
+      lineup.starters.forEach(function(slot) {
+        const fb = FBASE[slot.pos]||{x:50,y:50};
+        const px = fx+(fb.x/100)*fw;
+        const py = fy+(fb.y/100)*fh;
+        const grad = ctx.createRadialGradient(px,py,1,px,py,11);
+        grad.addColorStop(0,"#f5c86a"); grad.addColorStop(1,"#b87818");
+        ctx.fillStyle=grad; ctx.beginPath(); ctx.arc(px,py,11,0,Math.PI*2); ctx.fill();
+        ctx.strokeStyle="rgba(255,255,255,0.7)"; ctx.lineWidth=0.8; ctx.stroke();
+        const num=slot.player?slot.player.number:"?";
+        ctx.fillStyle="#0a0d0f"; ctx.font="bold 8px Arial"; ctx.textAlign="center";
+        ctx.fillText(num,px,py+3);
+        const fname=slot.player?slot.player.name.split(" ")[0].slice(0,5):"";
+        ctx.fillStyle="#fff"; ctx.font="6px Arial"; ctx.fillText(fname,px,py+17);
+        ctx.fillStyle="rgba(255,220,60,0.95)"; ctx.font="bold 6px Arial"; ctx.fillText(slot.pos,px,py-13);
+      });
+    } else {
+      ctx.fillStyle="rgba(255,255,255,0.18)"; ctx.font="9px Arial"; ctx.textAlign="center";
+      ctx.fillText("Not planned",fx+fw/2,fy+fh/2+3);
+    }
   };
 
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
-    const W = 600, H = 900;
+    const W = 600, H = 920;
     canvas.width = W; canvas.height = H;
-
-    // Background
-    ctx.fillStyle = "#0c1409"; ctx.fillRect(0, 0, W, H);
-
-    // Header bar
-    ctx.fillStyle = "#1a2518"; ctx.fillRect(0, 0, W, 78);
-
-    // Logo
-    ctx.fillStyle = "#e8a020"; ctx.beginPath(); ctx.arc(44,39,22,0,Math.PI*2); ctx.fill();
-    ctx.fillStyle="#0a0d0f"; ctx.font="bold 18px Arial"; ctx.textAlign="center"; ctx.fillText("",44,46);
-
-    // App name
-    ctx.fillStyle="#e8e4dc"; ctx.font="bold 20px Arial"; ctx.textAlign="left"; ctx.fillText("CoachKit",76,33);
-    ctx.fillStyle="#7a7570"; ctx.font="10px Arial"; ctx.fillText("SAY East Youth Soccer",76,50);
-
-    // Quarter badge
-    ctx.fillStyle="#e8a020"; ctx.font="bold 13px Arial"; ctx.textAlign="right";
-    ctx.fillText(`${league}    Q${quarter} Lineup`, W-18, 44);
-
-    // Score card
-    ctx.fillStyle="rgba(232,160,32,0.1)";
-    roundRect(ctx,16,88,W-32,62,10); ctx.fill();
-    ctx.strokeStyle="rgba(232,160,32,0.3)"; ctx.lineWidth=1;
-    roundRect(ctx,16,88,W-32,62,10); ctx.stroke();
-
+    ctx.fillStyle="#0c1409"; ctx.fillRect(0,0,W,H);
+    ctx.fillStyle="#1a2518"; ctx.fillRect(0,0,W,70);
+    ctx.fillStyle="#e8a020"; ctx.beginPath(); ctx.arc(36,35,18,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle="#0a0d0f"; ctx.font="bold 14px Arial"; ctx.textAlign="center"; ctx.fillText("CK",36,40);
+    ctx.fillStyle="#e8e4dc"; ctx.font="bold 17px Arial"; ctx.textAlign="left"; ctx.fillText("CoachKit",62,28);
+    ctx.fillStyle="#7a7570"; ctx.font="9px Arial"; ctx.fillText("SAY East Youth Soccer",62,44);
+    ctx.fillStyle="#e8a020"; ctx.font="bold 11px Arial"; ctx.textAlign="right"; ctx.fillText(league,W-14,28);
+    ctx.fillStyle="#7a7570"; ctx.font="9px Arial"; ctx.fillText(new Date().toLocaleDateString(),W-14,44);
+    ctx.fillStyle="rgba(232,160,32,0.1)"; roundRect(ctx,12,78,W-24,50,7); ctx.fill();
+    ctx.strokeStyle="rgba(232,160,32,0.3)"; ctx.lineWidth=1; roundRect(ctx,12,78,W-24,50,7); ctx.stroke();
     ctx.textAlign="center";
-    ctx.fillStyle="#7a7570"; ctx.font="bold 10px Arial"; ctx.fillText("US", W/2-80, 106);
-    ctx.fillStyle=opponent?"#e8e4dc":"#7a7570"; ctx.fillText((opponent||"THEM").toUpperCase(), W/2+80, 106);
-    ctx.fillStyle="#e8a020"; ctx.font="bold 38px Arial"; ctx.fillText(homeScore, W/2-80, 140);
-    ctx.fillStyle="#555"; ctx.font="bold 24px Arial"; ctx.fillText(":", W/2, 136);
-    ctx.fillStyle=homeScore<awayScore?"#e74c3c":"#e8e4dc"; ctx.font="bold 38px Arial"; ctx.fillText(awayScore, W/2+80, 140);
+    ctx.fillStyle="#7a7570"; ctx.font="bold 9px Arial"; ctx.fillText("US",W/2-70,93);
+    ctx.fillStyle=opponent?"#e8e4dc":"#7a7570"; ctx.fillText((opponent||"THEM").toUpperCase(),W/2+70,93);
+    ctx.fillStyle="#e8a020"; ctx.font="bold 28px Arial"; ctx.fillText(homeScore,W/2-70,118);
+    ctx.fillStyle="#555"; ctx.font="bold 18px Arial"; ctx.fillText(":",W/2,114);
+    ctx.fillStyle=homeScore<awayScore?"#e74c3c":"#e8e4dc"; ctx.font="bold 28px Arial"; ctx.fillText(awayScore,W/2+70,118);
+    var pad=10, fw=(W-pad*3)/2, fh=330;
+    [[1,0,0],[2,1,0],[3,0,1],[4,1,1]].forEach(function(qc) {
+      var q=qc[0], col=qc[1], row=qc[2];
+      drawField(ctx, pad+col*(fw+pad), 136+row*(fh+pad), fw, fh, q);
+    });
+    var benchY=136+2*(fh+pad)+6;
+    ctx.fillStyle="#141a12"; roundRect(ctx,12,benchY,W-24,72,5); ctx.fill();
+    ctx.strokeStyle="rgba(255,255,255,0.06)"; roundRect(ctx,12,benchY,W-24,72,5); ctx.stroke();
+    ctx.fillStyle="#e8a020"; ctx.font="bold 8px Arial"; ctx.textAlign="left";
+    ctx.fillText("BENCH",20,benchY+14);
+    var bench=(lineupsByQuarter[1]&&lineupsByQuarter[1].bench)||[];
+    bench.forEach(function(p,i) {
+      var bx=20+(i%6)*((W-40)/6);
+      var by=benchY+22+Math.floor(i/6)*22;
+      ctx.fillStyle="rgba(255,255,255,0.05)"; roundRect(ctx,bx,by,(W-40)/6-3,16,3); ctx.fill();
+      ctx.fillStyle="#e8e4dc"; ctx.font="8px Arial"; ctx.textAlign="left";
+      ctx.fillText("#"+p.number+" "+p.name.split(" ")[0],bx+3,by+11);
+    });
+    ctx.fillStyle="#444"; ctx.font="8px Arial"; ctx.textAlign="center";
+    ctx.fillText("CoachKit - "+league+" - "+new Date().toLocaleDateString(),W/2,H-8);
+  }, [lineupsByQuarter]);
 
-    // Field
-    const fx=36,fy=164,fw=W-72,fh=460;
-    const fg=ctx.createLinearGradient(fx,fy,fx,fy+fh);
-    fg.addColorStop(0,"#1e4d1a"); fg.addColorStop(1,"#163d13");
-    ctx.fillStyle=fg; roundRect(ctx,fx,fy,fw,fh,14); ctx.fill();
-    ctx.strokeStyle="rgba(255,255,255,0.2)"; ctx.lineWidth=1.5;
-    roundRect(ctx,fx,fy,fw,fh,14); ctx.stroke();
-
-    // Field lines
-    ctx.beginPath(); ctx.moveTo(fx+16,fy+fh/2); ctx.lineTo(fx+fw-16,fy+fh/2); ctx.stroke();
-    ctx.beginPath(); ctx.arc(fx+fw/2,fy+fh/2,36,0,Math.PI*2); ctx.stroke();
-    ctx.strokeRect(fx+fw*0.25,fy+10,fw*0.5,70);
-    ctx.strokeRect(fx+fw*0.25,fy+fh-80,fw*0.5,70);
-
-    // Player positions
-    const lineup = lineupsByQuarter[quarter];
-    const FBASE = {
-      GK:{x:50,y:88},LD:{x:22,y:75},CD:{x:50,y:72},RD:{x:78,y:75},
-      LM:{x:18,y:52},CM:{x:50,y:50},RM:{x:82,y:52},
-      LF:{x:28,y:22},CF:{x:50,y:18},RF:{x:72,y:22},
-    };
-
-    if (lineup?.starters) {
-      lineup.starters.forEach(slot => {
-        const fb = FBASE[slot.pos]||{x:50,y:50};
-        const px = fx+(fb.x/100)*fw;
-        const py = fy+(fb.y/100)*fh;
-
-        const grad = ctx.createRadialGradient(px,py,2,px,py,18);
-        grad.addColorStop(0,"#f5c86a"); grad.addColorStop(1,"#b87818");
-        ctx.fillStyle=grad; ctx.beginPath(); ctx.arc(px,py,18,0,Math.PI*2); ctx.fill();
-        ctx.strokeStyle="rgba(255,255,255,0.8)"; ctx.lineWidth=1.5; ctx.stroke();
-
-        const num=slot.player?.number||"?";
-        ctx.fillStyle="#0a0d0f"; ctx.font=`bold ${num.length>1?11:13}px Arial`; ctx.textAlign="center";
-        ctx.fillText(num,px,py+5);
-        const fname=(slot.player?.name||"").split(" ")[0];
-        ctx.fillStyle="#fff"; ctx.font="bold 9px Arial"; ctx.fillText(fname,px,py+30);
-        ctx.fillStyle="rgba(232,160,32,0.9)"; ctx.font="bold 8px Arial"; ctx.fillText(slot.pos,px,py-23);
-      });
-    }
-
-    // Bench section
-    const bench=(lineup?.bench)||[];
-    if (bench.length>0) {
-      const by2=fy+fh+14;
-      ctx.fillStyle="#141a12"; roundRect(ctx,fx,by2,fw,16+Math.ceil(bench.length/3)*30,8); ctx.fill();
-      ctx.strokeStyle="rgba(255,255,255,0.07)"; roundRect(ctx,fx,by2,fw,16+Math.ceil(bench.length/3)*30,8); ctx.stroke();
-      ctx.fillStyle="#e8a020"; ctx.font="bold 9px Arial"; ctx.textAlign="left"; ctx.fillText(" BENCH",fx+10,by2+14);
-      bench.forEach((p,i)=>{
-        const bx=fx+10+(i%3)*((fw-20)/3);
-        const by3=by2+22+Math.floor(i/3)*30;
-        ctx.fillStyle="rgba(255,255,255,0.05)"; roundRect(ctx,bx,by3,(fw-20)/3-6,22,4); ctx.fill();
-        ctx.fillStyle="#e8e4dc"; ctx.font="10px Arial"; ctx.textAlign="left";
-        ctx.fillText(`#${p.number} ${p.name.split(" ")[0]}`,bx+6,by3+15);
-      });
-    }
-
-    // Footer
-    ctx.fillStyle="#555"; ctx.font="9px Arial"; ctx.textAlign="center";
-    ctx.fillText(`CoachKit  ${new Date().toLocaleDateString()}`,W/2,H-10);
-
-    setRendered(true);
-  }, []);
-
-  const handleDownload = () => {
-    const a = document.createElement("a");
-    a.download = `CoachKit_Q${quarter}_Lineup.png`;
+  const handleDownload = function() {
+    var a = document.createElement("a");
+    a.download = "CoachKit_AllQuarters_Lineup.png";
     a.href = canvasRef.current.toDataURL("image/png");
     a.click();
   };
@@ -2200,24 +2181,34 @@ function ShareLineupModal({ players, lineupsByQuarter, quarter, homeScore, awayS
     <div style={{position:"fixed",inset:0,zIndex:9999,background:"rgba(0,0,0,0.88)",
       display:"flex",alignItems:"center",justifyContent:"center",padding:16}}
       onClick={onClose}>
-      <div style={{background:"#141a12",borderRadius:16,width:"100%",maxWidth:480,
-        border:`1px solid ${C.border}`,overflow:"hidden"}} onClick={e=>e.stopPropagation()}>
+      <div style={{background:"#141a12",borderRadius:16,width:"100%",maxWidth:520,
+        border:"1px solid rgba(255,255,255,0.08)",overflow:"hidden",maxHeight:"92vh",display:"flex",flexDirection:"column"}}
+        onClick={function(e){e.stopPropagation();}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",
-          padding:"14px 18px",borderBottom:`1px solid ${C.border}`}}>
-          <div style={{fontSize:15,fontWeight:800,color:C.gold}}> Share Lineup</div>
-          <button onClick={onClose} style={{background:"none",border:"none",cursor:"pointer",color:C.muted,fontSize:20}}></button>
+          padding:"14px 18px",borderBottom:"1px solid rgba(255,255,255,0.08)",flexShrink:0}}>
+          <div style={{fontSize:15,fontWeight:800,color:"#e8a020"}}>Share Lineup - All 4 Quarters</div>
+          <button onClick={onClose} style={{
+            background:"rgba(255,255,255,0.1)",border:"1px solid rgba(255,255,255,0.2)",
+            borderRadius:6,cursor:"pointer",color:"#e8e4dc",fontSize:13,fontWeight:700,padding:"4px 12px",fontFamily:"inherit",
+          }}>Close</button>
         </div>
-        <div style={{padding:"16px 18px"}}>
-          <div style={{fontSize:11,color:C.muted,marginBottom:12,lineHeight:1.6}}>
-            Preview below  tap <b style={{color:C.text}}>Save Image</b> to download, then share via Messages or any app.
+        <div style={{padding:"14px 16px",overflow:"auto"}}>
+          <div style={{fontSize:11,color:"#7a7570",marginBottom:10,lineHeight:1.5}}>
+            All 4 quarters on one image. Tap Save Image to download and share.
           </div>
-          <div style={{borderRadius:10,overflow:"hidden",marginBottom:14,
-            border:`1px solid ${C.border}`,background:"#0c1409"}}>
+          <div style={{borderRadius:8,overflow:"hidden",marginBottom:12,border:"1px solid rgba(255,255,255,0.08)",background:"#0c1409"}}>
             <canvas ref={canvasRef} style={{width:"100%",height:"auto",display:"block"}}/>
           </div>
           <div style={{display:"flex",gap:8}}>
-            <Btn primary full onClick={handleDownload}> Save Image</Btn>
-            <Btn ghost onClick={onClose}>Close</Btn>
+            <button onClick={handleDownload} style={{
+              flex:1,padding:"10px",borderRadius:7,border:"none",cursor:"pointer",
+              background:"linear-gradient(135deg,#e8a020,#b87818)",color:"#0a0d0f",
+              fontWeight:700,fontSize:13,fontFamily:"inherit",
+            }}>Save Image</button>
+            <button onClick={onClose} style={{
+              padding:"10px 18px",borderRadius:7,border:"1px solid rgba(255,255,255,0.08)",
+              cursor:"pointer",background:"transparent",color:"#7a7570",fontSize:13,fontFamily:"inherit",
+            }}>Close</button>
           </div>
         </div>
       </div>
@@ -2735,14 +2726,24 @@ function DrillModal({ drill, onClose }) {
             <button onClick={onClose} style={{
               position:"absolute",top:12,right:12,
               width:32,height:32,borderRadius:"50%",border:"none",cursor:"pointer",
-              background:"rgba(0,0,0,0.6)",color:"#fff",fontSize:16,
+              background:"rgba(0,0,0,0.6)",color:"#fff",fontSize:18,fontWeight:700,
               display:"flex",alignItems:"center",justifyContent:"center",
-            }}></button>
+            }}>X</button>
           </div>
         )}
         {!drill.image && (
-          <div style={{display:"flex",justifyContent:"flex-end",padding:"12px 16px 0"}}>
-            <button onClick={onClose} style={{background:"none",border:"none",cursor:"pointer",color:C.muted,fontSize:22}}></button>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"12px 16px 0"}}>
+            {/* Mini field diagram */}
+            <svg width="80" height="56" viewBox="0 0 80 56" style={{borderRadius:5,flexShrink:0}}>
+              <rect width="80" height="56" rx="4" fill="#1e4d1a"/>
+              <rect x="2" y="2" width="76" height="52" rx="3" fill="none" stroke="rgba(255,255,255,0.3)" strokeWidth="1"/>
+              <line x1="2" y1="28" x2="78" y2="28" stroke="rgba(255,255,255,0.3)" strokeWidth="1"/>
+              <circle cx="40" cy="28" r="8" fill="none" stroke="rgba(255,255,255,0.3)" strokeWidth="1"/>
+              <rect x="25" y="2" width="30" height="12" fill="none" stroke="rgba(255,255,255,0.25)" strokeWidth="1"/>
+              <rect x="25" y="42" width="30" height="12" fill="none" stroke="rgba(255,255,255,0.25)" strokeWidth="1"/>
+              <text x="40" y="32" textAnchor="middle" fill="#e8a020" fontSize="7" fontWeight="bold">{drill.category}</text>
+            </svg>
+            <button onClick={onClose} style={{background:"rgba(255,255,255,0.1)",border:"1px solid rgba(255,255,255,0.2)",borderRadius:6,cursor:"pointer",color:C.text,fontSize:12,fontWeight:700,padding:"4px 12px"}}>Close</button>
           </div>
         )}
 
@@ -3107,7 +3108,7 @@ function CoachKitApp() {
   const [tab,             setTab]             = useState("game");
   const [league,          setLeague]          = useState("U8 / Passers");
   const [format,          setFormat]          = useState("6v6");
-  const [lineupsByQuarter,setLineupsByQuarter]= useState({});
+  const [lineupsByQuarter,setLineupsByQuarter]= usePersistedState(pfx+"lineups", {});
 
   const [players,            setPlayers]            = usePersistedState(pfx+"players",      SAMPLE_PLAYERS);
   const [customDrills,       setCustomDrills]       = usePersistedState(pfx+"customDrills", []);
@@ -3159,7 +3160,15 @@ function CoachKitApp() {
                 background:`linear-gradient(135deg,${C.gold},${C.goldDark})`,
                 display:"flex",alignItems:"center",justifyContent:"center",fontSize:22,
                 boxShadow:`0 4px 12px ${C.gold}44`,
-              }}></div>
+              }}>
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
+                  <circle cx="12" cy="12" r="10" fill="#0a0d0f" stroke="#0a0d0f" strokeWidth="1"/>
+                  <circle cx="12" cy="12" r="10" fill="none" stroke="#0a0d0f" strokeWidth="0.5"/>
+                  <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2z" fill="#0a0d0f"/>
+                  <polygon points="12,4 14,9 19,9 15,13 17,18 12,15 7,18 9,13 5,9 10,9" fill="#0a0d0f" stroke="#e8a020" strokeWidth="0.8"/>
+                  <text x="12" y="16" textAnchor="middle" fontSize="9" fill="#0a0d0f" fontWeight="bold">CK</text>
+                </svg>
+              </div>
               <div>
                 <div style={{fontSize:19,fontWeight:800,color:C.text,letterSpacing:"-0.01em"}}>CoachKit</div>
                 <div style={{fontSize:9,color:C.muted,letterSpacing:"0.1em",textTransform:"uppercase"}}>Youth Soccer Manager</div>
@@ -3344,7 +3353,7 @@ function TabSeason({ players, playerStats, setPlayerStats, games, setGames, prac
                         <button onClick={()=>updateStat(p.id,field,(st[field]||0)-1)} style={{
                           width:22,height:22,borderRadius:4,border:"none",cursor:"pointer",
                           background:"rgba(255,255,255,0.1)",color:C.text,fontWeight:700,fontSize:13,lineHeight:1,
-                        }}></button>
+                        }}>-</button>
                         <span style={{fontSize:15,fontWeight:700,color:C.gold,minWidth:18,textAlign:"center"}}>{st[field]||0}</span>
                         <button onClick={()=>updateStat(p.id,field,(st[field]||0)+1)} style={{
                           width:22,height:22,borderRadius:4,border:"none",cursor:"pointer",
