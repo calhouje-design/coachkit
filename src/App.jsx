@@ -3170,8 +3170,7 @@ function CoachKitApp() {
                 {injured>0&&<Stat label=" Injured" val={injured} color="#e74c3c"/>}
                 {midGameCount>0&&<Stat label=" Mid-Game" val={midGameCount} color="#e74c3c"/>}
                 {out>0    &&<Stat label=" Out"     val={out}     color="#e67e22"/>}
-              </div>
-              <UserMenu />
+                <UserMenu />
               </div>
             </div>
           </div>
