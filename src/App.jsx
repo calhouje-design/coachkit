@@ -3,7 +3,7 @@ import { useUser } from "@clerk/clerk-react";
 import AuthGate from "./components/AuthGate.jsx";
 import UserMenu from "./components/UserMenu.jsx";
 
-// ── localStorage persistence helpers ────────────────────────────────
+// ── localStorage persistence helper ─────────────────────────────────
 function usePersistedState(key, defaultValue) {
   const [state, setState] = useState(() => {
     try {
@@ -13,7 +13,7 @@ function usePersistedState(key, defaultValue) {
   });
   useEffect(() => {
     try { localStorage.setItem(key, JSON.stringify(state)); }
-    catch { /* storage full or unavailable */ }
+    catch { /* storage full */ }
   }, [key, state]);
   return [state, setState];
 }
@@ -35,22 +35,40 @@ const LEAGUES = [
   "U19 / Seniors",
 ];
 const FORMATS = ["4v4","5v5","6v6","7v7","8v8","9v9","11v11"];
-const ALL_POSITIONS = ["GK","DEF","CB","LB","RB","MID","CDM","CAM","LW","RW","FWD","ST","CF","Wing"];
+const ALL_POSITIONS = ["GK","LD","CD","RD","LM","CM","RM","LF","CF","RF"];
 
 const POSITIONS_BY_FORMAT = {
-  "4v4":  ["GK","DEF","MID","FWD"],
-  "5v5":  ["GK","DEF","DEF","MID","FWD"],
-  "6v6":  ["GK","DEF","DEF","MID","MID","FWD"],
-  "7v7":  ["GK","DEF","DEF","MID","MID","FWD","FWD"],
-  "8v8":  ["GK","DEF","DEF","DEF","MID","MID","FWD","FWD"],
-  "9v9":  ["GK","DEF","DEF","DEF","MID","MID","MID","FWD","FWD"],
-  "11v11":["GK","DEF","DEF","DEF","DEF","MID","MID","MID","FWD","FWD","FWD"],
+  "4v4":  ["GK","CD","CM","CF"],
+  "5v5":  ["GK","CD","CM","LM","CF"],
+  "6v6":  ["GK","LD","RD","LM","RM","CF"],
+  "7v7":  ["GK","LD","RD","LM","CM","RM","CF"],
+  "8v8":  ["GK","LD","CD","RD","LM","CM","LF","RF"],
+  "9v9":  ["GK","LD","CD","RD","LM","CM","RM","LF","RF"],
+  "11v11":["GK","LB","CB","CB","RB","LM","CM","CM","RM","LF","RF"],
 };
 
+// Human-readable label for display in position tiles
+const POS_LABEL = {
+  GK:"GK", LB:"LB", RB:"RB", CB:"CB",
+  LD:"LD", RD:"RD", CD:"CD",
+  LM:"LM", RM:"RM", CM:"CM",
+  LF:"LF", RF:"RF", CF:"CF",
+  // legacy fallbacks
+  DEF:"DEF", MID:"MID", FWD:"FWD", CAM:"CAM", CDM:"CDM",
+  LW:"LW", RW:"RW", ST:"ST", Wing:"W",
+};
+
+// Field x/y positions for the SVG diagram
 const FIELD_BASE = {
-  GK:{x:50,y:88}, CB:{x:50,y:72}, DEF:{x:50,y:72}, LB:{x:25,y:72}, RB:{x:75,y:72},
-  CDM:{x:50,y:58}, MID:{x:50,y:50}, CAM:{x:50,y:38}, LW:{x:18,y:32}, RW:{x:82,y:32},
-  FWD:{x:50,y:22}, ST:{x:50,y:18}, CF:{x:50,y:22}, Wing:{x:20,y:30},
+  GK:{x:50,y:88},
+  CB:{x:50,y:72}, CD:{x:50,y:72}, LD:{x:25,y:72}, RD:{x:75,y:72},
+  LB:{x:22,y:75}, RB:{x:78,y:75},
+  DEF:{x:50,y:72},
+  CDM:{x:50,y:58}, CM:{x:50,y:50}, LM:{x:22,y:50}, RM:{x:78,y:50},
+  MID:{x:50,y:50}, CAM:{x:50,y:38},
+  LW:{x:18,y:32}, RW:{x:82,y:32},
+  LF:{x:28,y:22}, RF:{x:72,y:22}, CF:{x:50,y:18},
+  FWD:{x:50,y:22}, ST:{x:50,y:18}, Wing:{x:20,y:30},
 };
 
 // ─── SAY East Play-Time Rules (SAY Rule 12) ───────────────────────
@@ -643,37 +661,78 @@ const DIFFICULTIES = ["Beginner","Intermediate","Advanced"];
 // PRACTICE TEMPLATES BY AGE + FOCUS
 // ═══════════════════════════════════════════════════════════════════
 function generatePractice(league, focus, skills, duration, allDrills) {
-  const ageOrder = LEAGUES;
-  const leagueIdx = ageOrder.indexOf(league);
+  // Map short age codes to full LEAGUES strings for comparison
+  const AGE_MAP = {
+    "U6":"U6 / Instructional","U8":"U8 / Passers","U10":"U10 / Wings",
+    "U12":"U12 / Strikers","U14":"U14 / Kickers","U16":"U16 / Minors",
+    "U19":"U19 / Seniors","Adult":"U19 / Seniors",
+  };
+  const leagueIdx = LEAGUES.indexOf(league);
 
+  // Filter drills eligible for this age group
   const eligible = allDrills.filter(d => {
-    const minIdx = ageOrder.indexOf(d.ageMin);
-    const maxIdx = ageOrder.indexOf(d.ageMax || "Adult");
-    return leagueIdx >= minIdx && leagueIdx <= maxIdx;
+    const minIdx = LEAGUES.indexOf(AGE_MAP[d.ageMin] || d.ageMin || "U6 / Instructional");
+    const maxIdx = LEAGUES.indexOf(AGE_MAP[d.ageMax] || d.ageMax || "U19 / Seniors");
+    const lo = minIdx === -1 ? 0 : minIdx;
+    const hi = maxIdx === -1 ? LEAGUES.length - 1 : maxIdx;
+    return leagueIdx >= lo && leagueIdx <= hi;
   });
 
-  const focusMatch = eligible.filter(d =>
-    d.category === focus ||
-    d.skills.some(s => skills.includes(s))
+  // Fallback: if filter still yields nothing, use all drills
+  const pool = eligible.length > 0 ? eligible : allDrills;
+
+  const isYoung = leagueIdx <= 1; // U6, U8
+
+  // Categorise pool
+  const warmupCandidates  = pool.filter(d => ["Dribbling","Passing","Fitness","Ball Control"].includes(d.category));
+  const focusCandidates   = pool.filter(d =>
+    d.category === focus || (skills.length > 0 && d.skills.some(s => skills.includes(s)))
   );
+  const scrimmagePool     = pool.filter(d => d.category === "Scrimmage");
+  const generalPool       = pool.filter(d => !["Scrimmage"].includes(d.category));
 
-  const isYoung = leagueIdx <= 2; // U6, U8, U10
-  const warmupDrill = eligible.find(d => ["Dribbling","Ball Control","Fitness"].includes(d.category));
-  const mainDrills = focusMatch.filter(d => d.id !== warmupDrill?.id).slice(0, 2);
-  const scrimmage = eligible.find(d => d.category === "Scrimmage");
-  const fun = isYoung ? eligible.find(d => d.skills.includes("Fun")) : null;
+  // Pick drills — shuffle each pool so we get variety on repeated generates
+  const shuffle = arr => [...arr].sort(() => Math.random() - 0.5);
 
+  const warmup = shuffle(warmupCandidates)[0] || shuffle(generalPool)[0];
+
+  // Main drills: from focus candidates, excluding warmup
+  const mainPool = shuffle(focusCandidates.length > 0 ? focusCandidates : generalPool)
+    .filter(d => d.id !== warmup?.id);
+
+  // Number of main drills based on duration
+  const mainCount = duration <= 30 ? 1 : duration <= 60 ? 2 : 3;
+  const mainDrills = mainPool.slice(0, mainCount);
+
+  // If not enough focus drills, pad from general pool
+  while (mainDrills.length < mainCount) {
+    const extra = shuffle(generalPool).find(d =>
+      d.id !== warmup?.id && !mainDrills.find(m => m.id === d.id)
+    );
+    if (!extra) break;
+    mainDrills.push(extra);
+  }
+
+  const scrimmage = shuffle(scrimmagePool)[0];
+
+  // Time allocation
+  const warmupTime    = isYoung ? 8 : 10;
+  const cooldownTime  = 5;
+  const scrimmageTime = scrimmage ? (isYoung ? 10 : Math.min(20, Math.round(duration * 0.25))) : 0;
+  const mainTotal     = duration - warmupTime - cooldownTime - scrimmageTime;
+  const perMain       = mainDrills.length > 0 ? Math.max(8, Math.round(mainTotal / mainDrills.length)) : mainTotal;
+
+  // Build sections
   const sections = [];
-  const warmupTime = isYoung ? 8 : 10;
-  const mainTime = Math.floor((duration - warmupTime - 5 - (scrimmage ? 15 : 0)) / (mainDrills.length || 1));
+  if (warmup) sections.push({ type:"Warm-Up", drill:warmup, time:warmupTime });
 
-  if (warmupDrill) sections.push({ type:"Warm-Up", drill: warmupDrill, time: warmupTime, notes:"" });
-  mainDrills.forEach((d, i) =>
-    sections.push({ type: i === 0 ? "Main Activity" : "Secondary Activity", drill: d, time: mainTime, notes:"" })
-  );
-  if (fun && isYoung) sections.push({ type:"Fun Game", drill: fun, time: 8, notes:"" });
-  if (scrimmage) sections.push({ type:"Scrimmage", drill: scrimmage, time: Math.min(20, duration * 0.3), notes:"" });
-  sections.push({ type:"Cool Down", drill: null, time: 5, notes:"Stretch, Q&A, preview next session." });
+  mainDrills.forEach((d, i) => {
+    const label = i === 0 ? "Main Activity" : i === 1 ? "Secondary Activity" : "Extension Activity";
+    sections.push({ type:label, drill:d, time:perMain });
+  });
+
+  if (scrimmage) sections.push({ type:"Scrimmage / Game", drill:scrimmage, time:scrimmageTime });
+  sections.push({ type:"Cool Down", drill:null, time:cooldownTime, notes:"Stretching, water, recap key points from today." });
 
   return sections;
 }
@@ -716,8 +775,17 @@ function scheduleWholeGame(players, format, league, lockedLineups = {}, fromQuar
   const rule     = PLAY_TIME_RULES[league] || { minFraction: 0.5 };
   const minQ     = Math.ceil(rule.minFraction * TOTAL_Q); // e.g. 2 of 4 quarters
 
-  const active = players.filter(p => !p.injured && !p.out);
-  const n      = active.length;
+  // Shuffle active players so bonus-slot distribution isn't biased
+  // by roster order — every fresh plan gives a different player the extra quarter
+  const shuffle = arr => {
+    const a = [...arr];
+    for (let i = a.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [a[i], a[j]] = [a[j], a[i]];
+    }
+    return a;
+  };
+  const active = shuffle(players.filter(p => !p.injured && !p.out));
 
   // Count play time already locked in from previous quarters
   const alreadyPlayed = {};
@@ -780,59 +848,123 @@ function scheduleWholeGame(players, format, league, lockedLineups = {}, fromQuar
   const qCount = {};
   active.forEach(p => { qCount[p.id] = quota[p.id] + bonusQ[p.id]; });
 
-  // Now assign players to specific quarters using a round-robin rotation
-  // that respects qCount and tries to rotate bench players evenly
-  const quarterId = {}; // playerId -> set of quarters they play
+  // ── QUARTER-BY-QUARTER ASSIGNMENT ────────────────────────────────
+  // Build each quarter's field one slot at a time, quarter in order.
+  // Key rule: a player who sat the PREVIOUS quarter is picked FIRST
+  // (they have the highest "bench debt"). This guarantees no one
+  // sits back-to-back unless every other eligible player is already
+  // used up for that quarter.
+
+  const quarterId = {}; // playerId → Set of quarters they play
   active.forEach(p => { quarterId[p.id] = new Set(); });
 
-  // Sort by: most quota first, then by rating desc for tiebreaking
-  const sortedByQuota = [...active].sort((a, b) => {
-    const diff = qCount[b.id] - qCount[a.id];
-    if (diff !== 0) return diff;
-    return getOverallRating(b) - getOverallRating(a);
-  });
+  // Track how many quarters each player still NEEDS to play
+  const qRemaining = {};
+  active.forEach(p => { qRemaining[p.id] = qCount[p.id]; });
 
-  // Greedily assign players to quarters
-  // Track how full each quarter is
-  const qFilled = {};
-  remainingQs.forEach(q => { qFilled[q] = 0; });
+  // For each quarter, who sat the immediately previous quarter?
+  // Seed with locked lineups context for the quarter before fromQuarter.
+  const prevQ0 = fromQuarter - 1;
+  let sатLastQ = new Set( // players benched in the quarter just before we start
+    prevQ0 >= 1 && lockedLineups[prevQ0]
+      ? active
+          .filter(p => !lockedLineups[prevQ0].starters.some(s => s.player?.id === p.id))
+          .map(p => p.id)
+      : []
+  );
 
-  // Players with most quota go first
-  for (const player of sortedByQuota) {
-    let needed = qCount[player.id];
-    if (needed <= 0) continue;
+  for (const q of remainingQs) {
+    const spotsLeft = slotsPerQ;
+    const chosen = []; // player ids picked for this quarter
 
-    // Prefer quarters where this player sat in adjacent quarters (rotation)
-    // Simple: assign to quarters with the fewest players first
-    const orderedQs = [...remainingQs].sort((a, b) => qFilled[a] - qFilled[b]);
-    for (const q of orderedQs) {
-      if (needed <= 0) break;
-      if (qFilled[q] < slotsPerQ && !quarterId[player.id].has(q)) {
-        quarterId[player.id].add(q);
-        qFilled[q]++;
-        needed--;
-      }
+    // Eligible = still has remaining quota > 0 AND hasn't been assigned this quarter
+    const eligible = () => active.filter(p =>
+      qRemaining[p.id] > 0 && !chosen.includes(p.id)
+    );
+
+    // ── Pass 1: fill from players who sat LAST quarter first ─────
+    // Sort bench-debtors by remaining quota desc (highest need first),
+    // then by rating desc as tiebreaker
+    const debtors = eligible()
+      .filter(p => sатLastQ.has(p.id))
+      .sort((a, b) => qRemaining[b.id] - qRemaining[a.id] || getOverallRating(b) - getOverallRating(a));
+
+    for (const p of debtors) {
+      if (chosen.length >= spotsLeft) break;
+      chosen.push(p.id);
     }
+
+    // ── Pass 2: fill remaining spots with players who have most quota left ─
+    const others = eligible()
+      .sort((a, b) => qRemaining[b.id] - qRemaining[a.id] || getOverallRating(b) - getOverallRating(a));
+
+    for (const p of others) {
+      if (chosen.length >= spotsLeft) break;
+      chosen.push(p.id);
+    }
+
+    // Commit chosen players to this quarter
+    chosen.forEach(id => {
+      quarterId[id].add(q);
+      qRemaining[id]--;
+    });
+
+    // Who sat this quarter? They get priority next quarter.
+    sатLastQ = new Set(active.filter(p => !chosen.includes(p.id)).map(p => p.id));
   }
 
   // Build lineups for each remaining quarter
   const result = { ...lockedLineups };
 
+  // Track the last position each player was assigned (to avoid back-to-back repeats)
+  // Seed from the last locked quarter if replanning mid-game
+  const lastPos = {}; // playerId -> position string they played most recently
+  const prevLockedQ = fromQuarter - 1;
+  if (prevLockedQ >= 1 && lockedLineups[prevLockedQ]) {
+    lockedLineups[prevLockedQ].starters.forEach(s => {
+      if (s.player) lastPos[s.player.id] = s.pos;
+    });
+  }
+
   for (const q of remainingQs) {
     const starters_pool = active.filter(p => quarterId[p.id].has(q));
     const bench_pool    = active.filter(p => !quarterId[p.id].has(q));
 
-    // Assign positions: fill slots with best position match
-    const assigned = new Set();
-    const ratedPool = [...starters_pool].sort((a, b) => getOverallRating(b) - getOverallRating(a));
+    // For each player starting this quarter, pick a random allowed position
+    // that differs from their last position (if they have other options).
+    const playerPosThisQ = {}; // playerId -> chosen position for this quarter
+    for (const p of starters_pool) {
+      const allowed = p.positions && p.positions.length > 0
+        ? p.positions
+        : ["CM"]; // fallback if somehow empty
+      // Prefer positions that aren't the same as last quarter
+      const fresh = allowed.filter(pos => pos !== lastPos[p.id]);
+      const pool  = fresh.length > 0 ? fresh : allowed;
+      playerPosThisQ[p.id] = pool[Math.floor(Math.random() * pool.length)];
+    }
 
-    const starters = slots.map(pos => {
-      // Best unassigned player who can play this position
-      let best = ratedPool.find(p => !assigned.has(p.id) && (p.positions || []).includes(pos));
-      // Fallback: any unassigned player
-      if (!best) best = ratedPool.find(p => !assigned.has(p.id));
-      if (best) assigned.add(best.id);
-      return { pos, player: best || null };
+    // Now assign players to the formation slots.
+    // Slots are defined by the formation (e.g. GK, LD, RD, LM, RM, CF).
+    // For each slot, find the best unassigned player whose chosen position
+    // matches that slot. Fallback to any unassigned player.
+    const assigned = new Set();
+
+    // Shuffle starters_pool so tie-breaking is random (not roster-order biased)
+    const shuffledPool = [...starters_pool].sort(() => Math.random() - 0.5);
+
+    const starters = slots.map(slotPos => {
+      // Pass 1: player whose randomly chosen position matches this slot exactly
+      let pick = shuffledPool.find(p => !assigned.has(p.id) && playerPosThisQ[p.id] === slotPos);
+      // Pass 2: player whose allowed positions include this slot
+      if (!pick) pick = shuffledPool.find(p => !assigned.has(p.id) && (p.positions||[]).includes(slotPos));
+      // Pass 3: any unassigned player (guaranteed fill)
+      if (!pick) pick = shuffledPool.find(p => !assigned.has(p.id));
+      if (pick) {
+        assigned.add(pick.id);
+        // Record the actual slot position they ended up in (not just their chosen one)
+        lastPos[pick.id] = slotPos;
+      }
+      return { pos: slotPos, player: pick || null };
     });
 
     result[q] = { starters, bench: bench_pool };
@@ -935,7 +1067,7 @@ function StarRating({ value, onChange, max=5 }) {
 // ═══════════════════════════════════════════════════════════════════
 // SOCCER FIELD with DRAG & DROP
 // ═══════════════════════════════════════════════════════════════════
-function SoccerField({ lineup, onSwap, format }) {
+function SoccerField({ lineup, onSwap, format, quarter }) {
   const [dragging, setDragging] = useState(null);
   const [hoverIdx, setHoverIdx] = useState(null);
 
@@ -976,6 +1108,14 @@ function SoccerField({ lineup, onSwap, format }) {
         <rect x="135" y="461" width="50" height="14" fill="rgba(255,255,255,0.15)"/>
         <circle cx="160" cy="415" r="3" fill="rgba(255,255,255,0.6)"/>
         <circle cx="160" cy="65" r="3" fill="rgba(255,255,255,0.6)"/>
+        {/* Quarter label */}
+        {quarter && (
+          <>
+            <rect x="10" y="10" width="42" height="22" rx="5" fill="rgba(0,0,0,0.55)"/>
+            <text x="31" y="25" textAnchor="middle" fill="#e8a020"
+              fontFamily="Arial" fontWeight="800" fontSize="13">Q{quarter}</text>
+          </>
+        )}
       </svg>
 
       {slots.map((slot, idx) => {
@@ -1089,7 +1229,50 @@ function TabGame({ format, league, players, setPlayers, lineupsByQuarter, setLin
   const [justRegenned,  setJustRegenned]  = useState(false);
   const [showRotation,  setShowRotation]  = useState(false);
   const [showFormations,setShowFormations]= useState(false);
-  const [activeFormation,setActiveFormation]=useState(null);
+  const [activeFormation,setActiveFormation]=useState("2-2-1");
+  const swipeTouchStart = useRef(null);
+
+  // ── SCORE TRACKER ────────────────────────────────────────────────
+  const [homeScore, setHomeScore] = useState(0);
+  const [awayScore, setAwayScore] = useState(0);
+  const [opponent,  setOpponent]  = useState("");
+  const [editOpp,   setEditOpp]   = useState(false);
+
+  // ── WEATHER ──────────────────────────────────────────────────────
+  const [weather,      setWeather]      = useState(null);
+  const [weatherErr,   setWeatherErr]   = useState(null);
+  const [weatherLoading,setWeatherLoading] = useState(false);
+
+  const fetchWeather = () => {
+    if (!navigator.geolocation) { setWeatherErr("Geolocation not supported"); return; }
+    setWeatherLoading(true);
+    setWeatherErr(null);
+    navigator.geolocation.getCurrentPosition(
+      async pos => {
+        try {
+          const { latitude: lat, longitude: lon } = pos.coords;
+          const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,apparent_temperature,precipitation_probability,windspeed_10m,weathercode&temperature_unit=fahrenheit&windspeed_unit=mph&timezone=auto`;
+          const res = await fetch(url);
+          const data = await res.json();
+          const c = data.current;
+          const codeMap = {0:"Clear ☀️",1:"Mostly Clear 🌤",2:"Partly Cloudy ⛅",3:"Overcast ☁️",45:"Foggy 🌫",48:"Foggy 🌫",51:"Drizzle 🌦",53:"Drizzle 🌦",55:"Drizzle 🌦",61:"Rain 🌧",63:"Rain 🌧",65:"Heavy Rain 🌧",71:"Snow 🌨",73:"Snow 🌨",75:"Heavy Snow ❄️",80:"Showers 🌦",81:"Showers 🌦",82:"Heavy Showers ⛈",95:"Thunderstorm ⛈",96:"Thunderstorm ⛈",99:"Thunderstorm ⛈"};
+          setWeather({
+            temp: Math.round(c.temperature_2m),
+            feels: Math.round(c.apparent_temperature),
+            wind: Math.round(c.windspeed_10m),
+            precip: c.precipitation_probability,
+            desc: codeMap[c.weathercode] || "Unknown",
+          });
+        } catch { setWeatherErr("Couldn't load weather"); }
+        setWeatherLoading(false);
+      },
+      () => { setWeatherErr("Location access denied"); setWeatherLoading(false); }
+    );
+  };
+
+  // ── SHARE LINEUP ─────────────────────────────────────────────────
+  const [showShare, setShowShare] = useState(false);
+  const shareCanvasRef = useRef(null);
 
   // ── QUARTER TIMER ────────────────────────────────────────────────
   const periodMin = (() => {
@@ -1145,10 +1328,13 @@ function TabGame({ format, league, players, setPlayers, lineupsByQuarter, setLin
 
   // ── Plan entire game from scratch (or from a quarter onwards) ──
   const planWholeGame = (fromQ = 1) => {
-    // Lock quarters before fromQ, schedule the rest
+    // Full replanning from Q1 = completely fresh slate, no locked quarters
+    // Partial replanning (fromQ > 1) = keep earlier quarters, redo the rest
     const locked = {};
-    for (let q = 1; q < fromQ; q++) {
-      if (lineupsByQuarter[q]) locked[q] = lineupsByQuarter[q];
+    if (fromQ > 1) {
+      for (let q = 1; q < fromQ; q++) {
+        if (lineupsByQuarter[q]) locked[q] = lineupsByQuarter[q];
+      }
     }
     const result = scheduleWholeGame(players, format, league, locked, fromQ);
     setLineupsByQuarter(result);
@@ -1253,6 +1439,142 @@ function TabGame({ format, league, players, setPlayers, lineupsByQuarter, setLin
           onDismiss={() => setInjuryAlerts(prev => prev.filter(a => a.id !== alert.id))}/>
       ))}
 
+      {/* ── SCORE TRACKER ── */}
+      <div style={{
+        background:"linear-gradient(135deg,rgba(30,77,26,0.4),rgba(10,13,15,0.6))",
+        border:`1px solid rgba(232,160,32,0.25)`,
+        borderRadius:14, padding:"14px 16px", marginBottom:12,
+      }}>
+        {/* Opponent name */}
+        <div style={{textAlign:"center",marginBottom:10}}>
+          {editOpp ? (
+            <input
+              autoFocus
+              value={opponent}
+              onChange={e=>setOpponent(e.target.value)}
+              onBlur={()=>setEditOpp(false)}
+              onKeyDown={e=>e.key==="Enter"&&setEditOpp(false)}
+              placeholder="Opponent name…"
+              style={{...IS, textAlign:"center", fontSize:13, maxWidth:200, padding:"4px 10px"}}
+            />
+          ) : (
+            <div onClick={()=>setEditOpp(true)} style={{
+              fontSize:12,color:C.muted,cursor:"pointer",display:"inline-flex",
+              alignItems:"center",gap:5,
+            }}>
+              {opponent||"Tap to set opponent"} <span style={{fontSize:10,opacity:0.5}}>✎</span>
+            </div>
+          )}
+        </div>
+        {/* Score display */}
+        <div style={{display:"flex",alignItems:"center",justifyContent:"center",gap:0}}>
+          {/* Home (Us) */}
+          <div style={{textAlign:"center",flex:1}}>
+            <div style={{fontSize:9,color:C.muted,fontWeight:700,textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:4}}>Us</div>
+            <div style={{display:"flex",alignItems:"center",justifyContent:"center",gap:8}}>
+              <button onClick={()=>setHomeScore(s=>Math.max(0,s-1))} style={{
+                width:34,height:34,borderRadius:8,border:"none",cursor:"pointer",
+                background:"rgba(255,255,255,0.08)",color:C.text,fontSize:20,fontWeight:300,lineHeight:1,
+              }}>−</button>
+              <div style={{fontSize:52,fontWeight:900,color:C.gold,lineHeight:1,minWidth:56,textAlign:"center",
+                textShadow:`0 0 30px ${C.gold}66`}}>{homeScore}</div>
+              <button onClick={()=>setHomeScore(s=>s+1)} style={{
+                width:34,height:34,borderRadius:8,border:"none",cursor:"pointer",
+                background:"rgba(39,174,96,0.2)",color:C.ok,fontSize:20,fontWeight:700,lineHeight:1,
+              }}>+</button>
+            </div>
+          </div>
+
+          {/* Divider */}
+          <div style={{fontSize:28,color:"rgba(255,255,255,0.15)",fontWeight:200,padding:"0 8px",alignSelf:"center"}}>:</div>
+
+          {/* Away (Them) */}
+          <div style={{textAlign:"center",flex:1}}>
+            <div style={{fontSize:9,color:C.muted,fontWeight:700,textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:4}}>
+              {opponent||"Them"}
+            </div>
+            <div style={{display:"flex",alignItems:"center",justifyContent:"center",gap:8}}>
+              <button onClick={()=>setAwayScore(s=>Math.max(0,s-1))} style={{
+                width:34,height:34,borderRadius:8,border:"none",cursor:"pointer",
+                background:"rgba(255,255,255,0.08)",color:C.text,fontSize:20,fontWeight:300,lineHeight:1,
+              }}>−</button>
+              <div style={{fontSize:52,fontWeight:900,color:homeScore>awayScore?C.text:homeScore<awayScore?"#e74c3c":C.text,
+                lineHeight:1,minWidth:56,textAlign:"center"}}>{awayScore}</div>
+              <button onClick={()=>setAwayScore(s=>s+1)} style={{
+                width:34,height:34,borderRadius:8,border:"none",cursor:"pointer",
+                background:"rgba(231,76,60,0.15)",color:"#e74c3c",fontSize:20,fontWeight:700,lineHeight:1,
+              }}>+</button>
+            </div>
+          </div>
+        </div>
+
+        {/* Status bar */}
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginTop:10}}>
+          <div style={{fontSize:11,fontWeight:700,
+            color:homeScore>awayScore?C.ok:homeScore<awayScore?"#e74c3c":C.muted}}>
+            {homeScore>awayScore?"🏆 Winning":homeScore<awayScore?"⚠️ Trailing":"🤝 Tied"}
+            {homeScore-awayScore>5 && <span style={{color:"#e67e22"}}> · ⚠️ Blowout Rule</span>}
+          </div>
+          <div style={{display:"flex",gap:6}}>
+            <button onClick={()=>setShowShare(true)} style={{
+              padding:"4px 10px",borderRadius:6,border:`1px solid ${C.border}`,
+              background:"transparent",color:C.muted,fontSize:10,fontWeight:700,
+              cursor:"pointer",fontFamily:"inherit",
+            }}>📤 Share Lineup</button>
+            <button onClick={()=>{setHomeScore(0);setAwayScore(0);}} style={{
+              padding:"4px 8px",borderRadius:6,border:`1px solid ${C.border}`,
+              background:"transparent",color:C.muted,fontSize:10,cursor:"pointer",fontFamily:"inherit",
+            }}>↺</button>
+          </div>
+        </div>
+      </div>
+
+      {/* ── WEATHER ── */}
+      <div style={{marginBottom:12}}>
+        {!weather && !weatherLoading && (
+          <button onClick={fetchWeather} style={{
+            width:"100%",padding:"8px 14px",borderRadius:9,
+            border:`1px solid ${C.border}`,background:"transparent",
+            color:C.muted,fontSize:12,fontWeight:600,cursor:"pointer",fontFamily:"inherit",
+            display:"flex",alignItems:"center",justifyContent:"center",gap:6,
+          }}>
+            🌤 Check Game Day Weather
+          </button>
+        )}
+        {weatherLoading && (
+          <div style={{textAlign:"center",padding:"8px",fontSize:12,color:C.muted}}>Fetching weather…</div>
+        )}
+        {weatherErr && (
+          <div style={{textAlign:"center",padding:"8px",fontSize:11,color:"#e74c3c"}}>{weatherErr}</div>
+        )}
+        {weather && (
+          <div style={{
+            display:"flex",alignItems:"center",gap:10,padding:"10px 14px",
+            background:C.surface,borderRadius:9,border:`1px solid ${C.border}`,
+          }}>
+            <div style={{fontSize:28,lineHeight:1}}>{weather.desc.split(" ").pop()}</div>
+            <div style={{flex:1}}>
+              <div style={{fontSize:15,fontWeight:800,color:C.text}}>
+                {weather.temp}°F <span style={{fontSize:11,fontWeight:400,color:C.muted}}>feels {weather.feels}°F</span>
+              </div>
+              <div style={{fontSize:11,color:C.muted}}>
+                {weather.desc.split(" ").slice(0,-1).join(" ")} · 💨 {weather.wind} mph · 🌧 {weather.precip}% rain
+              </div>
+            </div>
+            <div style={{display:"flex",flexDirection:"column",gap:4,alignItems:"flex-end"}}>
+              {weather.precip >= 60 && <div style={{fontSize:10,color:"#3498db",fontWeight:700}}>⚠️ Wet field likely</div>}
+              {weather.wind >= 20 && <div style={{fontSize:10,color:C.gold,fontWeight:700}}>💨 High wind</div>}
+              {weather.temp <= 40 && <div style={{fontSize:10,color:"#5dade2",fontWeight:700}}>🥶 Cold — extra layers</div>}
+              {weather.temp >= 85 && <div style={{fontSize:10,color:"#e74c3c",fontWeight:700}}>🥵 Heat — water breaks</div>}
+              <button onClick={fetchWeather} style={{
+                background:"none",border:"none",cursor:"pointer",
+                color:C.muted,fontSize:10,padding:0,
+              }}>↺ refresh</button>
+            </div>
+          </div>
+        )}
+      </div>
+
       {/* Success flash */}
       {justRegenned && (
         <div style={{
@@ -1355,57 +1677,138 @@ function TabGame({ format, league, players, setPlayers, lineupsByQuarter, setLin
             </div>
           </Card>
 
-          {/* Formation Templates */}
-          <div style={{marginBottom:14}}>
-            <button onClick={()=>setShowFormations(f=>!f)} style={{
-              width:"100%",padding:"7px 12px",borderRadius:7,border:`1px solid ${C.border}`,
-              cursor:"pointer",fontWeight:600,fontSize:11,fontFamily:"inherit",
-              background:showFormations?`rgba(232,160,32,0.1)`:"transparent",
-              color:showFormations?C.gold:C.muted,textAlign:"left",
-              display:"flex",justifyContent:"space-between",alignItems:"center",
-            }}>
-              <span>🗂 Formation Templates</span>
-              <span>{showFormations?"▲":"▼"}</span>
-            </button>
-            {showFormations && (
-              <div style={{
-                background:C.surface,border:`1px solid ${C.border}`,
-                borderRadius:"0 0 8px 8px",padding:"10px 12px",
-              }}>
-                <div style={{fontSize:10,color:C.muted,marginBottom:8}}>
-                  Select a formation to auto-assign positions. Drag to swap players after.
+          {/* Strategy / Formation Picker */}
+          <Card style={{marginBottom:14}}>
+            <div style={{fontSize:11,color:C.muted,fontWeight:700,textTransform:"uppercase",letterSpacing:"0.05em",marginBottom:8}}>
+              🗂 Strategy
+            </div>
+            <div style={{fontSize:10,color:C.muted,marginBottom:8,lineHeight:1.5}}>
+              Pick how many defenders, mids, and forwards. Updates all quarters when you hit Apply.
+            </div>
+            {/* D-M-F counters */}
+            {(() => {
+              const fieldSlots = (POSITIONS_BY_FORMAT[format]||[]).length - 1; // minus GK
+              const maxD = fieldSlots - 1; // at least 1 forward
+              // read current strat from activeFormation string "D-M-F"
+              const parts = (activeFormation||"").split("-").map(Number);
+              const curD = parts[0]||Math.floor(fieldSlots/3);
+              const curM = parts[1]||Math.floor(fieldSlots/3);
+              const curF = fieldSlots - curD - curM;
+              const setStrat = (d,m,f) => setActiveFormation(`${d}-${m}-${f}`);
+
+              return (
+                <div>
+                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,marginBottom:10}}>
+                    {[["DEF",curD,"D"],["MID",curM,"M"],["FWD",curF,"F"]].map(([label,val,key])=>(
+                      <div key={key} style={{textAlign:"center"}}>
+                        <div style={{fontSize:9,color:C.muted,fontWeight:700,textTransform:"uppercase",marginBottom:4}}>{label}</div>
+                        <div style={{display:"flex",alignItems:"center",justifyContent:"center",gap:4}}>
+                          <button onClick={()=>{
+                            let d=curD,m=curM,f=curF;
+                            if(key==="D"&&d>0){d--;f++;}
+                            else if(key==="M"&&m>0){m--;f++;}
+                            else if(key==="F"&&f>0){f--;if(key==="F")d++; else m++;}
+                            // smarter: redistribute to whoever lost
+                            if(key==="D"&&d>0){d--;f++;}
+                            else if(key==="M"&&m>0){m--;f++;}
+                            else if(key==="F"&&f>1){f--;d++;}
+                            setStrat(d,m,f);
+                          }} style={{
+                            width:22,height:22,borderRadius:4,border:"none",cursor:"pointer",
+                            background:"rgba(255,255,255,0.1)",color:C.text,fontWeight:700,fontSize:14,lineHeight:1,
+                          }}>−</button>
+                          <span style={{fontSize:18,fontWeight:800,color:C.gold,minWidth:20,textAlign:"center"}}>{val}</span>
+                          <button onClick={()=>{
+                            let d=curD,m=curM,f=curF;
+                            if(key==="D"&&d+m+f<fieldSlots){d++;if(f>0)f--;else if(m>0)m--;}
+                            else if(key==="M"&&d+m+f<fieldSlots){m++;if(f>0)f--;else if(d>0)d--;}
+                            else if(key==="F"&&d+m+f<fieldSlots){f++;if(m>0)m--;else if(d>0)d--;}
+                            if(d<0)d=0;if(m<0)m=0;if(f<0)f=0;
+                            setStrat(d,m,f);
+                          }} style={{
+                            width:22,height:22,borderRadius:4,border:"none",cursor:"pointer",
+                            background:"rgba(255,255,255,0.1)",color:C.text,fontWeight:700,fontSize:14,lineHeight:1,
+                          }}>+</button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Formation label + total check */}
+                  {(() => {
+                    const total = curD+curM+curF;
+                    const ok = total === fieldSlots;
+                    return (
+                      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}}>
+                        <div style={{fontSize:16,fontWeight:800,color:ok?C.gold:"#e74c3c"}}>
+                          {curD}-{curM}-{curF}
+                        </div>
+                        <div style={{fontSize:10,color:ok?C.muted:"#e74c3c"}}>
+                          {ok ? `${fieldSlots} field + GK ✓` : `${total}/${fieldSlots} field slots`}
+                        </div>
+                      </div>
+                    );
+                  })()}
+
+                  {/* Quick presets */}
+                  <div style={{display:"flex",flexWrap:"wrap",gap:4,marginBottom:10}}>
+                    {(FORMATION_TEMPLATES[format]||[]).map(tmpl=>{
+                      const isActive = activeFormation===tmpl.name;
+                      return (
+                        <button key={tmpl.name} onClick={()=>setActiveFormation(tmpl.name)} style={{
+                          padding:"3px 10px",borderRadius:4,border:"none",cursor:"pointer",
+                          fontSize:11,fontWeight:700,fontFamily:"inherit",
+                          background:isActive?`linear-gradient(135deg,${C.gold},${C.goldDark})`:"rgba(255,255,255,0.08)",
+                          color:isActive?"#0a0d0f":C.muted,
+                        }}>{tmpl.name}</button>
+                      );
+                    })}
+                  </div>
+
+                  {/* Apply button */}
+                  <Btn primary full onClick={()=>{
+                    // Build slot array from D-M-F counts
+                    const buildSlots = (d,m,f) => {
+                      const slots = ["GK"];
+                      if(d===1) slots.push("CD");
+                      else if(d===2) slots.push("LD","RD");
+                      else if(d>=3){ slots.push("LD"); for(let i=1;i<d-1;i++) slots.push("CD"); slots.push("RD"); }
+                      if(m===1) slots.push("CM");
+                      else if(m===2) slots.push("LM","RM");
+                      else if(m>=3){ slots.push("LM"); for(let i=1;i<m-1;i++) slots.push("CM"); slots.push("RM"); }
+                      if(f===1) slots.push("CF");
+                      else if(f===2) slots.push("LF","RF");
+                      else if(f>=3){ slots.push("LF"); for(let i=1;i<f-1;i++) slots.push("CF"); slots.push("RF"); }
+                      return slots;
+                    };
+
+                    // Try to parse from preset name or D-M-F string
+                    let d=curD,m=curM,f=curF;
+                    const tmpl = (FORMATION_TEMPLATES[format]||[]).find(t=>t.name===activeFormation);
+                    const customSlots = tmpl ? tmpl.slots : buildSlots(d,m,f);
+
+                    // Apply to current quarter's lineup
+                    if(lineupsByQuarter[quarter]) {
+                      const allAvail = [
+                        ...(lineupsByQuarter[quarter].starters||[]).filter(s=>s.player).map(s=>s.player),
+                        ...(lineupsByQuarter[quarter].bench||[]),
+                      ];
+                      const assigned = new Set();
+                      const newStarters = customSlots.map(pos=>{
+                        let best = allAvail.find(p=>!assigned.has(p.id)&&(p.positions||[]).includes(pos));
+                        if(!best) best = allAvail.find(p=>!assigned.has(p.id));
+                        if(best) assigned.add(best.id);
+                        return {pos, player:best||null};
+                      });
+                      const newBench = allAvail.filter(p=>!assigned.has(p.id));
+                      setLineupsByQuarter(prev=>({...prev,[quarter]:{starters:newStarters,bench:newBench}}));
+                    }
+                    setShowFormations(false);
+                  }}>Apply to Q{quarter}</Btn>
                 </div>
-                <div style={{display:"flex",flexWrap:"wrap",gap:5}}>
-                  {(FORMATION_TEMPLATES[format]||[]).map(tmpl=>(
-                    <button key={tmpl.name} onClick={()=>{
-                      setActiveFormation(tmpl.name);
-                      // Apply formation: remap current quarter's starters to new positions
-                      if (lineupsByQuarter[quarter]) {
-                        const currentPlayers = (lineupsByQuarter[quarter].starters||[]).filter(s=>s.player).map(s=>s.player);
-                        const bench = lineupsByQuarter[quarter].bench || [];
-                        const allAvail = [...currentPlayers, ...bench];
-                        const assigned = new Set();
-                        const newStarters = tmpl.slots.map(pos=>{
-                          let best = allAvail.find(p=>!assigned.has(p.id)&&(p.positions||[]).includes(pos));
-                          if (!best) best = allAvail.find(p=>!assigned.has(p.id));
-                          if (best) assigned.add(best.id);
-                          return {pos, player:best||null};
-                        });
-                        const newBench = allAvail.filter(p=>!assigned.has(p.id));
-                        setLineupsByQuarter(prev=>({...prev,[quarter]:{starters:newStarters,bench:newBench}}));
-                      }
-                      setShowFormations(false);
-                    }} style={{
-                      padding:"5px 12px",borderRadius:5,border:"none",cursor:"pointer",
-                      fontSize:12,fontWeight:700,fontFamily:"inherit",
-                      background:activeFormation===tmpl.name?`linear-gradient(135deg,${C.gold},${C.goldDark})`:"rgba(255,255,255,0.1)",
-                      color:activeFormation===tmpl.name?"#0a0d0f":C.text,
-                    }}>{tmpl.name}</button>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
+              );
+            })()}
+          </Card>
 
           {/* Quarter tabs */}
           <label style={lbl}>Viewing Quarter</label>
@@ -1492,18 +1895,30 @@ function TabGame({ format, league, players, setPlayers, lineupsByQuarter, setLin
                       {allPlanned ? `${planned}/${target}Q` : "—"}
                     </span>
                   </div>
-                  {/* Per-quarter dots */}
+                  {/* Per-quarter position tiles */}
                   <div style={{display:"flex",gap:3,marginBottom:3}}>
                     {[1,2,3,4].map(q => {
                       const entry = rotationGrid.find(r=>r.player.id===p.id);
                       const status = entry ? entry.quarters[q-1] : "unplanned";
+                      // Look up the actual position this player is slotted into for this quarter
+                      const qLineup = lineupsByQuarter[q];
+                      const slot = qLineup?.starters?.find(s=>s.player?.id===p.id);
+                      const posLabel = status==="on" && slot ? (POS_LABEL[slot.pos] || slot.pos) : status==="bench" ? "—" : "?";
                       const bg = status==="on" ? C.ok : status==="bench" ? "rgba(255,255,255,0.12)" : "rgba(255,255,255,0.04)";
-                      const label = status==="on" ? "▶" : status==="bench" ? "—" : "?";
+                      const textColor = status==="on" ? "#0a0d0f" : "rgba(255,255,255,0.3)";
+                      const isActive = quarter===q;
                       return (
-                        <div key={q} style={{flex:1,height:18,borderRadius:3,background:bg,display:"flex",alignItems:"center",justifyContent:"center",
-                          fontSize:8,color:status==="on"?"#0a0d0f":"rgba(255,255,255,0.3)",fontWeight:700,cursor:"pointer",border:quarter===q?"1px solid rgba(255,255,255,0.25)":"1px solid transparent"}}
-                          onClick={()=>setQuarter(q)} title={`Q${q}: ${status}`}>
-                          {label}
+                        <div key={q} onClick={()=>setQuarter(q)}
+                          title={`Q${q}: ${status==="on"?posLabel:status}`}
+                          style={{
+                            flex:1, height:20, borderRadius:3, background:bg,
+                            display:"flex", alignItems:"center", justifyContent:"center",
+                            fontSize:status==="on"?7:9, color:textColor,
+                            fontWeight:800, cursor:"pointer", letterSpacing:"0.02em",
+                            border:isActive?"1px solid rgba(255,255,255,0.35)":"1px solid transparent",
+                            boxShadow:isActive?"0 0 0 1px rgba(255,255,255,0.1)":"none",
+                          }}>
+                          {posLabel}
                         </div>
                       );
                     })}
@@ -1585,7 +2000,49 @@ function TabGame({ format, league, players, setPlayers, lineupsByQuarter, setLin
               <Btn primary onClick={() => planWholeGame(1)}>⚡ Plan Full Game</Btn>
             </div>
           )}
-          <SoccerField lineup={currentLineup} onSwap={handleSwap} format={format}/>
+          {/* Swipeable field — swipe left = next quarter, right = previous */}
+          {(()=>{
+            return (
+              <div
+                onTouchStart={e=>{ swipeTouchStart.current = e.touches[0].clientX; }}
+                onTouchEnd={e=>{
+                  if (swipeTouchStart.current===null) return;
+                  const dx = e.changedTouches[0].clientX - swipeTouchStart.current;
+                  swipeTouchStart.current = null;
+                  if (Math.abs(dx) < 40) return;
+                  if (dx < 0 && quarter < 4) setQuarter(q=>q+1);
+                  if (dx > 0 && quarter > 1) setQuarter(q=>q-1);
+                }}
+                style={{position:"relative",userSelect:"none"}}
+              >
+                {/* Quarter nav bar */}
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6,padding:"0 2px"}}>
+                  <button onClick={()=>setQuarter(q=>Math.max(1,q-1))} disabled={quarter===1} style={{
+                    background:"none",border:"none",cursor:quarter===1?"default":"pointer",
+                    color:quarter===1?"rgba(255,255,255,0.1)":C.gold,fontSize:22,padding:"0 6px",lineHeight:1,
+                  }}>‹</button>
+                  <div style={{fontSize:11,color:C.muted,fontWeight:600}}>
+                    Q{quarter} Field View <span style={{opacity:0.4}}>· swipe or tap arrows</span>
+                  </div>
+                  <button onClick={()=>setQuarter(q=>Math.min(4,q+1))} disabled={quarter===4} style={{
+                    background:"none",border:"none",cursor:quarter===4?"default":"pointer",
+                    color:quarter===4?"rgba(255,255,255,0.1)":C.gold,fontSize:22,padding:"0 6px",lineHeight:1,
+                  }}>›</button>
+                </div>
+                {/* Pip dots */}
+                <div style={{display:"flex",justifyContent:"center",gap:6,marginBottom:8}}>
+                  {[1,2,3,4].map(q=>(
+                    <div key={q} onClick={()=>setQuarter(q)} style={{
+                      width:q===quarter?20:6,height:6,borderRadius:3,cursor:"pointer",
+                      background:q===quarter?C.gold:"rgba(255,255,255,0.15)",
+                      transition:"all 0.2s",
+                    }}/>
+                  ))}
+                </div>
+                <SoccerField lineup={currentLineup} onSwap={handleSwap} format={format} quarter={quarter}/>
+              </div>
+            );
+          })()}
           {midGameInjured.length > 0 && (
             <div style={{marginTop:10,padding:"7px 12px",borderRadius:7,
               background:"rgba(120,0,0,0.15)",border:"1px solid rgba(231,76,60,0.2)",
@@ -1595,13 +2052,179 @@ function TabGame({ format, league, players, setPlayers, lineupsByQuarter, setLin
           )}
         </div>
       </div>
+      {/* Share Lineup Modal */}
+      {showShare && (
+        <ShareLineupModal
+          players={players}
+          lineupsByQuarter={lineupsByQuarter}
+          quarter={quarter}
+          homeScore={homeScore}
+          awayScore={awayScore}
+          opponent={opponent}
+          league={league}
+          onClose={()=>setShowShare(false)}
+        />
+      )}
     </div>
   );
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// TAB: ROSTER + RANKINGS
+// SHARE LINEUP MODAL — canvas PNG for screenshotting
 // ═══════════════════════════════════════════════════════════════════
+function ShareLineupModal({ players, lineupsByQuarter, quarter, homeScore, awayScore, opponent, league, onClose }) {
+  const canvasRef = useRef(null);
+  const [rendered, setRendered] = useState(false);
+
+  const roundRect = (ctx, x, y, w, h, r) => {
+    ctx.beginPath();
+    ctx.moveTo(x+r, y);
+    ctx.lineTo(x+w-r, y); ctx.quadraticCurveTo(x+w, y, x+w, y+r);
+    ctx.lineTo(x+w, y+h-r); ctx.quadraticCurveTo(x+w, y+h, x+w-r, y+h);
+    ctx.lineTo(x+r, y+h); ctx.quadraticCurveTo(x, y+h, x, y+h-r);
+    ctx.lineTo(x, y+r); ctx.quadraticCurveTo(x, y, x+r, y);
+    ctx.closePath();
+  };
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    const W = 600, H = 900;
+    canvas.width = W; canvas.height = H;
+
+    // Background
+    ctx.fillStyle = "#0c1409"; ctx.fillRect(0, 0, W, H);
+
+    // Header bar
+    ctx.fillStyle = "#1a2518"; ctx.fillRect(0, 0, W, 78);
+
+    // Logo
+    ctx.fillStyle = "#e8a020"; ctx.beginPath(); ctx.arc(44,39,22,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle="#0a0d0f"; ctx.font="bold 18px Arial"; ctx.textAlign="center"; ctx.fillText("⚽",44,46);
+
+    // App name
+    ctx.fillStyle="#e8e4dc"; ctx.font="bold 20px Arial"; ctx.textAlign="left"; ctx.fillText("CoachKit",76,33);
+    ctx.fillStyle="#7a7570"; ctx.font="10px Arial"; ctx.fillText("SAY East Youth Soccer",76,50);
+
+    // Quarter badge
+    ctx.fillStyle="#e8a020"; ctx.font="bold 13px Arial"; ctx.textAlign="right";
+    ctx.fillText(`${league}  ·  Q${quarter} Lineup`, W-18, 44);
+
+    // Score card
+    ctx.fillStyle="rgba(232,160,32,0.1)";
+    roundRect(ctx,16,88,W-32,62,10); ctx.fill();
+    ctx.strokeStyle="rgba(232,160,32,0.3)"; ctx.lineWidth=1;
+    roundRect(ctx,16,88,W-32,62,10); ctx.stroke();
+
+    ctx.textAlign="center";
+    ctx.fillStyle="#7a7570"; ctx.font="bold 10px Arial"; ctx.fillText("US", W/2-80, 106);
+    ctx.fillStyle=opponent?"#e8e4dc":"#7a7570"; ctx.fillText((opponent||"THEM").toUpperCase(), W/2+80, 106);
+    ctx.fillStyle="#e8a020"; ctx.font="bold 38px Arial"; ctx.fillText(homeScore, W/2-80, 140);
+    ctx.fillStyle="#555"; ctx.font="bold 24px Arial"; ctx.fillText(":", W/2, 136);
+    ctx.fillStyle=homeScore<awayScore?"#e74c3c":"#e8e4dc"; ctx.font="bold 38px Arial"; ctx.fillText(awayScore, W/2+80, 140);
+
+    // Field
+    const fx=36,fy=164,fw=W-72,fh=460;
+    const fg=ctx.createLinearGradient(fx,fy,fx,fy+fh);
+    fg.addColorStop(0,"#1e4d1a"); fg.addColorStop(1,"#163d13");
+    ctx.fillStyle=fg; roundRect(ctx,fx,fy,fw,fh,14); ctx.fill();
+    ctx.strokeStyle="rgba(255,255,255,0.2)"; ctx.lineWidth=1.5;
+    roundRect(ctx,fx,fy,fw,fh,14); ctx.stroke();
+
+    // Field lines
+    ctx.beginPath(); ctx.moveTo(fx+16,fy+fh/2); ctx.lineTo(fx+fw-16,fy+fh/2); ctx.stroke();
+    ctx.beginPath(); ctx.arc(fx+fw/2,fy+fh/2,36,0,Math.PI*2); ctx.stroke();
+    ctx.strokeRect(fx+fw*0.25,fy+10,fw*0.5,70);
+    ctx.strokeRect(fx+fw*0.25,fy+fh-80,fw*0.5,70);
+
+    // Player positions
+    const lineup = lineupsByQuarter[quarter];
+    const FBASE = {
+      GK:{x:50,y:88},LD:{x:22,y:75},CD:{x:50,y:72},RD:{x:78,y:75},
+      LM:{x:18,y:52},CM:{x:50,y:50},RM:{x:82,y:52},
+      LF:{x:28,y:22},CF:{x:50,y:18},RF:{x:72,y:22},
+    };
+
+    if (lineup?.starters) {
+      lineup.starters.forEach(slot => {
+        const fb = FBASE[slot.pos]||{x:50,y:50};
+        const px = fx+(fb.x/100)*fw;
+        const py = fy+(fb.y/100)*fh;
+
+        const grad = ctx.createRadialGradient(px,py,2,px,py,18);
+        grad.addColorStop(0,"#f5c86a"); grad.addColorStop(1,"#b87818");
+        ctx.fillStyle=grad; ctx.beginPath(); ctx.arc(px,py,18,0,Math.PI*2); ctx.fill();
+        ctx.strokeStyle="rgba(255,255,255,0.8)"; ctx.lineWidth=1.5; ctx.stroke();
+
+        const num=slot.player?.number||"?";
+        ctx.fillStyle="#0a0d0f"; ctx.font=`bold ${num.length>1?11:13}px Arial`; ctx.textAlign="center";
+        ctx.fillText(num,px,py+5);
+        const fname=(slot.player?.name||"").split(" ")[0];
+        ctx.fillStyle="#fff"; ctx.font="bold 9px Arial"; ctx.fillText(fname,px,py+30);
+        ctx.fillStyle="rgba(232,160,32,0.9)"; ctx.font="bold 8px Arial"; ctx.fillText(slot.pos,px,py-23);
+      });
+    }
+
+    // Bench section
+    const bench=(lineup?.bench)||[];
+    if (bench.length>0) {
+      const by2=fy+fh+14;
+      ctx.fillStyle="#141a12"; roundRect(ctx,fx,by2,fw,16+Math.ceil(bench.length/3)*30,8); ctx.fill();
+      ctx.strokeStyle="rgba(255,255,255,0.07)"; roundRect(ctx,fx,by2,fw,16+Math.ceil(bench.length/3)*30,8); ctx.stroke();
+      ctx.fillStyle="#e8a020"; ctx.font="bold 9px Arial"; ctx.textAlign="left"; ctx.fillText("🪑 BENCH",fx+10,by2+14);
+      bench.forEach((p,i)=>{
+        const bx=fx+10+(i%3)*((fw-20)/3);
+        const by3=by2+22+Math.floor(i/3)*30;
+        ctx.fillStyle="rgba(255,255,255,0.05)"; roundRect(ctx,bx,by3,(fw-20)/3-6,22,4); ctx.fill();
+        ctx.fillStyle="#e8e4dc"; ctx.font="10px Arial"; ctx.textAlign="left";
+        ctx.fillText(`#${p.number} ${p.name.split(" ")[0]}`,bx+6,by3+15);
+      });
+    }
+
+    // Footer
+    ctx.fillStyle="#555"; ctx.font="9px Arial"; ctx.textAlign="center";
+    ctx.fillText(`CoachKit · ${new Date().toLocaleDateString()}`,W/2,H-10);
+
+    setRendered(true);
+  }, []);
+
+  const handleDownload = () => {
+    const a = document.createElement("a");
+    a.download = `CoachKit_Q${quarter}_Lineup.png`;
+    a.href = canvasRef.current.toDataURL("image/png");
+    a.click();
+  };
+
+  return (
+    <div style={{position:"fixed",inset:0,zIndex:9999,background:"rgba(0,0,0,0.88)",
+      display:"flex",alignItems:"center",justifyContent:"center",padding:16}}
+      onClick={onClose}>
+      <div style={{background:"#141a12",borderRadius:16,width:"100%",maxWidth:480,
+        border:`1px solid ${C.border}`,overflow:"hidden"}} onClick={e=>e.stopPropagation()}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",
+          padding:"14px 18px",borderBottom:`1px solid ${C.border}`}}>
+          <div style={{fontSize:15,fontWeight:800,color:C.gold}}>📤 Share Lineup</div>
+          <button onClick={onClose} style={{background:"none",border:"none",cursor:"pointer",color:C.muted,fontSize:20}}>✕</button>
+        </div>
+        <div style={{padding:"16px 18px"}}>
+          <div style={{fontSize:11,color:C.muted,marginBottom:12,lineHeight:1.6}}>
+            Preview below — tap <b style={{color:C.text}}>Save Image</b> to download, then share via Messages or any app.
+          </div>
+          <div style={{borderRadius:10,overflow:"hidden",marginBottom:14,
+            border:`1px solid ${C.border}`,background:"#0c1409"}}>
+            <canvas ref={canvasRef} style={{width:"100%",height:"auto",display:"block"}}/>
+          </div>
+          <div style={{display:"flex",gap:8}}>
+            <Btn primary full onClick={handleDownload}>💾 Save Image</Btn>
+            <Btn ghost onClick={onClose}>Close</Btn>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function TabRoster({ players, addPlayer, updatePlayer, removePlayer, format }) {
   const [newName, setNewName] = useState("");
   const [newNum,  setNewNum]  = useState("");
@@ -1609,7 +2232,7 @@ function TabRoster({ players, addPlayer, updatePlayer, removePlayer, format }) {
 
   const handleAdd = () => {
     if (!newName.trim()) return;
-    addPlayer({ name:newName.trim(), number:newNum||String(players.length+1), positions:["MID"], injured:false, out:false, ratings:{} });
+    addPlayer({ name:newName.trim(), number:newNum||String(players.length+1), positions:[...ALL_POS_DEFAULT], injured:false, out:false, ratings:{} });
     setNewName(""); setNewNum("");
   };
 
@@ -1935,6 +2558,7 @@ function TabDrills({ drills, league, addCustomDrill, removeCustomDrill }) {
   const [ageFilter,   setAgeFilter]   = useState(false);
   const [search,      setSearch]      = useState("");
   const [expanded,    setExpanded]    = useState(null);
+  const [modalDrill,  setModalDrill]  = useState(null);
   const [showAdd,     setShowAdd]     = useState(false);
   const [newDrill,    setNewDrill]    = useState({name:"",category:"Passing",skills:[],ageMin:"U6",ageMax:"Adult",difficulty:"Beginner",duration:10,instructions:"",coaching:"",progressions:[],equipment:[]});
   const [progInput,   setProgInput]   = useState("");
@@ -2047,8 +2671,10 @@ function TabDrills({ drills, league, addCustomDrill, removeCustomDrill }) {
       {filtered.map(drill=>(
         <DrillCard key={drill.id} drill={drill} expanded={expanded===drill.id}
           onToggle={()=>setExpanded(expanded===drill.id?null:drill.id)}
-          onRemove={drill.custom?()=>removeCustomDrill(drill.id):null}/>
+          onRemove={drill.custom?()=>removeCustomDrill(drill.id):null}
+          onOpenModal={setModalDrill}/>
       ))}
+      <DrillModal drill={modalDrill} onClose={()=>setModalDrill(null)}/>
     </div>
   );
 }
@@ -2063,7 +2689,138 @@ function FilterPill({ label, active, onClick }) {
   );
 }
 
-function DrillCard({ drill, expanded, onToggle, onRemove }) {
+// ═══════════════════════════════════════════════════════════════════
+// DRILL DETAIL MODAL
+// ═══════════════════════════════════════════════════════════════════
+function DrillModal({ drill, onClose }) {
+  if (!drill) return null;
+  const diffColor = drill.difficulty==="Advanced"?C.warn:drill.difficulty==="Intermediate"?C.gold:C.ok;
+  return (
+    <div style={{
+      position:"fixed",inset:0,zIndex:9999,
+      background:"rgba(0,0,0,0.85)",
+      display:"flex",alignItems:"flex-end",justifyContent:"center",
+      padding:0,
+    }} onClick={onClose}>
+      <div style={{
+        background:"#141a12",borderRadius:"18px 18px 0 0",
+        width:"100%",maxWidth:600,maxHeight:"92vh",
+        overflow:"auto",border:`1px solid ${C.border}`,
+        borderBottom:"none",
+      }} onClick={e=>e.stopPropagation()}>
+        {/* Image */}
+        {drill.image && (
+          <div style={{position:"relative"}}>
+            <img src={drill.image} alt={drill.name}
+              style={{width:"100%",height:200,objectFit:"cover",borderRadius:"18px 18px 0 0",display:"block"}}/>
+            <div style={{
+              position:"absolute",inset:0,
+              background:"linear-gradient(to bottom, transparent 40%, #141a12 100%)",
+              borderRadius:"18px 18px 0 0",
+            }}/>
+            <button onClick={onClose} style={{
+              position:"absolute",top:12,right:12,
+              width:32,height:32,borderRadius:"50%",border:"none",cursor:"pointer",
+              background:"rgba(0,0,0,0.6)",color:"#fff",fontSize:16,
+              display:"flex",alignItems:"center",justifyContent:"center",
+            }}>✕</button>
+          </div>
+        )}
+        {!drill.image && (
+          <div style={{display:"flex",justifyContent:"flex-end",padding:"12px 16px 0"}}>
+            <button onClick={onClose} style={{background:"none",border:"none",cursor:"pointer",color:C.muted,fontSize:22}}>✕</button>
+          </div>
+        )}
+
+        <div style={{padding:"16px 20px 32px"}}>
+          {/* Header */}
+          <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",marginBottom:12}}>
+            <div>
+              <div style={{fontSize:20,fontWeight:800,color:C.text,lineHeight:1.2}}>{drill.name}</div>
+              <div style={{fontSize:12,color:C.muted,marginTop:4}}>
+                {drill.category} · {drill.duration} min · {drill.ageMin}–{drill.ageMax||"Adult"}
+              </div>
+            </div>
+            <span style={{
+              fontSize:10,fontWeight:800,color:diffColor,
+              background:`${diffColor}22`,padding:"4px 10px",borderRadius:6,flexShrink:0,marginLeft:8,
+            }}>{drill.difficulty}</span>
+          </div>
+
+          {/* Skills */}
+          {(drill.skills||[]).length>0 && (
+            <div style={{display:"flex",flexWrap:"wrap",gap:4,marginBottom:16}}>
+              {drill.skills.map(s=>(
+                <span key={s} style={{
+                  fontSize:10,background:"rgba(255,255,255,0.08)",
+                  color:C.muted,padding:"3px 8px",borderRadius:4,fontWeight:600,
+                }}>{s}</span>
+              ))}
+            </div>
+          )}
+
+          {/* Setup */}
+          {drill.setup && (
+            <div style={{marginBottom:16,padding:"12px 14px",background:"rgba(30,77,43,0.2)",borderRadius:9,border:"1px solid rgba(39,174,96,0.2)"}}>
+              <div style={{fontSize:10,color:C.ok,fontWeight:800,textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:6}}>📐 Setup</div>
+              <div style={{fontSize:13,color:C.text,lineHeight:1.7}}>{drill.setup}</div>
+            </div>
+          )}
+
+          {/* Instructions */}
+          {drill.instructions && (
+            <div style={{marginBottom:16}}>
+              <div style={{fontSize:10,color:C.gold,fontWeight:800,textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:8}}>▶ Instructions</div>
+              <div style={{fontSize:13,color:C.text,lineHeight:1.8}}>{drill.instructions}</div>
+            </div>
+          )}
+
+          {/* Coaching Points */}
+          {drill.coaching && (
+            <div style={{marginBottom:16,padding:"12px 14px",background:"rgba(232,160,32,0.07)",borderRadius:9,border:"1px solid rgba(232,160,32,0.15)"}}>
+              <div style={{fontSize:10,color:C.gold,fontWeight:800,textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:6}}>🎯 Coaching Points</div>
+              <div style={{fontSize:13,color:C.text,lineHeight:1.8}}>{drill.coaching}</div>
+            </div>
+          )}
+
+          {/* Progressions */}
+          {(drill.progressions||[]).length>0 && (
+            <div style={{marginBottom:16}}>
+              <div style={{fontSize:10,color:C.gold,fontWeight:800,textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:8}}>📈 Progressions</div>
+              {drill.progressions.map((p,i)=>(
+                <div key={i} style={{
+                  display:"flex",gap:8,alignItems:"flex-start",marginBottom:6,
+                  padding:"8px 12px",background:C.surface,borderRadius:7,
+                }}>
+                  <span style={{color:C.gold,fontWeight:800,fontSize:12,flexShrink:0}}>→</span>
+                  <span style={{fontSize:13,color:C.muted,lineHeight:1.5}}>{p}</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Equipment */}
+          {(drill.equipment||[]).length>0 && (
+            <div style={{padding:"12px 14px",background:C.surface,borderRadius:9,border:`1px solid ${C.border}`}}>
+              <div style={{fontSize:10,color:C.muted,fontWeight:800,textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:8}}>🎒 Equipment</div>
+              <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+                {drill.equipment.map((e,i)=>(
+                  <span key={i} style={{
+                    fontSize:12,color:C.text,
+                    background:"rgba(255,255,255,0.06)",
+                    padding:"4px 10px",borderRadius:5,
+                  }}>• {e}</span>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DrillCard({ drill, expanded, onToggle, onRemove, onOpenModal }) {
   const diffColor = drill.difficulty==="Advanced"?C.warn:drill.difficulty==="Intermediate"?C.gold:C.ok;
   return (
     <div style={{
@@ -2096,40 +2853,20 @@ function DrillCard({ drill, expanded, onToggle, onRemove }) {
       </div>
 
       {expanded && (
-        <div style={{borderTop:`1px solid ${C.border}`}}>
-          {drill.image && (
-            <img src={drill.image} alt={drill.name}
-              style={{width:"100%",maxHeight:160,objectFit:"cover",display:"block"}}/>
+        <div style={{borderTop:`1px solid ${C.border}`,padding:"10px 14px"}}>
+          {drill.setup && (
+            <div style={{fontSize:12,color:C.muted,lineHeight:1.6,marginBottom:8}}>
+              <span style={{color:C.gold,fontWeight:700}}>Setup: </span>{drill.setup}
+            </div>
           )}
-          <div style={{padding:"12px 14px"}}>
-            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:12}}>
-              <div>
-                <div style={{fontSize:11,color:C.gold,fontWeight:700,marginBottom:4}}>SETUP</div>
-                <div style={{fontSize:12,color:C.muted,lineHeight:1.6}}>{drill.setup}</div>
-              </div>
-              <div>
-                <div style={{fontSize:11,color:C.gold,fontWeight:700,marginBottom:4}}>EQUIPMENT</div>
-                {(drill.equipment||[]).map((e,i)=><div key={i} style={{fontSize:12,color:C.muted}}>• {e}</div>)}
-                {(!drill.equipment||drill.equipment.length===0) && <div style={{fontSize:12,color:C.muted}}>Standard equipment</div>}
-              </div>
-            </div>
-            <div style={{marginBottom:10}}>
-              <div style={{fontSize:11,color:C.gold,fontWeight:700,marginBottom:4}}>INSTRUCTIONS</div>
-              <div style={{fontSize:12,color:C.text,lineHeight:1.7}}>{drill.instructions}</div>
-            </div>
-            <div style={{marginBottom:10}}>
-              <div style={{fontSize:11,color:C.gold,fontWeight:700,marginBottom:4}}>COACHING POINTS</div>
-              <div style={{fontSize:12,color:C.text,lineHeight:1.7}}>{drill.coaching}</div>
-            </div>
-            {(drill.progressions||[]).length > 0 && (
-              <div style={{marginBottom:10}}>
-                <div style={{fontSize:11,color:C.gold,fontWeight:700,marginBottom:4}}>PROGRESSIONS</div>
-                {drill.progressions.map((p,i)=>(
-                  <div key={i} style={{fontSize:12,color:C.muted,marginBottom:3}}>→ {p}</div>
-                ))}
-              </div>
-            )}
-            {onRemove && <Btn sm danger onClick={onRemove}>🗑️ Remove Custom Drill</Btn>}
+          <div style={{fontSize:12,color:C.text,lineHeight:1.6,marginBottom:10}}>
+            {(drill.instructions||"").slice(0,140)}{(drill.instructions||"").length>140?"…":""}
+          </div>
+          <div style={{display:"flex",gap:6}}>
+            <Btn sm primary onClick={e=>{e.stopPropagation();onOpenModal&&onOpenModal(drill);}}>
+              📖 Full Details
+            </Btn>
+            {onRemove && <Btn sm danger onClick={onRemove}>🗑️ Remove</Btn>}
           </div>
         </div>
       )}
@@ -2143,12 +2880,13 @@ function DrillCard({ drill, expanded, onToggle, onRemove }) {
 const FOCUS_AREAS = ["General","Passing","Dribbling","Shooting","Defense","Possession","Fitness","Set Pieces","Goalkeeping","Heading"];
 
 function TabPractice({ drills, league }) {
-  const [focus,     setFocus]     = useState("General");
-  const [skills,    setSkills]    = useState([]);
-  const [duration,  setDuration]  = useState(60);
-  const [plan,      setPlan]      = useState(null);
-  const [notes,     setNotes]     = useState("");
-  const [swapDrill, setSwapDrill] = useState(null); // index being swapped
+  const [focus,      setFocus]      = useState("General");
+  const [skills,     setSkills]     = useState([]);
+  const [duration,   setDuration]   = useState(60);
+  const [plan,       setPlan]       = useState(null);
+  const [notes,      setNotes]      = useState("");
+  const [swapDrill,  setSwapDrill]  = useState(null);
+  const [modalDrill, setModalDrill] = useState(null);
 
   const isYoung = LEAGUES.indexOf(league) <= 1; // U6, U8
   const level = LEAGUES.indexOf(league) <= 2 ? "Beginner" : LEAGUES.indexOf(league) <= 4 ? "Intermediate" : "Advanced";
@@ -2223,8 +2961,9 @@ function TabPractice({ drills, league }) {
           }}>
             <div style={{fontWeight:800,fontSize:16,color:C.gold}}>{plan.league} Practice — {plan.focus}</div>
             <div style={{fontSize:12,color:C.muted,marginTop:2}}>
-              ~{plan.duration}min · {plan.sections.filter(s=>s.drill).length} activities
-              {plan.skills.length>0 && ` · Focus: ${plan.skills.join(", ")}`}
+              {plan.sections.reduce((s,x)=>s+x.time,0)} min total
+              · {plan.sections.filter(s=>s.drill).length} activities
+              {plan.skills.length>0 && ` · Skill focus: ${plan.skills.join(", ")}`}
             </div>
           </div>
 
@@ -2249,8 +2988,8 @@ function TabPractice({ drills, league }) {
                   <>
                     <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4}}>
                       {sec.drill.image && <img src={sec.drill.image} alt="" style={{width:36,height:36,borderRadius:5,objectFit:"cover",flexShrink:0}}/>}
-                      <div>
-                        <div style={{fontSize:13,color:C.text,fontWeight:600}}>{sec.drill.name}</div>
+                      <div style={{flex:1,cursor:"pointer"}} onClick={()=>setModalDrill(sec.drill)}>
+                        <div style={{fontSize:13,color:C.text,fontWeight:600}}>{sec.drill.name} <span style={{fontSize:10,color:C.gold}}>📖</span></div>
                         <div style={{fontSize:11,color:C.muted}}>{sec.drill.category} · {sec.drill.difficulty}</div>
                       </div>
                     </div>
@@ -2296,6 +3035,7 @@ function TabPractice({ drills, league }) {
           </div>
         </div>
       )}
+      <DrillModal drill={modalDrill} onClose={()=>setModalDrill(null)}/>
     </div>
   );
 }
@@ -2315,28 +3055,29 @@ const TABS = [
 
 // FORMATION TEMPLATES per format
 const FORMATION_TEMPLATES = {
-  "4v4":  [{ name:"2-1",    slots:["GK","DEF","MID","FWD"] },{ name:"1-2",    slots:["GK","DEF","FWD","FWD"] }],
-  "5v5":  [{ name:"2-2",    slots:["GK","DEF","DEF","MID","FWD"] },{ name:"1-2-1",  slots:["GK","DEF","MID","MID","FWD"] }],
-  "6v6":  [{ name:"2-2-1",  slots:["GK","DEF","DEF","MID","MID","FWD"] },{ name:"3-2",    slots:["GK","DEF","DEF","DEF","MID","FWD"] },{ name:"2-1-2",  slots:["GK","DEF","DEF","MID","FWD","FWD"] }],
-  "7v7":  [{ name:"3-2-1",  slots:["GK","DEF","DEF","DEF","MID","MID","FWD"] },{ name:"2-3-1",  slots:["GK","DEF","DEF","MID","MID","MID","FWD"] },{ name:"2-2-2",  slots:["GK","DEF","DEF","MID","MID","FWD","FWD"] }],
-  "8v8":  [{ name:"3-3-1",  slots:["GK","DEF","DEF","DEF","MID","MID","MID","FWD"] },{ name:"3-2-2",  slots:["GK","DEF","DEF","DEF","MID","MID","FWD","FWD"] }],
-  "9v9":  [{ name:"3-3-2",  slots:["GK","DEF","DEF","DEF","MID","MID","MID","FWD","FWD"] },{ name:"4-3-1",  slots:["GK","DEF","DEF","DEF","DEF","MID","MID","MID","FWD"] }],
-  "11v11":[{ name:"4-4-2",  slots:["GK","DEF","DEF","DEF","DEF","MID","MID","MID","MID","FWD","FWD"] },{ name:"4-3-3",  slots:["GK","DEF","DEF","DEF","DEF","MID","MID","MID","FWD","FWD","FWD"] },{ name:"3-5-2",  slots:["GK","DEF","DEF","DEF","MID","MID","MID","MID","MID","FWD","FWD"] }],
+  "4v4":  [{ name:"2-1",   slots:["GK","CD","CM","CF"] },{ name:"1-1-1", slots:["GK","CD","CM","CF"] }],
+  "5v5":  [{ name:"2-2",   slots:["GK","LD","RD","LM","CF"] },{ name:"1-2-1", slots:["GK","CD","LM","RM","CF"] }],
+  "6v6":  [{ name:"2-2-1", slots:["GK","LD","RD","LM","RM","CF"] },{ name:"3-2",   slots:["GK","LD","CD","RD","CM","CF"] },{ name:"2-1-2", slots:["GK","LD","RD","CM","LF","RF"] },{ name:"2-0-3", slots:["GK","LD","RD","LF","CF","RF"] }],
+  "7v7":  [{ name:"3-2-1", slots:["GK","LD","CD","RD","LM","RM","CF"] },{ name:"2-3-1", slots:["GK","LD","RD","LM","CM","RM","CF"] },{ name:"2-2-2", slots:["GK","LD","RD","LM","RM","LF","RF"] }],
+  "8v8":  [{ name:"3-3-1", slots:["GK","LD","CD","RD","LM","CM","RM","CF"] },{ name:"3-2-2", slots:["GK","LD","CD","RD","LM","RM","LF","RF"] }],
+  "9v9":  [{ name:"3-3-2", slots:["GK","LD","CD","RD","LM","CM","RM","LF","RF"] },{ name:"4-3-1", slots:["GK","LD","CD","CD","RD","LM","CM","RM","CF"] }],
+  "11v11":[{ name:"4-4-2", slots:["GK","LB","CB","CB","RB","LM","CM","CM","RM","LF","RF"] },{ name:"4-3-3", slots:["GK","LB","CB","CB","RB","LM","CM","RM","LF","CF","RF"] },{ name:"3-5-2", slots:["GK","LB","CB","RB","LM","CM","CM","CM","RM","LF","RF"] }],
 };
 
+const ALL_POS_DEFAULT = ["GK","LD","CD","RD","LM","CM","RM","LF","CF","RF"];
+
 const SAMPLE_PLAYERS = [
-  {id:"p1",name:"Alex Johnson",number:"1", positions:["GK"],         injured:false,out:false,ratings:{Speed:3,Technique:4,Positioning:5,Teamwork:4,Effort:4}, parentName:"Chris Johnson", parentPhone:"513-555-0101", devNotes:""},
-  {id:"p2",name:"Sam Torres",  number:"4", positions:["DEF","CB"],   injured:false,out:false,ratings:{Speed:3,Technique:3,Positioning:4,Teamwork:5,Effort:4}, parentName:"Maria Torres",  parentPhone:"513-555-0102", devNotes:""},
-  {id:"p3",name:"Jordan Lee",  number:"5", positions:["DEF","MID"],  injured:false,out:false,ratings:{Speed:4,Technique:3,Positioning:3,Teamwork:4,Effort:5}, parentName:"Pat Lee",       parentPhone:"513-555-0103", devNotes:""},
-  {id:"p4",name:"Casey Morgan",number:"8", positions:["MID","CAM"],  injured:false,out:false,ratings:{Speed:4,Technique:5,Positioning:4,Teamwork:4,Effort:3}, parentName:"Dana Morgan",   parentPhone:"513-555-0104", devNotes:""},
-  {id:"p5",name:"Riley Chen",  number:"10",positions:["MID","FWD"],  injured:false,out:false,ratings:{Speed:5,Technique:4,Positioning:3,Teamwork:3,Effort:4}, parentName:"Wei Chen",      parentPhone:"513-555-0105", devNotes:""},
-  {id:"p6",name:"Taylor Kim",  number:"9", positions:["FWD","ST"],   injured:false,out:false,ratings:{Speed:5,Technique:5,Positioning:4,Teamwork:3,Effort:5}, parentName:"Jin Kim",       parentPhone:"513-555-0106", devNotes:""},
-  {id:"p7",name:"Jamie Park",  number:"7", positions:["FWD","Wing"], injured:false,out:false,ratings:{Speed:4,Technique:4,Positioning:3,Teamwork:4,Effort:4}, parentName:"Sun Park",      parentPhone:"513-555-0107", devNotes:""},
-  {id:"p8",name:"Drew Patel",  number:"3", positions:["DEF","LB"],   injured:false,out:false,ratings:{Speed:3,Technique:3,Positioning:4,Teamwork:5,Effort:5}, parentName:"Priya Patel",   parentPhone:"513-555-0108", devNotes:""},
-  {id:"p9",name:"Morgan Walsh",number:"11",positions:["FWD","Wing","MID"],injured:false,out:false,ratings:{Speed:5,Technique:4,Positioning:4,Teamwork:4,Effort:4}, parentName:"Sean Walsh",    parentPhone:"513-555-0109", devNotes:""},
+  {id:"p1", name:"John Maloney",    number:"1",  positions:[...ALL_POS_DEFAULT], injured:false,out:false,ratings:{}, parentName:"", parentPhone:"", devNotes:""},
+  {id:"p2", name:"Wes Dudas",       number:"2",  positions:[...ALL_POS_DEFAULT], injured:false,out:false,ratings:{}, parentName:"", parentPhone:"", devNotes:""},
+  {id:"p3", name:"Jaxon Wells",     number:"3",  positions:[...ALL_POS_DEFAULT], injured:false,out:false,ratings:{}, parentName:"", parentPhone:"", devNotes:""},
+  {id:"p4", name:"Remi Vienot",     number:"4",  positions:[...ALL_POS_DEFAULT], injured:false,out:false,ratings:{}, parentName:"", parentPhone:"", devNotes:""},
+  {id:"p5", name:"Sean Farris",     number:"5",  positions:[...ALL_POS_DEFAULT], injured:false,out:false,ratings:{}, parentName:"", parentPhone:"", devNotes:""},
+  {id:"p6", name:"Henry Meyer",     number:"6",  positions:[...ALL_POS_DEFAULT], injured:false,out:false,ratings:{}, parentName:"", parentPhone:"", devNotes:""},
+  {id:"p7", name:"Jude Armbruster", number:"7",  positions:[...ALL_POS_DEFAULT], injured:false,out:false,ratings:{}, parentName:"", parentPhone:"", devNotes:""},
+  {id:"p8", name:"Trey Lazear",     number:"8",  positions:[...ALL_POS_DEFAULT], injured:false,out:false,ratings:{}, parentName:"", parentPhone:"", devNotes:""},
+  {id:"p9", name:"Maddox Calhoun",  number:"9",  positions:[...ALL_POS_DEFAULT], injured:false,out:false,ratings:{}, parentName:"", parentPhone:"", devNotes:""},
 ];
 
-// ── Wrap entire app in Clerk auth gate ──────────────────────────────
 export default function App() {
   return (
     <AuthGate>
@@ -2347,25 +3088,19 @@ export default function App() {
 
 function CoachKitApp() {
   const { user } = useUser();
-  const uid_prefix = user?.id ? `ck_${user.id}_` : "ck_guest_";
+  const pfx = user?.id ? `ck_${user.id}_` : "ck_guest_";
 
   const [tab,             setTab]             = useState("game");
-  const [league,          setLeague]          = useState("U10 / Wings");
-  const [format,          setFormat]          = useState("7v7");
+  const [league,          setLeague]          = useState("U8 / Passers");
+  const [format,          setFormat]          = useState("6v6");
   const [lineupsByQuarter,setLineupsByQuarter]= useState({});
 
-  const [players,            setPlayers]            = usePersistedState(uid_prefix+"players",      SAMPLE_PLAYERS);
-  const [customDrills,       setCustomDrills]       = usePersistedState(uid_prefix+"customDrills", []);
-  const [playerStats,        setPlayerStats]        = usePersistedState(uid_prefix+"playerStats",  (() => { const s = {}; SAMPLE_PLAYERS.forEach(p => { s[p.id] = {goals:0,assists:0,gamesPlayed:0}; }); return s; })());
-  const [games,              setGames]              = usePersistedState(uid_prefix+"games", [
-    {id:"g1", date:"2026-03-08", opponent:"FC Milford",   homeScore:3, oppScore:1, notes:"Great passing game."},
-    {id:"g2", date:"2026-03-15", opponent:"Blue Wave SC", homeScore:2, oppScore:2, notes:"Tied in last minute."},
-  ]);
-  const [practiceAttendance, setPracticeAttendance] = usePersistedState(uid_prefix+"practiceAtt",   {});
-  const [practiceDates,      setPracticeDates]      = usePersistedState(uid_prefix+"practiceDates", [
-    {id:"pr1", date:"2026-03-10", notes:"Passing & positioning"},
-    {id:"pr2", date:"2026-03-03", notes:"Shooting drills"},
-  ]);
+  const [players,            setPlayers]            = usePersistedState(pfx+"players",      SAMPLE_PLAYERS);
+  const [customDrills,       setCustomDrills]       = usePersistedState(pfx+"customDrills", []);
+  const [playerStats,        setPlayerStats]        = usePersistedState(pfx+"playerStats",  (() => { const s={}; SAMPLE_PLAYERS.forEach(p=>{s[p.id]={goals:0,assists:0,gamesPlayed:0};}); return s; })());
+  const [games,              setGames]              = usePersistedState(pfx+"games",         []);
+  const [practiceAttendance, setPracticeAttendance] = usePersistedState(pfx+"practiceAtt",  {});
+  const [practiceDates,      setPracticeDates]      = usePersistedState(pfx+"practiceDates",[]);
 
   const allDrills = [...DRILLS, ...customDrills];
 
@@ -2437,6 +3172,7 @@ function CoachKitApp() {
                 {out>0    &&<Stat label="🚫 Out"     val={out}     color="#e67e22"/>}
               </div>
               <UserMenu />
+              </div>
             </div>
           </div>
 
