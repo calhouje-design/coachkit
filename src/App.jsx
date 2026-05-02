@@ -1751,16 +1751,20 @@ function TabGame({ format, league, players, setPlayers, lineupsByQuarter, setLin
                   })()}
 
                   {/* Quick presets */}
-                  <div style={{display:"flex",flexWrap:"wrap",gap:4,marginBottom:10}}>
+                  <div style={{display:"flex",flexDirection:"column",gap:4,marginBottom:10,maxHeight:220,overflowY:"auto"}}>
                     {(FORMATION_TEMPLATES[format]||[]).map(tmpl=>{
                       const isActive = activeFormation===tmpl.name;
                       return (
                         <button key={tmpl.name} onClick={()=>setActiveFormation(tmpl.name)} style={{
-                          padding:"3px 10px",borderRadius:4,border:"none",cursor:"pointer",
-                          fontSize:11,fontWeight:700,fontFamily:"inherit",
-                          background:isActive?`linear-gradient(135deg,${C.gold},${C.goldDark})`:"rgba(255,255,255,0.08)",
-                          color:isActive?"#0a0d0f":C.muted,
-                        }}>{tmpl.name}</button>
+                          padding:"7px 10px",borderRadius:6,border:"none",cursor:"pointer",
+                          fontSize:11,fontWeight:600,fontFamily:"inherit",textAlign:"left",
+                          background:isActive?`linear-gradient(135deg,${C.gold},${C.goldDark})`:"rgba(255,255,255,0.06)",
+                          color:isActive?"#0a0d0f":C.text,
+                          display:"flex",alignItems:"center",gap:8,
+                        }}>
+                          <span style={{fontWeight:800,fontSize:13,minWidth:48}}>{tmpl.name}</span>
+                          <span style={{opacity:0.75,fontSize:10}}>{tmpl.label}  -  {tmpl.desc}</span>
+                        </button>
                       );
                     })}
                   </div>
@@ -3070,13 +3074,73 @@ const TABS = [
 
 // FORMATION TEMPLATES per format
 const FORMATION_TEMPLATES = {
-  "4v4":  [{ name:"2-1",   slots:["GK","CD","CM","CF"] },{ name:"1-1-1", slots:["GK","CD","CM","CF"] }],
-  "5v5":  [{ name:"2-2",   slots:["GK","LD","RD","LM","CF"] },{ name:"1-2-1", slots:["GK","CD","LM","RM","CF"] }],
-  "6v6":  [{ name:"2-2-1", slots:["GK","LD","RD","LM","RM","CF"] },{ name:"3-2",   slots:["GK","LD","CD","RD","CM","CF"] },{ name:"2-1-2", slots:["GK","LD","RD","CM","LF","RF"] },{ name:"2-0-3", slots:["GK","LD","RD","LF","CF","RF"] }],
-  "7v7":  [{ name:"3-2-1", slots:["GK","LD","CD","RD","LM","RM","CF"] },{ name:"2-3-1", slots:["GK","LD","RD","LM","CM","RM","CF"] },{ name:"2-2-2", slots:["GK","LD","RD","LM","RM","LF","RF"] }],
-  "8v8":  [{ name:"3-3-1", slots:["GK","LD","CD","RD","LM","CM","RM","CF"] },{ name:"3-2-2", slots:["GK","LD","CD","RD","LM","RM","LF","RF"] }],
-  "9v9":  [{ name:"3-3-2", slots:["GK","LD","CD","RD","LM","CM","RM","LF","RF"] },{ name:"4-3-1", slots:["GK","LD","CD","CD","RD","LM","CM","RM","CF"] }],
-  "11v11":[{ name:"4-4-2", slots:["GK","LB","CB","CB","RB","LM","CM","CM","RM","LF","RF"] },{ name:"4-3-3", slots:["GK","LB","CB","CB","RB","LM","CM","RM","LF","CF","RF"] },{ name:"3-5-2", slots:["GK","LB","CB","RB","LM","CM","CM","CM","RM","LF","RF"] }],
+  // 4v4 = GK + 3 field players
+  "4v4": [
+    { name:"1-1-1", label:"Balanced",  desc:"One each: defender, mid, forward. Classic simple shape.", slots:["GK","CD","CM","CF"] },
+    { name:"2-1",   label:"Defensive", desc:"Two defenders, one forward. Hold and counter.", slots:["GK","LD","RD","CF"] },
+    { name:"1-2",   label:"Attacking", desc:"One defender, two forwards. High pressure up top.", slots:["GK","CD","LF","RF"] },
+  ],
+
+  // 5v5 = GK + 4 field players
+  "5v5": [
+    { name:"2-1-1", label:"Balanced",  desc:"Two defenders, one mid, one forward.", slots:["GK","LD","RD","CM","CF"] },
+    { name:"1-2-1", label:"Mid Heavy", desc:"Diamond shape  -  one def, two mids, one fwd.", slots:["GK","CD","LM","RM","CF"] },
+    { name:"2-2",   label:"Compact",   desc:"Two lines of two. Hard to break down.", slots:["GK","LD","RD","LF","RF"] },
+    { name:"1-1-2", label:"Attacking", desc:"One def, one mid, two fwds. Aggressive.", slots:["GK","CD","CM","LF","RF"] },
+  ],
+
+  // 6v6 = GK + 5 field players (SAY East U8 format)
+  "6v6": [
+    { name:"2-2-1", label:"Balanced",   desc:"Standard shape. Two defenders, two mids, one forward. Best all-around for U8.", slots:["GK","LD","RD","LM","RM","CF"] },
+    { name:"2-1-2", label:"Wide Attack", desc:"Two defenders, one holding mid, two forwards. Spread the attack wide.", slots:["GK","LD","RD","CM","LF","RF"] },
+    { name:"3-2",   label:"Defensive",  desc:"Three defenders, two forwards. Pack the back, hit on counter.", slots:["GK","LD","CD","RD","LF","RF"] },
+    { name:"1-3-1", label:"Mid Control",desc:"One sweeper, three mids, one striker. Dominate the middle.", slots:["GK","CD","LM","CM","RM","CF"] },
+    { name:"2-0-3", label:"All Attack", desc:"Two defenders, no mid, three forwards. Full attack  -  risky but fun.", slots:["GK","LD","RD","LF","CF","RF"] },
+    { name:"3-1-1", label:"Park Bus",   desc:"Three defenders, one mid, one forward. Ultra defensive.", slots:["GK","LD","CD","RD","CM","CF"] },
+  ],
+
+  // 7v7 = GK + 6 field players
+  "7v7": [
+    { name:"3-2-1", label:"Classic",    desc:"Three defenders, two mids, one striker. Most common 7v7 shape.", slots:["GK","LD","CD","RD","LM","RM","CF"] },
+    { name:"2-3-1", label:"Mid Heavy",  desc:"Two defenders, three mids, one striker. Control the middle.", slots:["GK","LD","RD","LM","CM","RM","CF"] },
+    { name:"2-2-2", label:"Balanced",   desc:"Two defenders, two mids, two forwards. Symmetric and flexible.", slots:["GK","LD","RD","LM","RM","LF","RF"] },
+    { name:"3-1-2", label:"Counter",    desc:"Three defenders, one mid, two forwards. Fast break style.", slots:["GK","LD","CD","RD","CM","LF","RF"] },
+    { name:"2-1-3", label:"Attacking",  desc:"Two defenders, one mid, three forwards. High press, all-out attack.", slots:["GK","LD","RD","CM","LF","CF","RF"] },
+    { name:"1-3-2", label:"Overload Mid",desc:"One sweeper, three mids, two forwards. Overwhelm in midfield.", slots:["GK","CD","LM","CM","RM","LF","RF"] },
+  ],
+
+  // 8v8 = GK + 7 field players
+  "8v8": [
+    { name:"3-3-1", label:"Classic",    desc:"Three defenders, three mids, one striker. Standard 8v8.", slots:["GK","LD","CD","RD","LM","CM","RM","CF"] },
+    { name:"3-2-2", label:"Balanced",   desc:"Three defenders, two mids, two forwards. Width in attack.", slots:["GK","LD","CD","RD","LM","RM","LF","RF"] },
+    { name:"4-2-1", label:"Defensive",  desc:"Four defenders, two mids, one striker. Protect the back.", slots:["GK","LD","CD","CD","RD","LM","RM","CF"] },
+    { name:"2-3-2", label:"Mid Press",  desc:"Two defenders, three mids, two forwards. Press high and wide.", slots:["GK","LD","RD","LM","CM","RM","LF","RF"] },
+    { name:"2-2-3", label:"Attacking",  desc:"Two defenders, two mids, three forwards. Commit to attack.", slots:["GK","LD","RD","LM","RM","LF","CF","RF"] },
+    { name:"3-1-3", label:"Diamond Fwd",desc:"Three defenders, one holding mid, three forwards.", slots:["GK","LD","CD","RD","CM","LF","CF","RF"] },
+  ],
+
+  // 9v9 = GK + 8 field players (SAY East U10/U12/U14)
+  "9v9": [
+    { name:"3-3-2", label:"Classic",     desc:"Three defenders, three mids, two forwards. Most common 9v9 shape.", slots:["GK","LD","CD","RD","LM","CM","RM","LF","RF"] },
+    { name:"4-3-1", label:"Defensive",   desc:"Four defenders, three mids, one striker. Solid back four.", slots:["GK","LD","CD","CD","RD","LM","CM","RM","CF"] },
+    { name:"3-2-3", label:"Attacking",   desc:"Three defenders, two mids, three forwards. Go for goal.", slots:["GK","LD","CD","RD","LM","RM","LF","CF","RF"] },
+    { name:"4-2-2", label:"Wide",        desc:"Four defenders, two central mids, two wide forwards.", slots:["GK","LD","CD","CD","RD","LM","RM","LF","RF"] },
+    { name:"3-4-1", label:"Mid Control", desc:"Three defenders, four mids, one striker. Overload midfield.", slots:["GK","LD","CD","RD","LM","CM","CM","RM","CF"] },
+    { name:"2-4-2", label:"Total Mid",   desc:"Two defenders, four mids, two forwards. Dominate the middle.", slots:["GK","LD","RD","LM","CM","CM","RM","LF","RF"] },
+    { name:"3-1-4", label:"All Out",     desc:"Three defenders, one mid anchor, four forwards. High risk.", slots:["GK","LD","CD","RD","CM","LF","LF","RF","RF"] },
+  ],
+
+  // 11v11 = GK + 10 field players
+  "11v11": [
+    { name:"4-4-2", label:"Classic Flat",  desc:"The most famous formation. Two banks of four, two strikers. Simple and effective.", slots:["GK","LB","CB","CB","RB","LM","CM","CM","RM","LF","RF"] },
+    { name:"4-3-3", label:"Attacking",     desc:"Four defenders, three mids, three forwards. Dominant when midfield wins.", slots:["GK","LB","CB","CB","RB","LM","CM","RM","LF","CF","RF"] },
+    { name:"4-2-3-1",label:"Modern",       desc:"Two holding mids protect the back four. Three attacking mids behind one striker.", slots:["GK","LB","CB","CB","RB","CM","CM","LM","CF","RM","RF"] },
+    { name:"3-5-2", label:"Wing Backs",    desc:"Three defenders, five mids (with wing backs), two strikers.", slots:["GK","LB","CB","RB","LM","CM","CM","CM","RM","LF","RF"] },
+    { name:"5-3-2", label:"Defensive",     desc:"Five defenders (three centre-backs, two wing backs), three mids, two strikers.", slots:["GK","LB","CB","CB","CB","RB","LM","CM","RM","LF","RF"] },
+    { name:"4-1-4-1",label:"Holding Mid",  desc:"Single defensive mid in front of back four. Four mids, one striker.", slots:["GK","LB","CB","CB","RB","CM","LM","CM","RM","CF","CF"] },
+    { name:"3-4-3", label:"All Attack",    desc:"Three defenders, four mids, three forwards. Maximum offensive output.", slots:["GK","LB","CB","RB","LM","CM","CM","RM","LF","CF","RF"] },
+    { name:"4-5-1", label:"Defensive Mid", desc:"Four defenders, five mids, one striker. Control possession and frustrate.", slots:["GK","LB","CB","CB","RB","LM","CM","CM","CM","RM","CF"] },
+  ],
 };
 
 const ALL_POS_DEFAULT = ["GK","LD","CD","RD","LM","CM","RM","LF","CF","RF"];
