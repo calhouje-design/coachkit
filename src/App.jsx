@@ -3157,17 +3157,16 @@ function CoachKitApp() {
             <div style={{display:"flex",alignItems:"center",gap:12}}>
               <div style={{
                 width:44,height:44,borderRadius:11,
-                background:`linear-gradient(135deg,${C.gold},${C.goldDark})`,
-                display:"flex",alignItems:"center",justifyContent:"center",fontSize:22,
+                overflow:"hidden",
                 boxShadow:`0 4px 12px ${C.gold}44`,
+                flexShrink:0,
               }}>
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
-                  <circle cx="12" cy="12" r="10" fill="#0a0d0f" stroke="#0a0d0f" strokeWidth="1"/>
-                  <circle cx="12" cy="12" r="10" fill="none" stroke="#0a0d0f" strokeWidth="0.5"/>
-                  <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2z" fill="#0a0d0f"/>
-                  <polygon points="12,4 14,9 19,9 15,13 17,18 12,15 7,18 9,13 5,9 10,9" fill="#0a0d0f" stroke="#e8a020" strokeWidth="0.8"/>
-                  <text x="12" y="16" textAnchor="middle" fontSize="9" fill="#0a0d0f" fontWeight="bold">CK</text>
-                </svg>
+                <img
+                  src="https://raw.githubusercontent.com/calhouje-design/coachkit/main/logo.png"
+                  alt="CoachKit"
+                  style={{width:"100%",height:"100%",objectFit:"cover",display:"block"}}
+                  onError={e=>{e.target.style.display="none"; e.target.parentElement.style.background=`linear-gradient(135deg,${C.gold},${C.goldDark})`; e.target.parentElement.innerHTML+="<span style='color:#0a0d0f;font-weight:900;font-size:16px;font-family:Arial'>CK</span>";}}
+                />
               </div>
               <div>
                 <div style={{fontSize:19,fontWeight:800,color:C.text,letterSpacing:"-0.01em"}}>CoachKit</div>
