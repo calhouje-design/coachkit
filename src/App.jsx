@@ -3,7 +3,7 @@ import { useUser } from "@clerk/clerk-react";
 import AuthGate from "./components/AuthGate.jsx";
 import UserMenu from "./components/UserMenu.jsx";
 
-// ── localStorage persistence helper ─────────────────────────────────
+// -- localStorage persistence helper --
 function usePersistedState(key, defaultValue) {
   const [state, setState] = useState(() => {
     try {
@@ -71,7 +71,7 @@ const FIELD_BASE = {
   FWD:{x:50,y:22}, ST:{x:50,y:18}, Wing:{x:20,y:30},
 };
 
-// ─── SAY East Play-Time Rules (SAY Rule 12) ───────────────────────
+// -- SAY East Play-Time Rules (SAY Rule 12) --
 // Every player present must play approximately half the game.
 // Source: SAY East Playing Laws Rulebook (Updated Jan 2026), Rule 12
 const PLAY_TIME_RULES = {
@@ -84,7 +84,7 @@ const PLAY_TIME_RULES = {
   "U19 / Seniors":      { minFraction: 0.5, note: "SAY Rule 12: Every player must play ≈ half the game" },
 };
 
-// ─── SAY East League Rules ─────────────────────────────────────────
+// -- SAY East League Rules --
 // Source: SAY East Playing Laws Rulebook (Updated Jan 2026) + SAY National Playing Laws (2024/2026)
 // SAY East specific exceptions: Silver Matrix age chart, SAY East formats, GK punting allowed, no blowouts
 const LEAGUE_RULES = {
@@ -848,7 +848,7 @@ function scheduleWholeGame(players, format, league, lockedLineups = {}, fromQuar
   const qCount = {};
   active.forEach(p => { qCount[p.id] = quota[p.id] + bonusQ[p.id]; });
 
-  // ── QUARTER-BY-QUARTER ASSIGNMENT ────────────────────────────────
+  // -- QUARTER-BY-QUARTER ASSIGNMENT --
   // Build each quarter's field one slot at a time, quarter in order.
   // Key rule: a player who sat the PREVIOUS quarter is picked FIRST
   // (they have the highest "bench debt"). This guarantees no one
@@ -882,7 +882,7 @@ function scheduleWholeGame(players, format, league, lockedLineups = {}, fromQuar
       qRemaining[p.id] > 0 && !chosen.includes(p.id)
     );
 
-    // ── Pass 1: fill from players who sat LAST quarter first ─────
+    // -- Pass 1: fill from players who sat LAST quarter first --
     // Sort bench-debtors by remaining quota desc (highest need first),
     // then by rating desc as tiebreaker
     const debtors = eligible()
@@ -894,7 +894,7 @@ function scheduleWholeGame(players, format, league, lockedLineups = {}, fromQuar
       chosen.push(p.id);
     }
 
-    // ── Pass 2: fill remaining spots with players who have most quota left ─
+    // -- Pass 2: fill remaining spots with players who have most quota left ─
     const others = eligible()
       .sort((a, b) => qRemaining[b.id] - qRemaining[a.id] || getOverallRating(b) - getOverallRating(a));
 
@@ -1232,13 +1232,13 @@ function TabGame({ format, league, players, setPlayers, lineupsByQuarter, setLin
   const [activeFormation,setActiveFormation]=useState("2-2-1");
   const swipeTouchStart = useRef(null);
 
-  // ── SCORE TRACKER ────────────────────────────────────────────────
+  // -- SCORE TRACKER ----
   const [homeScore, setHomeScore] = useState(0);
   const [awayScore, setAwayScore] = useState(0);
   const [opponent,  setOpponent]  = useState("");
   const [editOpp,   setEditOpp]   = useState(false);
 
-  // ── WEATHER ──────────────────────────────────────────────────────
+  // -- WEATHER ----
   const [weather,      setWeather]      = useState(null);
   const [weatherErr,   setWeatherErr]   = useState(null);
   const [weatherLoading,setWeatherLoading] = useState(false);
@@ -1270,11 +1270,11 @@ function TabGame({ format, league, players, setPlayers, lineupsByQuarter, setLin
     );
   };
 
-  // ── SHARE LINEUP ─────────────────────────────────────────────────
+  // -- SHARE LINEUP --
   const [showShare, setShowShare] = useState(false);
   const shareCanvasRef = useRef(null);
 
-  // ── QUARTER TIMER ────────────────────────────────────────────────
+  // -- QUARTER TIMER ----
   const periodMin = (() => {
     const r = LEAGUE_RULES[league];
     return r ? r.periodMin : 15;
@@ -1326,7 +1326,7 @@ function TabGame({ format, league, players, setPlayers, lineupsByQuarter, setLin
     return allPlanned && played < minQ && !p.midGameInjury;
   });
 
-  // ── Plan entire game from scratch (or from a quarter onwards) ──
+  // -- Plan entire game from scratch (or from a quarter onwards) --
   const planWholeGame = (fromQ = 1) => {
     // Full replanning from Q1 = completely fresh slate, no locked quarters
     // Partial replanning (fromQ > 1) = keep earlier quarters, redo the rest
@@ -1342,7 +1342,7 @@ function TabGame({ format, league, players, setPlayers, lineupsByQuarter, setLin
     setTimeout(() => setJustRegenned(false), 2500);
   };
 
-  // ── Regen remaining quarters (respects locked earlier quarters) ──
+  // -- Regen remaining quarters (respects locked earlier quarters) --
   const regenRemaining = (fromQuarter, updatedPlayers, baseLineups) => {
     const locked = {};
     for (let q = 1; q < fromQuarter; q++) {
@@ -1354,7 +1354,7 @@ function TabGame({ format, league, players, setPlayers, lineupsByQuarter, setLin
     setTimeout(() => setJustRegenned(false), 2500);
   };
 
-  // ── Injury: pull player from current Q, regen rest ──
+  // -- Injury: pull player from current Q, regen rest --
   const markMidGameInjury = (playerId) => {
     const player = players.find(p => p.id === playerId);
     if (!player) return;
@@ -1439,7 +1439,7 @@ function TabGame({ format, league, players, setPlayers, lineupsByQuarter, setLin
           onDismiss={() => setInjuryAlerts(prev => prev.filter(a => a.id !== alert.id))}/>
       ))}
 
-      {/* ── SCORE TRACKER ── */}
+      {/* -- SCORE TRACKER -- */}
       <div style={{
         background:"linear-gradient(135deg,rgba(30,77,26,0.4),rgba(10,13,15,0.6))",
         border:`1px solid rgba(232,160,32,0.25)`,
@@ -1529,7 +1529,7 @@ function TabGame({ format, league, players, setPlayers, lineupsByQuarter, setLin
         </div>
       </div>
 
-      {/* ── WEATHER ── */}
+      {/* -- WEATHER -- */}
       <div style={{marginBottom:12}}>
         {!weather && !weatherLoading && (
           <button onClick={fetchWeather} style={{
@@ -1625,10 +1625,10 @@ function TabGame({ format, league, players, setPlayers, lineupsByQuarter, setLin
 
       <div style={{display:"flex",gap:18,flexWrap:"wrap"}}>
 
-        {/* ── LEFT PANEL ── */}
+        {/* -- LEFT PANEL -- */}
         <div style={{flex:"0 0 250px",minWidth:210}}>
 
-          {/* ── QUARTER TIMER ── */}
+          {/* -- QUARTER TIMER -- */}
           <Card style={{marginBottom:12,border:`1px solid ${timerColor}33`}}>
             <div style={{fontSize:11,color:C.muted,fontWeight:700,textTransform:"uppercase",letterSpacing:"0.05em",marginBottom:8}}>
               ⏱ Q{quarter} Timer — {periodMin} min
@@ -1981,7 +1981,7 @@ function TabGame({ format, league, players, setPlayers, lineupsByQuarter, setLin
           )}
         </div>
 
-        {/* ── FIELD ── */}
+        {/* -- FIELD -- */}
         <div style={{flex:1,minWidth:260}}>
           <div style={{fontSize:11,color:C.gold,fontWeight:700,marginBottom:10,textAlign:"center",textTransform:"uppercase",letterSpacing:"0.07em"}}>
             ⚽ Q{quarter} Field — Drag to Swap
@@ -3131,7 +3131,7 @@ function CoachKitApp() {
       fontFamily:"'Palatino Linotype','Book Antiqua',Palatino,Georgia,serif",
       color: C.text,
     }}>
-      {/* ── HEADER ── */}
+      {/* -- HEADER -- */}
       <div style={{
         background:"linear-gradient(180deg,#111810 0%,#0c140a 100%)",
         borderBottom:`1px solid rgba(232,160,32,0.18)`,
@@ -3191,7 +3191,7 @@ function CoachKitApp() {
         </div>
       </div>
 
-      {/* ── BODY ── */}
+      {/* -- BODY -- */}
       <div style={{maxWidth:960,margin:"0 auto",padding:"20px 16px"}}>
         {tab==="game"     && <TabGame     format={format} league={league} players={players} setPlayers={setPlayers} lineupsByQuarter={lineupsByQuarter} setLineupsByQuarter={setLineupsByQuarter}/>}
         {tab==="roster"   && <TabRoster   players={players} addPlayer={addPlayer} updatePlayer={updatePlayer} removePlayer={removePlayer} format={format}/>}
