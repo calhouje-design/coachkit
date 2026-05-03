@@ -1052,20 +1052,13 @@ function Card({ children, style: sx }) {
 
 function StarRating({ value, onChange, max=5 }) {
   return (
-    <div style={{ display:"flex", gap: 3 }}>
+    <div style={{ display:"flex", gap: 2 }}>
       {Array.from({length:max},(_,i) => (
         <button key={i} onClick={() => onChange(i+1)} style={{
-          background: i < value ? C.gold : "rgba(255,255,255,0.1)",
-          border: i < value ? "none" : "1px solid rgba(255,255,255,0.15)",
-          borderRadius: 4,
-          cursor:"pointer",
-          padding: "3px 7px",
-          fontSize: 12,
-          fontWeight: 800,
-          color: i < value ? "#0a0d0f" : "rgba(255,255,255,0.3)",
+          background:"none", border:"none", cursor:"pointer", padding: "1px",
+          fontSize: 14, color: i < value ? C.gold : "rgba(255,255,255,0.2)",
           lineHeight: 1,
-          minWidth: 24,
-        }}>{i+1}</button>
+        }}></button>
       ))}
     </div>
   );
@@ -1176,7 +1169,7 @@ function SoccerField({ lineup, onSwap, format, quarter }) {
                   <div style={{fontSize:7,color:"#2a1a0a",lineHeight:1,maxWidth:34,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",fontWeight:600}}>
                     {slot.player.name?.split(" ")[0]}
                   </div>
-                  {rating > 0 && <div style={{fontSize:6,color:"#2a1a0a",lineHeight:1}}>{rating.toFixed(1)}</div>}
+                  {rating > 0 && <div style={{fontSize:6,color:"#2a1a0a",lineHeight:1}}>{"".repeat(Math.round(rating))}</div>}
                 </>
               ) : <span style={{color:"rgba(255,255,255,0.4)",fontSize:10}}></span>}
             </div>
@@ -1210,7 +1203,7 @@ function InjuryAlert({ player, quarter, onDismiss }) {
     }}>
       <style>{`@keyframes slideIn{from{transform:translateX(120%);opacity:0}to{transform:translateX(0);opacity:1}}`}</style>
       <div style={{display:"flex",alignItems:"flex-start",gap:10}}>
-        <span style={{fontSize:24,lineHeight:1,fontWeight:700,color:"#fff"}}>!</span>
+        <span style={{fontSize:24,lineHeight:1}}></span>
         <div style={{flex:1}}>
           <div style={{fontWeight:800,fontSize:14,color:"#fff",marginBottom:2}}>Mid-Game Injury</div>
           <div style={{fontSize:12,color:"rgba(255,255,255,0.85)"}}>
@@ -1221,7 +1214,7 @@ function InjuryAlert({ player, quarter, onDismiss }) {
         <button onClick={()=>{setVisible(false);onDismiss();}} style={{
           background:"none",border:"none",color:"rgba(255,255,255,0.6)",
           cursor:"pointer",fontSize:16,lineHeight:1,padding:0,
-        }}>X</button>
+        }}></button>
       </div>
     </div>
   );
@@ -1469,7 +1462,7 @@ function TabGame({ format, league, players, setPlayers, lineupsByQuarter, setLin
               fontSize:12,color:C.muted,cursor:"pointer",display:"inline-flex",
               alignItems:"center",gap:5,
             }}>
-              {opponent||"Tap to set opponent"} <span style={{fontSize:10,opacity:0.5}}>[edit]</span>
+              {opponent||"Tap to set opponent"} <span style={{fontSize:10,opacity:0.5}}></span>
             </div>
           )}
         </div>
@@ -1531,7 +1524,7 @@ function TabGame({ format, league, players, setPlayers, lineupsByQuarter, setLin
             <button onClick={()=>{setHomeScore(0);setAwayScore(0);}} style={{
               padding:"4px 8px",borderRadius:6,border:`1px solid ${C.border}`,
               background:"transparent",color:C.muted,fontSize:10,cursor:"pointer",fontFamily:"inherit",
-            }}>Reset</button>
+            }}></button>
           </div>
         </div>
       </div>
@@ -1671,7 +1664,7 @@ function TabGame({ format, league, players, setPlayers, lineupsByQuarter, setLin
                     padding:"6px 10px",borderRadius:6,border:"none",cursor:"pointer",
                     fontWeight:600,fontSize:11,fontFamily:"inherit",
                     background:"rgba(255,255,255,0.06)",color:C.muted,
-                  }}>Rst</button>
+                  }}></button>
                   {quarter < 4 && timerSec === 0 && (
                     <button onClick={()=>setQuarter(q=>Math.min(4,q+1))} style={{
                       padding:"6px 10px",borderRadius:6,border:"none",cursor:"pointer",
@@ -1837,7 +1830,7 @@ function TabGame({ format, league, players, setPlayers, lineupsByQuarter, setLin
                 }}>
                   Q{q}
                   <span style={{display:"block",fontSize:8,lineHeight:1.2,opacity:0.75,marginTop:1}}>
-                    {hasLineup ? (hasInjury ? "!" : "ok") : ""}
+                    {hasLineup ? (hasInjury ? "" : "") : ""}
                   </span>
                 </button>
               );
@@ -1900,7 +1893,7 @@ function TabGame({ format, league, players, setPlayers, lineupsByQuarter, setLin
                 <div key={p.id} style={{marginBottom:7,opacity:isMGI?0.5:1}}>
                   <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",fontSize:11,marginBottom:2}}>
                     <span style={{color:isMGI?"#e74c3c":ok?C.text:C.gold,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",maxWidth:"60%"}}>
-                      {isMGI?"[x] ":""}{p.name.split(" ")[0]} <span style={{color:C.muted}}>#{p.number}</span>
+                      {isMGI?" ":""}{p.name.split(" ")[0]} <span style={{color:C.muted}}>#{p.number}</span>
                     </span>
                     <span style={{fontSize:10,color:ok?C.ok:C.gold,fontWeight:700,flexShrink:0}}>
                       {allPlanned ? `${planned}/${target}Q` : ""}
@@ -2031,14 +2024,14 @@ function TabGame({ format, league, players, setPlayers, lineupsByQuarter, setLin
                   <button onClick={()=>setQuarter(q=>Math.max(1,q-1))} disabled={quarter===1} style={{
                     background:"none",border:"none",cursor:quarter===1?"default":"pointer",
                     color:quarter===1?"rgba(255,255,255,0.1)":C.gold,fontSize:22,padding:"0 6px",lineHeight:1,
-                  }}>{"<"}</button>
+                  }}></button>
                   <div style={{fontSize:11,color:C.muted,fontWeight:600}}>
                     Q{quarter} Field View <span style={{opacity:0.4}}> swipe or tap arrows</span>
                   </div>
                   <button onClick={()=>setQuarter(q=>Math.min(4,q+1))} disabled={quarter===4} style={{
                     background:"none",border:"none",cursor:quarter===4?"default":"pointer",
                     color:quarter===4?"rgba(255,255,255,0.1)":C.gold,fontSize:22,padding:"0 6px",lineHeight:1,
-                  }}>{">"}</button>
+                  }}></button>
                 </div>
                 {/* Pip dots */}
                 <div style={{display:"flex",justifyContent:"center",gap:6,marginBottom:8}}>
@@ -2278,33 +2271,7 @@ function PlayerRow({ player, onUpdate, onRemove }) {
   const [pos,  setPos]    = useState(player.positions||[]);
   const rating = getOverallRating(player);
 
-  // Sync local state if player prop changes externally
-  useEffect(() => { setName(player.name); }, [player.name]);
-  useEffect(() => { setNum(player.number); }, [player.number]);
-  useEffect(() => { setPos(player.positions||[]); }, [player.id]);
-
-  // Save name/number with a short debounce so we don't spam on every keystroke
-  const saveTimeout = useRef(null);
-  const scheduleSave = (newName, newNum) => {
-    clearTimeout(saveTimeout.current);
-    saveTimeout.current = setTimeout(() => {
-      onUpdate({...player, name:newName, number:newNum, positions:pos});
-    }, 600);
-  };
-
-  const handleNameChange = e => {
-    setName(e.target.value);
-    scheduleSave(e.target.value, num);
-  };
-  const handleNumChange = e => {
-    setNum(e.target.value);
-    scheduleSave(name, e.target.value);
-  };
-  const handleNameBlur = () => {
-    clearTimeout(saveTimeout.current);
-    onUpdate({...player, name, number:num, positions:pos});
-  };
-
+  const save = () => onUpdate({...player, name, number:num, positions:pos});
   const togglePosition = (p) => {
     const next = pos.includes(p) ? pos.filter(x=>x!==p) : [...pos,p];
     setPos(next);
@@ -2334,7 +2301,7 @@ function PlayerRow({ player, onUpdate, onRemove }) {
           <div style={{fontWeight:600,fontSize:13,color:C.text}}>{player.name}</div>
           <div style={{fontSize:11,color:C.muted,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
             {(player.positions||[]).join(", ")||"No position"}
-            {rating>0 && <span style={{marginLeft:8,color:C.gold}}>{rating.toFixed(1)}</span>}
+            {rating>0 && <span style={{marginLeft:8,color:C.gold}}>{"".repeat(Math.round(rating))}</span>}
           </div>
         </div>
         <div style={{fontSize:9,fontWeight:700,color:sc,background:`${sc}22`,padding:"2px 7px",borderRadius:4}}>
@@ -2371,11 +2338,11 @@ function PlayerRow({ player, onUpdate, onRemove }) {
           <div style={{display:"flex",gap:8,marginBottom:10}}>
             <div style={{flex:1}}>
               <label style={lbl}>Name</label>
-              <input value={name} onChange={handleNameChange} onBlur={handleNameBlur} style={IS} placeholder="Player name"/>
+              <input value={name} onChange={e=>setName(e.target.value)} style={IS} onBlur={save}/>
             </div>
             <div style={{width:60}}>
               <label style={lbl}>#</label>
-              <input value={num} onChange={handleNumChange} onBlur={handleNameBlur} style={IS} placeholder="#"/>
+              <input value={num} onChange={e=>setNum(e.target.value)} style={IS} onBlur={save}/>
             </div>
           </div>
 
@@ -2390,19 +2357,17 @@ function PlayerRow({ player, onUpdate, onRemove }) {
             ))}
           </div>
 
-          <label style={lbl}>Player Ratings (1-5, factors into auto-lineup priority)</label>
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
+          <label style={lbl}>Player Ratings (factors into auto-lineup priority)</label>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:10}}>
             {SKILL_CATEGORIES.map(cat=>(
-              <div key={cat} style={{background:"rgba(255,255,255,0.03)",borderRadius:7,padding:"8px 10px"}}>
-                <div style={{fontSize:10,color:C.muted,marginBottom:6,fontWeight:700,textTransform:"uppercase",letterSpacing:"0.05em"}}>
-                  {cat} <span style={{color:C.gold,fontWeight:800}}>{(player.ratings||{})[cat]||0}/5</span>
-                </div>
+              <div key={cat}>
+                <div style={{fontSize:11,color:C.muted,marginBottom:3}}>{cat}</div>
                 <StarRating value={(player.ratings||{})[cat]||0} onChange={v=>setRating(cat,v)}/>
               </div>
             ))}
           </div>
           {rating>0 && (
-            <div style={{fontSize:11,color:C.gold}}>Overall: {rating.toFixed(1)} ({rating.toFixed(1)}/5)</div>
+            <div style={{fontSize:11,color:C.gold}}>Overall: {"".repeat(Math.round(rating))} ({rating.toFixed(1)}/5)</div>
           )}
         </div>
       )}
@@ -2425,7 +2390,7 @@ function TabRules({ league, setLeague }) {
         background:"rgba(232,160,32,0.07)",border:"1px solid rgba(232,160,32,0.2)",
         borderRadius:10,padding:"10px 14px",
       }}>
-        <span style={{fontSize:20,fontWeight:700,color:C.gold}}>*</span>
+        <span style={{fontSize:20}}></span>
         <div>
           <div style={{fontSize:12,fontWeight:800,color:C.gold,letterSpacing:"0.06em"}}>SAY EAST CINCINNATI  OFFICIAL RULES</div>
           <div style={{fontSize:11,color:C.muted}}>Source: SAY East Playing Laws Rulebook (Updated Jan 2026)  Silver Matrix age chart</div>
@@ -2518,7 +2483,7 @@ function TabRules({ league, setLeague }) {
             marginBottom:6,borderRadius:9,
             background:"rgba(39,174,96,0.08)",border:"1px solid rgba(39,174,96,0.2)",
           }}>
-            <span style={{fontWeight:800,color:C.ok,fontSize:13,padding:"2px 6px",background:"rgba(39,174,96,0.15)",borderRadius:4}}>OK</span>
+            <span style={{fontSize:18}}></span>
             <div>
               <div style={{fontSize:13,color:C.text,fontWeight:600}}>Min Play Time (SAY Rule 12)</div>
               <div style={{fontSize:12,color:C.muted}}>{PLAY_TIME_RULES[league]?.note||"Check local rules"}</div>
@@ -2529,7 +2494,7 @@ function TabRules({ league, setLeague }) {
             display:"flex",alignItems:"flex-start",gap:12,padding:"10px 14px",
             borderRadius:9,background:"rgba(211,84,0,0.06)",border:"1px solid rgba(211,84,0,0.2)",
           }}>
-            <span style={{fontWeight:800,color:"#e67e22",fontSize:13,padding:"2px 6px",background:"rgba(211,84,0,0.15)",borderRadius:4}}>!</span>
+            <span style={{fontSize:18}}></span>
             <div>
               <div style={{fontSize:13,color:C.text,fontWeight:600}}>No Blowout Rule (SAY East)</div>
               <div style={{fontSize:12,color:C.muted}}>Winning by more than 5 goals is a violation. Coaches must have a plan to manage score  rotate, adjust tactics, avoid running up the score.</div>
@@ -2575,12 +2540,12 @@ function TabRules({ league, setLeague }) {
             }}
             onMouseEnter={e=>e.currentTarget.style.borderColor=C.gold}
             onMouseLeave={e=>e.currentTarget.style.borderColor=C.border}>
-              <span style={{fontWeight:700,color:C.gold,fontSize:14}}>*</span>
+              <span style={{fontSize:20}}></span>
               <div style={{flex:1}}>
                 <div style={{fontSize:13,color:C.text,fontWeight:600}}>{link.label}</div>
                 <div style={{fontSize:11,color:C.muted,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{link.url}</div>
               </div>
-              <span style={{color:C.gold,fontSize:14,fontWeight:800}}>&gt;</span>
+              <span style={{color:C.gold,fontSize:14}}></span>
             </a>
           ))}
           <div style={{fontSize:11,color:C.muted,marginTop:12,lineHeight:1.6,padding:"10px 14px",background:C.surface,borderRadius:8,border:`1px solid ${C.border}`}}>
@@ -2846,7 +2811,7 @@ function DrillModal({ drill, onClose }) {
                   display:"flex",gap:8,alignItems:"flex-start",marginBottom:6,
                   padding:"8px 12px",background:C.surface,borderRadius:7,
                 }}>
-                  <span style={{color:C.gold,fontWeight:800,fontSize:12,flexShrink:0}}>&gt;</span>
+                  <span style={{color:C.gold,fontWeight:800,fontSize:12,flexShrink:0}}></span>
                   <span style={{fontSize:13,color:C.muted,lineHeight:1.5}}>{p}</span>
                 </div>
               ))}
@@ -3043,7 +3008,7 @@ function TabPractice({ drills, league }) {
                     <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4}}>
                       {sec.drill.image && <img src={sec.drill.image} alt="" style={{width:36,height:36,borderRadius:5,objectFit:"cover",flexShrink:0}}/>}
                       <div style={{flex:1,cursor:"pointer"}} onClick={()=>setModalDrill(sec.drill)}>
-                        <div style={{fontSize:13,color:C.text,fontWeight:600}}>{sec.drill.name} <span style={{fontSize:10,color:C.gold}}>[details]</span></div>
+                        <div style={{fontSize:13,color:C.text,fontWeight:600}}>{sec.drill.name} <span style={{fontSize:10,color:C.gold}}></span></div>
                         <div style={{fontSize:11,color:C.muted}}>{sec.drill.category}  {sec.drill.difficulty}</div>
                       </div>
                     </div>
@@ -3516,7 +3481,7 @@ function TabSeason({ players, playerStats, setPlayerStats, games, setGames, prac
                 <button onClick={()=>setGames(prev=>prev.filter(x=>x.id!==g.id))} style={{
                   background:"none",border:"none",cursor:"pointer",color:"rgba(255,255,255,0.2)",
                   fontSize:16,lineHeight:1,padding:"4px 6px",
-                }}>X</button>
+                }}></button>
               </div>
             );
           })}
@@ -3557,7 +3522,7 @@ function TabSeason({ players, playerStats, setPlayerStats, games, setGames, prac
                     <div style={{fontSize:12,fontWeight:700,color:C.ok}}>{present}/{players.length} present</div>
                     <button onClick={()=>setPracticeDates(prev=>prev.filter(x=>x.id!==pr.id))} style={{
                       background:"none",border:"none",cursor:"pointer",color:"rgba(255,255,255,0.2)",fontSize:14,
-                    }}>X</button>
+                    }}></button>
                   </div>
                 </div>
                 <div style={{display:"flex",flexWrap:"wrap",gap:4}}>
@@ -3570,7 +3535,7 @@ function TabSeason({ players, playerStats, setPlayerStats, games, setGames, prac
                         color:here?C.ok:C.muted,
                         outline:here?`1px solid ${C.ok}33`:"none",
                       }}>
-                        {here?"+ ":""}{p.name.split(" ")[0]}
+                        {here?" ":""}{p.name.split(" ")[0]}
                       </button>
                     );
                   })}
@@ -3733,7 +3698,7 @@ function TabTeam({ players, updatePlayer, league, games }) {
                 </div>
                 <button onClick={()=>setSchedule(prev=>prev.filter(x=>x.id!==ev.id))} style={{
                   background:"none",border:"none",cursor:"pointer",color:"rgba(255,255,255,0.2)",fontSize:14,flexShrink:0,
-                }}>X</button>
+                }}></button>
               </div>
             );
           })}
@@ -3843,7 +3808,7 @@ function PrintLineupModal({ players, onClose }) {
           padding:"14px 18px",borderBottom:`1px solid ${C.border}`,
         }}>
           <div style={{fontSize:15,fontWeight:800,color:C.gold}}> Print Lineup Card</div>
-          <button onClick={onClose} style={{background:"none",border:"none",cursor:"pointer",color:C.muted,fontSize:20}}>X</button>
+          <button onClick={onClose} style={{background:"none",border:"none",cursor:"pointer",color:C.muted,fontSize:20}}></button>
         </div>
 
         <div style={{padding:"16px 18px"}}>
