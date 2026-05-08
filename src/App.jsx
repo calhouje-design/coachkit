@@ -3937,4 +3937,259 @@ function TabTeam({ players, updatePlayer, league, games }) {
             <Card style={{marginBottom:12,border:`1px solid ${C.gold}44`}}>
               <div style={{fontSize:12,fontWeight:700,color:C.gold,marginBottom:10}}>New Event</div>
               <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
-               
+                <div><label style={lbl}>Date</label><input type="date" value={newScheduleItem.date} onChange={e=>setNewScheduleItem(p=>({...p,date:e.target.value}))} style={IS}/></div>
+                <div>
+                  <label style={lbl}>Type</label>
+                  <select value={newScheduleItem.type} onChange={e=>setNewScheduleItem(p=>({...p,type:e.target.value}))} style={SS}>
+                    <option value="game">Game</option>
+                    <option value="practice">Practice</option>
+                    <option value="other">Other</option>
+                  </select>
+                </div>
+                <div><label style={lbl}>Opponent / Title</label><input value={newScheduleItem.opponent} onChange={e=>setNewScheduleItem(p=>({...p,opponent:e.target.value}))} placeholder="Team / event name" style={IS}/></div>
+                <div><label style={lbl}>Location</label><input value={newScheduleItem.location} onChange={e=>setNewScheduleItem(p=>({...p,location:e.target.value}))} placeholder="Field name, address" style={IS}/></div>
+              </div>
+              <div style={{marginBottom:10}}><label style={lbl}>Notes</label><input value={newScheduleItem.notes} onChange={e=>setNewScheduleItem(p=>({...p,notes:e.target.value}))} placeholder="Reminders, carpool notes..." style={IS}/></div>
+              <div style={{display:"flex",gap:8}}>
+                <Btn primary onClick={saveEvent}>Save</Btn>
+                <Btn ghost onClick={()=>setShowAddEvent(false)}>Cancel</Btn>
+              </div>
+            </Card>
+          )}
+          {[...schedule].sort((a,b)=>a.date.localeCompare(b.date)).map(ev=>{
+            const typeIcon = ev.type==="game"?"":ev.type==="practice"?"":"";
+            const typeColor = ev.type==="game"?C.gold:ev.type==="practice"?C.ok:C.muted;
+            const isPast = ev.date < new Date().toISOString().slice(0,10);
+            return (
+              <div key={ev.id} style={{
+                display:"flex",alignItems:"flex-start",gap:12,padding:"12px 14px",
+                background:C.surface,borderRadius:9,marginBottom:6,
+                border:`1px solid ${C.border}`,
+                opacity:isPast?0.55:1,
+              }}>
+                <div style={{
+                  width:36,height:36,borderRadius:8,flexShrink:0,
+                  background:`${typeColor}18`,border:`1px solid ${typeColor}33`,
+                  display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",
+                }}>
+                  <div style={{fontSize:14}}>{typeIcon}</div>
+                </div>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{display:"flex",gap:8,alignItems:"baseline"}}>
+                    <div style={{fontSize:13,fontWeight:600,color:C.text}}>
+                      {ev.type==="game"?`vs ${ev.opponent}`:ev.opponent||ev.type.charAt(0).toUpperCase()+ev.type.slice(1)}
+                    </div>
+                    <div style={{fontSize:10,color:typeColor,fontWeight:700,textTransform:"uppercase"}}>{ev.type}</div>
+                  </div>
+                  <div style={{fontSize:11,color:C.muted}}>{ev.date}{ev.location&&`  ${ev.location}`}</div>
+                  {ev.notes&&<div style={{fontSize:11,color:C.muted,marginTop:2,fontStyle:"italic"}}>{ev.notes}</div>}
+                </div>
+                <button onClick={()=>setSchedule(prev=>prev.filter(x=>x.id!==ev.id))} style={{
+                  background:"none",border:"none",cursor:"pointer",color:"rgba(255,255,255,0.2)",fontSize:14,flexShrink:0,
+                }}></button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* DEV NOTES */}
+      {view==="dev" && (
+        <div>
+          <div style={{fontSize:11,color:C.muted,marginBottom:10}}>
+            Private development notes per player  what to work on, progress, observations.
+          </div>
+          {players.map(p=>(
+            <div key={p.id} style={{
+              background:C.surface,borderRadius:9,padding:"12px 14px",marginBottom:8,
+              border:`1px solid ${C.border}`,
+            }}>
+              <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:8}}>
+                <div style={{
+                  width:30,height:30,borderRadius:"50%",flexShrink:0,
+                  background:`linear-gradient(135deg,${C.gold},${C.goldDark})`,
+                  display:"flex",alignItems:"center",justifyContent:"center",
+                  fontWeight:700,fontSize:11,color:"#0a0d0f",
+                }}>{p.number}</div>
+                <div style={{fontWeight:600,fontSize:13,color:C.text}}>{p.name}</div>
+                <div style={{fontSize:10,color:C.muted,marginLeft:"auto"}}>{(p.positions||[]).slice(0,2).join(", ")}</div>
+              </div>
+              <textarea
+                defaultValue={p.devNotes||""}
+                onBlur={e=>updatePlayer({...p,devNotes:e.target.value})}
+                placeholder="Notes for this player... (e.g. needs work on left foot, great leadership, wants to try GK)"
+                rows={2}
+                style={{
+                  ...IS, resize:"vertical", lineHeight:1.5, fontSize:12,
+                  color:C.muted,
+                }}
+              />
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* PRINT LINEUP MODAL */}
+      {showPrintModal && <PrintLineupModal players={players} onClose={()=>setShowPrintModal(false)}/>}
+    </div>
+  );
+}
+
+// 
+// PRINT LINEUP MODAL
+// 
+function PrintLineupModal({ players, onClose }) {
+  const [quarter, setQuarter] = useState(1);
+  // We'll get the lineup from window if passed; for standalone we recreate the field
+  // The modal shows a field diagram with player names  user can print via browser
+  const activePlayers = players.filter(p=>!p.injured&&!p.out);
+
+  const handlePrint = () => {
+    const printContent = document.getElementById("print-lineup-content");
+    if (!printContent) return;
+    const win = window.open("","_blank","width=800,height=600");
+    win.document.write(`<html><head><title>Lineup Card</title>
+      <style>
+        body{margin:0;background:#fff;font-family:Georgia,serif;}
+        .field{position:relative;width:340px;height:520px;background:linear-gradient(180deg,#1e4d1a,#1a4518);border-radius:12px;margin:0 auto;}
+        .player-dot{position:absolute;text-align:center;transform:translate(-50%,-50%);}
+        .circle{width:48px;height:48px;border-radius:50%;background:#e8a020;display:flex;align-items:center;justify-content:center;flex-direction:column;margin:0 auto;border:2px solid #fff;}
+        .num{font-size:10px;font-weight:800;color:#0a0d0f;}
+        .name{font-size:8px;color:#1a1a1a;font-weight:600;white-space:nowrap;}
+        .pos-label{font-size:9px;color:#fff;font-weight:700;margin-top:2px;text-shadow:0 1px 3px rgba(0,0,0,0.9);}
+        h1{text-align:center;font-size:18px;color:#0a0d0f;margin:16px 0 4px;}
+        .meta{text-align:center;font-size:12px;color:#555;margin-bottom:12px;}
+        .bench{max-width:340px;margin:12px auto 0;padding:10px;border:1px solid #ddd;border-radius:8px;}
+        .bench h3{font-size:13px;margin:0 0 6px;color:#333;}
+        .bench-player{display:inline-block;margin:2px 4px;font-size:11px;background:#f5f5f5;padding:2px 8px;border-radius:4px;}
+      </style></head><body>
+      ${printContent.innerHTML}
+      </body></html>`);
+    win.document.close();
+    setTimeout(()=>win.print(),400);
+  };
+
+  // Build a field diagram with the active roster spread across positions
+  // We use sample positions for the first 11 slots
+  const fieldPositions = [
+    {pos:"GK",x:50,y:90},{pos:"DEF",x:25,y:75},{pos:"DEF",x:50,y:72},{pos:"DEF",x:75,y:75},
+    {pos:"MID",x:20,y:52},{pos:"MID",x:50,y:50},{pos:"MID",x:80,y:52},
+    {pos:"FWD",x:25,y:28},{pos:"FWD",x:50,y:22},{pos:"FWD",x:75,y:28},{pos:"CAM",x:50,y:38},
+  ];
+
+  const assignedPositions = fieldPositions.slice(0,activePlayers.length);
+  const bench = activePlayers.slice(assignedPositions.length);
+  const starters = activePlayers.slice(0,assignedPositions.length);
+  const today = new Date().toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"});
+
+  return (
+    <div style={{
+      position:"fixed",inset:0,zIndex:9000,
+      background:"rgba(0,0,0,0.8)",display:"flex",alignItems:"center",justifyContent:"center",padding:20,
+    }}>
+      <div style={{
+        background:"#1a1f1a",borderRadius:14,maxWidth:500,width:"100%",
+        maxHeight:"90vh",overflow:"auto",border:`1px solid ${C.border}`,
+      }}>
+        <div style={{
+          display:"flex",justifyContent:"space-between",alignItems:"center",
+          padding:"14px 18px",borderBottom:`1px solid ${C.border}`,
+        }}>
+          <div style={{fontSize:15,fontWeight:800,color:C.gold}}> Print Lineup Card</div>
+          <button onClick={onClose} style={{background:"none",border:"none",cursor:"pointer",color:C.muted,fontSize:20}}></button>
+        </div>
+
+        <div style={{padding:"16px 18px"}}>
+          <div style={{fontSize:11,color:C.muted,marginBottom:16,lineHeight:1.6}}>
+            A printable field diagram with player positions. Click <b style={{color:C.text}}>Print</b> to open the print dialog.
+          </div>
+
+          {/* Preview */}
+          <div id="print-lineup-content">
+            <h1 style={{textAlign:"center",fontSize:18,color:"#e8e4dc",margin:"0 0 4px",fontFamily:"Georgia,serif"}}> Lineup Card</h1>
+            <div style={{textAlign:"center",fontSize:11,color:C.muted,marginBottom:14}}>{today}  {activePlayers.length} players active</div>
+
+            {/* Field diagram */}
+            <div style={{position:"relative",width:300,height:450,margin:"0 auto",
+              background:"linear-gradient(180deg,#1e4d1a,#1a4518)",borderRadius:10,
+              border:"2px solid rgba(255,255,255,0.3)"}}>
+              {/* Field lines */}
+              <div style={{position:"absolute",top:"50%",left:10,right:10,height:1,background:"rgba(255,255,255,0.4)"}}/>
+              <div style={{position:"absolute",top:10,left:"25%",right:"25%",height:60,border:"1px solid rgba(255,255,255,0.4)"}}/>
+              <div style={{position:"absolute",bottom:10,left:"25%",right:"25%",height:60,border:"1px solid rgba(255,255,255,0.4)"}}/>
+
+              {starters.map((p,i)=>{
+                const fp = assignedPositions[i];
+                if (!fp) return null;
+                const px = (fp.x/100)*300;
+                const py = (fp.y/100)*450;
+                return (
+                  <div key={p.id} style={{
+                    position:"absolute",left:px,top:py,transform:"translate(-50%,-50%)",
+                    textAlign:"center",width:50,
+                  }}>
+                    <div style={{
+                      width:36,height:36,borderRadius:"50%",margin:"0 auto",
+                      background:"linear-gradient(135deg,#e8a020,#b87818)",
+                      display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column",
+                      border:"2px solid rgba(255,255,255,0.8)",boxShadow:"0 2px 8px rgba(0,0,0,0.5)",
+                    }}>
+                      <div style={{fontSize:9,fontWeight:800,color:"#0a0d0f",lineHeight:1}}>{p.number}</div>
+                      <div style={{fontSize:6,color:"#2a1a0a",lineHeight:1,fontWeight:600,maxWidth:32,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                        {p.name.split(" ")[0]}
+                      </div>
+                    </div>
+                    <div style={{fontSize:7,color:"#fff",fontWeight:700,textShadow:"0 1px 2px rgba(0,0,0,0.9)",marginTop:1}}>{fp.pos}</div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Bench */}
+            {bench.length>0&&(
+              <div style={{marginTop:14,padding:"10px 12px",background:C.surface,borderRadius:8,border:`1px solid ${C.border}`}}>
+                <div style={{fontSize:11,fontWeight:700,color:C.gold,marginBottom:6}}> Bench</div>
+                <div style={{display:"flex",flexWrap:"wrap",gap:4}}>
+                  {bench.map(p=>(
+                    <div key={p.id} style={{
+                      padding:"3px 8px",borderRadius:4,background:"rgba(255,255,255,0.08)",
+                      fontSize:11,color:C.text,
+                    }}>#{p.number} {p.name.split(" ")[0]}</div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Roster list */}
+            <div style={{marginTop:14,display:"grid",gridTemplateColumns:"1fr 1fr",gap:3}}>
+              {activePlayers.map(p=>(
+                <div key={p.id} style={{
+                  display:"flex",gap:6,alignItems:"center",padding:"3px 6px",
+                  borderRadius:4,background:"rgba(255,255,255,0.04)",fontSize:11,
+                }}>
+                  <span style={{color:C.gold,fontWeight:700,minWidth:22}}>#{p.number}</span>
+                  <span style={{color:C.text}}>{p.name}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div style={{marginTop:16,display:"flex",gap:8}}>
+            <Btn primary full onClick={handlePrint}> Print</Btn>
+            <Btn ghost onClick={onClose}>Close</Btn>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+function Stat({label,val,color}) {
+  return (
+    <div style={{textAlign:"center"}}>
+      <div style={{fontSize:16,fontWeight:800,color,lineHeight:1}}>{val}</div>
+      <div style={{fontSize:9,color:C.muted,textTransform:"uppercase",letterSpacing:"0.05em"}}>{label}</div>
+    </div>
+  );
+}
