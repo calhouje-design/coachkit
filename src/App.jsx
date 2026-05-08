@@ -1125,9 +1125,17 @@ function SoccerField({ lineup, onSwap, format, quarter }) {
             <rect width="20" height="20" fill="#1e4d1a"/>
             <rect width="10" height="20" fill="#1a4518"/>
           </pattern>
-          <linearGradient id="qpill" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="#f4c442"/>
-            <stop offset="100%" stopColor="#b87818"/>
+          <linearGradient id="qpill1" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="#f4c442"/><stop offset="100%" stopColor="#b87818"/>
+          </linearGradient>
+          <linearGradient id="qpill2" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="#5dadec"/><stop offset="100%" stopColor="#2471a3"/>
+          </linearGradient>
+          <linearGradient id="qpill3" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="#c88ce0"/><stop offset="100%" stopColor="#7d3c98"/>
+          </linearGradient>
+          <linearGradient id="qpill4" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="#ec7063"/><stop offset="100%" stopColor="#a93226"/>
           </linearGradient>
           <filter id="qpillshadow" x="-20%" y="-20%" width="140%" height="160%">
             <feDropShadow dx="0" dy="2" stdDeviation="3" floodColor="#000" floodOpacity="0.7"/>
@@ -1144,10 +1152,10 @@ function SoccerField({ lineup, onSwap, format, quarter }) {
         <rect x="135" y="461" width="50" height="14" fill="rgba(255,255,255,0.15)"/>
         <circle cx="160" cy="415" r="3" fill="rgba(255,255,255,0.6)"/>
         <circle cx="160" cy="65" r="3" fill="rgba(255,255,255,0.6)"/>
-        {/* Quarter callout  bold gold pill in top-left */}
+        {/* Quarter callout  color-coded pill in top-left */}
         {quarter && (
           <g filter="url(#qpillshadow)">
-            <rect x="12" y="12" width="62" height="34" rx="8" fill="url(#qpill)"/>
+            <rect x="12" y="12" width="62" height="34" rx="8" fill={`url(#qpill${quarter})`}/>
             <rect x="12" y="12" width="62" height="34" rx="8" fill="none" stroke="rgba(0,0,0,0.55)" strokeWidth="1.5"/>
             <rect x="12" y="12" width="62" height="34" rx="8" fill="none" stroke="rgba(255,255,255,0.35)" strokeWidth="0.6" transform="translate(0,1)"/>
             <text x="43" y="36" textAnchor="middle" fill="#0a0d0f"
@@ -1424,41 +1432,6 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
   const [showShare, setShowShare] = useState(false);
   const shareCanvasRef = useRef(null);
 
-  // -- QUARTER TIMER ----
-  const periodMin = (() => {
-    const r = LEAGUE_RULES[league];
-    return r ? r.periodMin : 15;
-  })();
-  const [timerSec, setTimerSec]   = useState(periodMin * 60);
-  const [timerRunning, setTimerRunning] = useState(false);
-  const timerRef = useRef(null);
-
-  // Reset timer when quarter changes or periodMin changes
-  useEffect(() => {
-    setTimerSec(periodMin * 60);
-    setTimerRunning(false);
-    if (timerRef.current) clearInterval(timerRef.current);
-  }, [quarter, periodMin]);
-
-  useEffect(() => {
-    if (timerRunning) {
-      timerRef.current = setInterval(() => {
-        setTimerSec(s => {
-          if (s <= 1) { clearInterval(timerRef.current); setTimerRunning(false); return 0; }
-          return s - 1;
-        });
-      }, 1000);
-    } else {
-      if (timerRef.current) clearInterval(timerRef.current);
-    }
-    return () => { if (timerRef.current) clearInterval(timerRef.current); };
-  }, [timerRunning]);
-
-  const timerMins = Math.floor(timerSec / 60);
-  const timerSecs = timerSec % 60;
-  const timerPct  = timerSec / (periodMin * 60);
-  const timerColor = timerSec === 0 ? "#e74c3c" : timerSec < 60 ? C.gold : C.ok;
-
   const totalQuarters = 4;
   const rule   = PLAY_TIME_RULES[league] || { minFraction: 0, note: "" };
   const minQ   = Math.ceil(rule.minFraction * totalQuarters);
@@ -1499,7 +1472,8 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
       if (baseLineups[q]) locked[q] = baseLineups[q];
     }
     const result = scheduleWholeGame(updatedPlayers, format, league, locked, fromQuarter);
-    setLineupsByQuarter(result);
+    // Merge locked earlier quarters with the newly-planned remaining ones
+    setLineupsByQuarter({ ...locked, ...result });
     setJustRegenned(true);
     setTimeout(() => setJustRegenned(false), 2500);
   };
@@ -1773,206 +1747,51 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
         {/* -- LEFT PANEL (Play Time, Strategy, etc.) -- */}
         <div style={{flex:"1 1 320px",minWidth:0,maxWidth:400}}>
 
-          {/* QUARTER TIMER */}
-          <Card style={{marginBottom:12,border:`1px solid ${timerColor}33`}}>
-            <div style={{fontSize:11,color:C.muted,fontWeight:700,textTransform:"uppercase",letterSpacing:"0.05em",marginBottom:8}}>
-               Q{quarter} Timer  {periodMin} min
-            </div>
-            {/* Ring display */}
-            <div style={{display:"flex",alignItems:"center",gap:14,marginBottom:10}}>
-              <div style={{position:"relative",width:64,height:64,flexShrink:0}}>
-                <svg width="64" height="64" viewBox="0 0 64 64" style={{transform:"rotate(-90deg)"}}>
-                  <circle cx="32" cy="32" r="26" fill="none" stroke="rgba(255,255,255,0.08)" strokeWidth="5"/>
-                  <circle cx="32" cy="32" r="26" fill="none" stroke={timerColor} strokeWidth="5"
-                    strokeDasharray={`${2*Math.PI*26}`}
-                    strokeDashoffset={`${2*Math.PI*26*(1-timerPct)}`}
-                    style={{transition:"stroke-dashoffset 0.9s linear, stroke 0.3s"}}/>
-                </svg>
-                <div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column"}}>
-                  <div style={{fontSize:14,fontWeight:800,color:timerColor,lineHeight:1,fontVariantNumeric:"tabular-nums"}}>
-                    {String(timerMins).padStart(2,"0")}:{String(timerSecs).padStart(2,"0")}
-                  </div>
-                </div>
-              </div>
-              <div style={{flex:1}}>
-                <div style={{fontSize:timerSec===0?13:11,color:timerSec===0?"#e74c3c":C.muted,fontWeight:timerSec===0?700:400,marginBottom:8}}>
-                  {timerSec===0 ? " Quarter over! Advance to next quarter." : `${timerMins}:${String(timerSecs).padStart(2,"0")} remaining`}
-                </div>
-                <div style={{display:"flex",gap:5}}>
-                  <button onClick={()=>setTimerRunning(r=>!r)} style={{
-                    flex:1,padding:"6px 0",borderRadius:6,border:"none",cursor:"pointer",
-                    fontWeight:700,fontSize:12,fontFamily:"inherit",
-                    background:timerRunning?`rgba(231,76,60,0.2)`:`rgba(39,174,96,0.2)`,
-                    color:timerRunning?"#e74c3c":C.ok,
-                  }}>{timerRunning?" Pause":" Start"}</button>
-                  <button onClick={()=>{setTimerSec(periodMin*60);setTimerRunning(false);}} style={{
-                    padding:"6px 10px",borderRadius:6,border:"none",cursor:"pointer",
-                    fontWeight:600,fontSize:11,fontFamily:"inherit",
-                    background:"rgba(255,255,255,0.06)",color:C.muted,
-                  }}></button>
-                  {quarter < 4 && timerSec === 0 && (
-                    <button onClick={()=>setQuarter(q=>Math.min(4,q+1))} style={{
-                      padding:"6px 10px",borderRadius:6,border:"none",cursor:"pointer",
-                      fontWeight:700,fontSize:11,fontFamily:"inherit",
-                      background:`linear-gradient(135deg,${C.gold},${C.goldDark})`,color:"#0a0d0f",
-                    }}>Q{quarter+1} </button>
-                  )}
-                </div>
-              </div>
-            </div>
-          </Card>
-
-          {/* Strategy / Formation Picker */}
+          {/* Strategy / Formation Picker  minimized */}
           <Card style={{marginBottom:14}}>
-            <div style={{fontSize:11,color:C.muted,fontWeight:700,textTransform:"uppercase",letterSpacing:"0.05em",marginBottom:8}}>
-               Strategy
-            </div>
-            <div style={{fontSize:10,color:C.muted,marginBottom:8,lineHeight:1.5}}>
-              Pick how many defenders, mids, and forwards. Updates all quarters when you hit Apply.
-            </div>
-            {/* D-M-F counters */}
             {(() => {
-              const fieldSlots = (POSITIONS_BY_FORMAT[format]||[]).length - 1; // minus GK
-              // Read current strat from activeFormation string "D-M-F" (clamped to fieldSlots)
-              const parts = (activeFormation||"").split("-").map(Number);
-              let pD = isFinite(parts[0]) ? parts[0] : Math.max(1, Math.floor(fieldSlots/3));
-              let pM = isFinite(parts[1]) ? parts[1] : Math.max(1, Math.floor(fieldSlots/3));
-              let pF = isFinite(parts[2]) ? parts[2] : Math.max(0, fieldSlots - pD - pM);
-              // If the parsed total drifts (e.g. due to format change), rescale onto the new fieldSlots
-              const partsTotal = pD + pM + pF;
-              if (partsTotal !== fieldSlots && partsTotal > 0) {
-                const diff = fieldSlots - partsTotal;
-                pM = Math.max(0, pM + diff); // adjust mid to absorb the difference
-              }
-              const curD = Math.max(0, pD);
-              const curM = Math.max(0, pM);
-              const curF = Math.max(0, fieldSlots - curD - curM);
-              const setStrat = (d,m,f) => setActiveFormation(`${d}-${m}-${f}`);
-
-              // Increment a slot by borrowing from M (preferred), else the other end
-              const inc = (key) => {
-                let d=curD, m=curM, f=curF;
-                if (key==="D") {
-                  if (m>0) { d++; m--; }
-                  else if (f>0) { d++; f--; }
-                  else return;
-                } else if (key==="M") {
-                  if (f>0) { m++; f--; }
-                  else if (d>0) { m++; d--; }
-                  else return;
-                } else if (key==="F") {
-                  if (m>0) { f++; m--; }
-                  else if (d>0) { f++; d--; }
-                  else return;
+              const templates = FORMATION_TEMPLATES[format] || [];
+              const active = templates.find(t => t.name === activeFormation) || templates[0];
+              const handleApply = () => {
+                const tmpl = templates.find(t => t.name === activeFormation) || active;
+                if (!tmpl) return;
+                const customSlots = tmpl.slots;
+                if (lineupsByQuarter[quarter]) {
+                  const allAvail = [
+                    ...(lineupsByQuarter[quarter].starters||[]).filter(s=>s.player).map(s=>s.player),
+                    ...(lineupsByQuarter[quarter].bench||[]),
+                  ];
+                  const assigned = new Set();
+                  const newStarters = customSlots.map(pos => {
+                    let best = allAvail.find(p => !assigned.has(p.id) && (p.positions||[]).includes(pos));
+                    if (!best) best = allAvail.find(p => !assigned.has(p.id));
+                    if (best) assigned.add(best.id);
+                    return { pos, player: best || null };
+                  });
+                  const newBench = allAvail.filter(p => !assigned.has(p.id));
+                  setLineupsByQuarter(prev => ({ ...prev, [quarter]: { starters: newStarters, bench: newBench } }));
                 }
-                setStrat(d,m,f);
               };
-              // Decrement always feeds into mid (or forwards if mid is decremented)
-              const dec = (key) => {
-                let d=curD, m=curM, f=curF;
-                if (key==="D" && d>0)      { d--; m++; }
-                else if (key==="M" && m>0) { m--; f++; }
-                else if (key==="F" && f>0) { f--; m++; }
-                else return;
-                setStrat(d,m,f);
-              };
-
               return (
                 <div>
-                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,marginBottom:10}}>
-                    {[["DEF",curD,"D"],["MID",curM,"M"],["FWD",curF,"F"]].map(([label,val,key])=>(
-                      <div key={key} style={{textAlign:"center"}}>
-                        <div style={{fontSize:9,color:C.muted,fontWeight:700,textTransform:"uppercase",marginBottom:4}}>{label}</div>
-                        <div style={{display:"flex",alignItems:"center",justifyContent:"center",gap:4}}>
-                          <button onClick={()=>dec(key)} style={{
-                            width:22,height:22,borderRadius:4,border:"none",cursor:"pointer",
-                            background:"rgba(255,255,255,0.1)",color:C.text,fontWeight:700,fontSize:14,lineHeight:1,
-                          }}>-</button>
-                          <span style={{fontSize:18,fontWeight:800,color:C.gold,minWidth:20,textAlign:"center"}}>{val}</span>
-                          <button onClick={()=>inc(key)} style={{
-                            width:22,height:22,borderRadius:4,border:"none",cursor:"pointer",
-                            background:"rgba(255,255,255,0.1)",color:C.text,fontWeight:700,fontSize:14,lineHeight:1,
-                          }}>+</button>
-                        </div>
-                      </div>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10,gap:8}}>
+                    <div style={{fontSize:11,color:C.muted,fontWeight:700,textTransform:"uppercase",letterSpacing:"0.05em"}}>Strategy</div>
+                    <div style={{fontSize:20,fontWeight:900,color:C.gold,letterSpacing:"0.02em"}}>
+                      {active ? active.name : "  "}
+                    </div>
+                  </div>
+                  <select value={activeFormation} onChange={e=>setActiveFormation(e.target.value)}
+                    style={{...SS, width:"100%", marginBottom:8, fontSize:12, padding:"7px 8px"}}>
+                    {templates.map(t => (
+                      <option key={t.name} value={t.name}>{t.name}  {t.label}</option>
                     ))}
-                  </div>
-
-                  {/* Formation label + total check */}
-                  {(() => {
-                    const total = curD+curM+curF;
-                    const ok = total === fieldSlots;
-                    return (
-                      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}}>
-                        <div style={{fontSize:16,fontWeight:800,color:ok?C.gold:"#e74c3c"}}>
-                          {curD}-{curM}-{curF}
-                        </div>
-                        <div style={{fontSize:10,color:ok?C.muted:"#e74c3c"}}>
-                          {ok ? `${fieldSlots} field + GK ` : `${total}/${fieldSlots} field slots`}
-                        </div>
-                      </div>
-                    );
-                  })()}
-
-                  {/* Quick presets */}
-                  <div style={{display:"flex",flexDirection:"column",gap:4,marginBottom:10,maxHeight:220,overflowY:"auto"}}>
-                    {(FORMATION_TEMPLATES[format]||[]).map(tmpl=>{
-                      const isActive = activeFormation===tmpl.name;
-                      return (
-                        <button key={tmpl.name} onClick={()=>setActiveFormation(tmpl.name)} style={{
-                          padding:"7px 10px",borderRadius:6,border:"none",cursor:"pointer",
-                          fontSize:11,fontWeight:600,fontFamily:"inherit",textAlign:"left",
-                          background:isActive?`linear-gradient(135deg,${C.gold},${C.goldDark})`:"rgba(255,255,255,0.06)",
-                          color:isActive?"#0a0d0f":C.text,
-                          display:"flex",alignItems:"center",gap:8,
-                        }}>
-                          <span style={{fontWeight:800,fontSize:13,minWidth:48}}>{tmpl.name}</span>
-                          <span style={{opacity:0.75,fontSize:10}}>{tmpl.label}  -  {tmpl.desc}</span>
-                        </button>
-                      );
-                    })}
-                  </div>
-
-                  {/* Apply button */}
-                  <Btn primary full onClick={()=>{
-                    // Build slot array from D-M-F counts
-                    const buildSlots = (d,m,f) => {
-                      const slots = ["GK"];
-                      if(d===1) slots.push("CD");
-                      else if(d===2) slots.push("LD","RD");
-                      else if(d>=3){ slots.push("LD"); for(let i=1;i<d-1;i++) slots.push("CD"); slots.push("RD"); }
-                      if(m===1) slots.push("CM");
-                      else if(m===2) slots.push("LM","RM");
-                      else if(m>=3){ slots.push("LM"); for(let i=1;i<m-1;i++) slots.push("CM"); slots.push("RM"); }
-                      if(f===1) slots.push("CF");
-                      else if(f===2) slots.push("LF","RF");
-                      else if(f>=3){ slots.push("LF"); for(let i=1;i<f-1;i++) slots.push("CF"); slots.push("RF"); }
-                      return slots;
-                    };
-
-                    // Try to parse from preset name or D-M-F string
-                    let d=curD,m=curM,f=curF;
-                    const tmpl = (FORMATION_TEMPLATES[format]||[]).find(t=>t.name===activeFormation);
-                    const customSlots = tmpl ? tmpl.slots : buildSlots(d,m,f);
-
-                    // Apply to current quarter's lineup
-                    if(lineupsByQuarter[quarter]) {
-                      const allAvail = [
-                        ...(lineupsByQuarter[quarter].starters||[]).filter(s=>s.player).map(s=>s.player),
-                        ...(lineupsByQuarter[quarter].bench||[]),
-                      ];
-                      const assigned = new Set();
-                      const newStarters = customSlots.map(pos=>{
-                        let best = allAvail.find(p=>!assigned.has(p.id)&&(p.positions||[]).includes(pos));
-                        if(!best) best = allAvail.find(p=>!assigned.has(p.id));
-                        if(best) assigned.add(best.id);
-                        return {pos, player:best||null};
-                      });
-                      const newBench = allAvail.filter(p=>!assigned.has(p.id));
-                      setLineupsByQuarter(prev=>({...prev,[quarter]:{starters:newStarters,bench:newBench}}));
-                    }
-                    setShowFormations(false);
-                  }}>Apply to Q{quarter}</Btn>
+                  </select>
+                  {active && (
+                    <div style={{fontSize:11,color:C.muted,lineHeight:1.5,marginBottom:10,padding:"6px 9px",background:"rgba(255,255,255,0.03)",border:`1px solid ${C.border}`,borderRadius:6}}>
+                      {active.desc}
+                    </div>
+                  )}
+                  <Btn primary full onClick={handleApply}>Apply to Q{quarter}</Btn>
                 </div>
               );
             })()}
@@ -2387,9 +2206,16 @@ function ShareLineupModal({ players, lineupsByQuarter, quarter, homeScore, awayS
     ctx.beginPath(); ctx.arc(fx+fw/2,fy+fh/2,28,0,Math.PI*2); ctx.stroke();
     ctx.strokeRect(fx+fw*0.28,fy+4,fw*0.44,42);
     ctx.strokeRect(fx+fw*0.28,fy+fh-46,fw*0.44,42);
-    // Quarter pill (gold gradient, prominent)
+    // Quarter pill (per-quarter color gradient, prominent)
+    const QCOLORS = {
+      1: ["#f4c442","#b87818"], // gold
+      2: ["#5dadec","#2471a3"], // blue
+      3: ["#c88ce0","#7d3c98"], // purple
+      4: ["#ec7063","#a93226"], // coral/red
+    };
+    const qc = QCOLORS[qNum] || QCOLORS[1];
     const qGrad = ctx.createLinearGradient(fx+8, fy+8, fx+8, fy+30);
-    qGrad.addColorStop(0,"#f4c442"); qGrad.addColorStop(1,"#b87818");
+    qGrad.addColorStop(0, qc[0]); qGrad.addColorStop(1, qc[1]);
     ctx.fillStyle=qGrad; roundRect(ctx,fx+8,fy+8,42,22,5); ctx.fill();
     ctx.strokeStyle="rgba(0,0,0,0.6)"; ctx.lineWidth=1; roundRect(ctx,fx+8,fy+8,42,22,5); ctx.stroke();
     ctx.fillStyle="#0a0d0f"; ctx.font="900 14px Arial, sans-serif"; ctx.textAlign="center";
