@@ -52,14 +52,15 @@ const LEAGUE_DEFAULT_FORMAT = {
 };
 function leagueDefaultFormat(l){ return LEAGUE_DEFAULT_FORMAT[l] || "6v6"; }
 
+// Position rule: 1 in a row = center, 2 = left/right (no center), 3 = L/C/R, 4 = L/C/C/R, etc.
 const POSITIONS_BY_FORMAT = {
-  "4v4":  ["GK","CD","CM","CF"],
-  "5v5":  ["GK","CD","CM","LM","CF"],
-  "6v6":  ["GK","LD","RD","LM","RM","CF"],
-  "7v7":  ["GK","LD","RD","LM","CM","RM","CF"],
-  "8v8":  ["GK","LD","CD","RD","LM","CM","LF","RF"],
-  "9v9":  ["GK","LD","CD","RD","LM","CM","RM","LF","RF"],
-  "11v11":["GK","LB","CB","CB","RB","LM","CM","CM","RM","LF","RF"],
+  "4v4":  ["GK","CD","CM","CF"],                                    // 1-1-1
+  "5v5":  ["GK","LD","RD","CM","CF"],                               // 2-1-1
+  "6v6":  ["GK","LD","RD","LM","RM","CF"],                          // 2-2-1
+  "7v7":  ["GK","LD","RD","LM","CM","RM","CF"],                     // 2-3-1
+  "8v8":  ["GK","LD","CD","RD","LM","CM","RM","CF"],                // 3-3-1 (SAY East U10 default)
+  "9v9":  ["GK","LD","CD","RD","LM","CM","RM","LF","RF"],           // 3-3-2
+  "11v11":["GK","LB","CB","CB","RB","LM","CM","CM","RM","LF","RF"], // 4-4-2
 };
 
 // Human-readable label for display in position tiles
@@ -2149,12 +2150,44 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
                         color:isEditing?"#0a0d0f":C.gold,
                         background:isEditing?C.gold:"rgba(232,160,32,0.08)",
                         borderColor:"rgba(232,160,32,0.4)"}}>{isEditing?"Done":"Edit"}</button>
-                      <button onClick={()=>setPlayers(prev=>prev.map(x=>x.id===p.id?{...x,injured:!x.injured,out:false}:x))}
+                      <button onClick={()=>{
+                        if (p.injured) {
+                          // Un-mark injury  if it was a mid-game pull, regen remaining quarters with player back
+                          if (p.midGameInjury) clearMidGameInjury(p.id);
+                          else setPlayers(prev=>prev.map(x=>x.id===p.id?{...x,injured:false}:x));
+                        } else {
+                          // Mark injured  if any lineup is planned, do a mid-game pull + auto-replan
+                          if (Object.keys(lineupsByQuarter).length > 0) {
+                            markMidGameInjury(p.id);
+                          } else {
+                            setPlayers(prev=>prev.map(x=>x.id===p.id?{...x,injured:true,out:false}:x));
+                          }
+                        }
+                      }}
                         style={{...tinyBtn,
                           color:isInjured?"#fff":"#e74c3c",
                           background:isInjured?"rgba(231,76,60,0.85)":"rgba(231,76,60,0.08)",
                           borderColor:"rgba(231,76,60,0.4)"}}>Inj</button>
-                      <button onClick={()=>setPlayers(prev=>prev.map(x=>x.id===p.id?{...x,out:!x.out,injured:false}:x))}
+                      <button onClick={()=>{
+                        if (p.out) {
+                          // Un-mark out
+                          setPlayers(prev=>prev.map(x=>x.id===p.id?{...x,out:false}:x));
+                          // If lineups exist, regen so player returns to rotation
+                          if (Object.keys(lineupsByQuarter).length > 0) {
+                            const updated = players.map(x=>x.id===p.id?{...x,out:false}:x);
+                            regenRemaining(quarter, updated, lineupsByQuarter);
+                          }
+                        } else {
+                          // Mark out  if lineups exist, pull and replan (same as injury)
+                          if (Object.keys(lineupsByQuarter).length > 0) {
+                            markMidGameInjury(p.id);
+                            // markMidGameInjury sets injured:true; flip to out:true instead
+                            setPlayers(prev=>prev.map(x=>x.id===p.id?{...x,injured:false,midGameInjury:false,out:true}:x));
+                          } else {
+                            setPlayers(prev=>prev.map(x=>x.id===p.id?{...x,out:true,injured:false}:x));
+                          }
+                        }
+                      }}
                         style={{...tinyBtn,
                           color:isOut?"#0a0d0f":"#e67e22",
                           background:isOut?"#e67e22":"rgba(230,126,34,0.10)",
@@ -2210,41 +2243,6 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
                 );
               });
             })()}
-          </Card>
-
-          {/* Mid-game injury panel */}
-          <Card style={{marginBottom:12,border:"1px solid rgba(231,76,60,0.2)"}}>
-            <div style={{fontSize:11,color:"#e74c3c",fontWeight:700,marginBottom:6,textTransform:"uppercase",letterSpacing:"0.05em"}}>Mark Injury</div>
-            <div style={{fontSize:10,color:C.muted,marginBottom:8,lineHeight:1.5}}>
-              Tap "Pull" to remove a player now. Remaining quarters auto-replan.
-            </div>
-            {active.filter(p => !p.midGameInjury).length === 0 && (
-              <div style={{fontSize:11,color:C.muted,fontStyle:"italic"}}>No active players</div>
-            )}
-            <div style={{display:"flex",flexDirection:"column",gap:3}}>
-              {active.filter(p => !p.midGameInjury).map(p => {
-                const onField = onFieldIds.has(p.id);
-                return (
-                  <div key={p.id} style={{display:"flex",alignItems:"center",gap:7,padding:"4px 7px",borderRadius:6,
-                    background:onField?"rgba(231,76,60,0.06)":"rgba(255,255,255,0.02)",
-                    border:onField?"1px solid rgba(231,76,60,0.15)":`1px solid ${C.border}`}}>
-                    <div style={{width:20,height:20,borderRadius:"50%",flexShrink:0,
-                      background:`linear-gradient(135deg,${C.gold},${C.goldDark})`,
-                      display:"flex",alignItems:"center",justifyContent:"center",
-                      fontSize:8,fontWeight:700,color:"#0a0d0f"}}>{p.number}</div>
-                    <div style={{flex:1,minWidth:0}}>
-                      <div style={{fontSize:11,color:C.text,fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{p.name}</div>
-                      <div style={{fontSize:9,color:C.muted}}>{onField?"On field":"Bench"}</div>
-                    </div>
-                    <button onClick={() => markMidGameInjury(p.id)} style={{
-                      background:"rgba(192,57,43,0.2)",border:"1px solid rgba(192,57,43,0.5)",
-                      borderRadius:5,cursor:"pointer",fontSize:11,color:"#e74c3c",
-                      padding:"4px 10px",fontFamily:"inherit",flexShrink:0,fontWeight:700,
-                    }}>Pull</button>
-                  </div>
-                );
-              })}
-            </div>
           </Card>
 
           {/* Bench this quarter */}
@@ -2383,34 +2381,39 @@ function ShareLineupModal({ players, lineupsByQuarter, quarter, homeScore, awayS
     const fg = ctx.createLinearGradient(fx,fy,fx,fy+fh);
     fg.addColorStop(0,"#1e4d1a"); fg.addColorStop(1,"#163d13");
     ctx.fillStyle=fg; roundRect(ctx,fx,fy,fw,fh,8); ctx.fill();
-    ctx.strokeStyle="rgba(255,255,255,0.25)"; ctx.lineWidth=1;
+    ctx.strokeStyle="rgba(255,255,255,0.3)"; ctx.lineWidth=1.2;
     roundRect(ctx,fx,fy,fw,fh,8); ctx.stroke();
     ctx.beginPath(); ctx.moveTo(fx+8,fy+fh/2); ctx.lineTo(fx+fw-8,fy+fh/2); ctx.stroke();
-    ctx.beginPath(); ctx.arc(fx+fw/2,fy+fh/2,22,0,Math.PI*2); ctx.stroke();
-    ctx.strokeRect(fx+fw*0.28,fy+4,fw*0.44,36);
-    ctx.strokeRect(fx+fw*0.28,fy+fh-40,fw*0.44,36);
-    ctx.fillStyle="rgba(0,0,0,0.45)"; roundRect(ctx,fx+5,fy+5,24,15,3); ctx.fill();
-    ctx.fillStyle="#e8a020"; ctx.font="bold 10px Arial"; ctx.textAlign="center";
-    ctx.fillText("Q"+qNum,fx+17,fy+16);
+    ctx.beginPath(); ctx.arc(fx+fw/2,fy+fh/2,28,0,Math.PI*2); ctx.stroke();
+    ctx.strokeRect(fx+fw*0.28,fy+4,fw*0.44,42);
+    ctx.strokeRect(fx+fw*0.28,fy+fh-46,fw*0.44,42);
+    // Quarter pill (gold gradient, prominent)
+    const qGrad = ctx.createLinearGradient(fx+8, fy+8, fx+8, fy+30);
+    qGrad.addColorStop(0,"#f4c442"); qGrad.addColorStop(1,"#b87818");
+    ctx.fillStyle=qGrad; roundRect(ctx,fx+8,fy+8,42,22,5); ctx.fill();
+    ctx.strokeStyle="rgba(0,0,0,0.6)"; ctx.lineWidth=1; roundRect(ctx,fx+8,fy+8,42,22,5); ctx.stroke();
+    ctx.fillStyle="#0a0d0f"; ctx.font="900 14px Arial, sans-serif"; ctx.textAlign="center";
+    ctx.fillText("Q"+qNum,fx+29,fy+24);
     const lineup = lineupsByQuarter[qNum];
     if (lineup && lineup.starters) {
       lineup.starters.forEach(function(slot) {
         const fb = FBASE[slot.pos]||{x:50,y:50};
         const px = fx+(fb.x/100)*fw;
         const py = fy+(fb.y/100)*fh;
-        const grad = ctx.createRadialGradient(px,py,1,px,py,11);
+        const grad = ctx.createRadialGradient(px,py,1,px,py,15);
         grad.addColorStop(0,"#f5c86a"); grad.addColorStop(1,"#b87818");
-        ctx.fillStyle=grad; ctx.beginPath(); ctx.arc(px,py,11,0,Math.PI*2); ctx.fill();
-        ctx.strokeStyle="rgba(255,255,255,0.7)"; ctx.lineWidth=0.8; ctx.stroke();
+        ctx.fillStyle=grad; ctx.beginPath(); ctx.arc(px,py,15,0,Math.PI*2); ctx.fill();
+        ctx.strokeStyle="rgba(255,255,255,0.85)"; ctx.lineWidth=1.2; ctx.stroke();
         const num=slot.player?slot.player.number:"?";
-        ctx.fillStyle="#0a0d0f"; ctx.font="bold 8px Arial"; ctx.textAlign="center";
-        ctx.fillText(num,px,py+3);
-        const fname=slot.player?slot.player.name.split(" ")[0].slice(0,5):"";
-        ctx.fillStyle="#fff"; ctx.font="6px Arial"; ctx.fillText(fname,px,py+17);
-        ctx.fillStyle="rgba(255,220,60,0.95)"; ctx.font="bold 6px Arial"; ctx.fillText(slot.pos,px,py-13);
+        ctx.fillStyle="#0a0d0f"; ctx.font="900 12px Arial, sans-serif"; ctx.textAlign="center"; ctx.textBaseline="middle";
+        ctx.fillText(num,px,py);
+        ctx.textBaseline="alphabetic";
+        const fname=slot.player?slot.player.name.split(" ")[0].slice(0,7):"";
+        ctx.fillStyle="#fff"; ctx.font="bold 9px Arial, sans-serif"; ctx.fillText(fname,px,py+25);
+        ctx.fillStyle="#ffe066"; ctx.font="900 9px Arial, sans-serif"; ctx.fillText(slot.pos,px,py-19);
       });
     } else {
-      ctx.fillStyle="rgba(255,255,255,0.18)"; ctx.font="9px Arial"; ctx.textAlign="center";
+      ctx.fillStyle="rgba(255,255,255,0.25)"; ctx.font="bold 12px Arial, sans-serif"; ctx.textAlign="center";
       ctx.fillText("Not planned",fx+fw/2,fy+fh/2+3);
     }
   };
@@ -2419,45 +2422,55 @@ function ShareLineupModal({ players, lineupsByQuarter, quarter, homeScore, awayS
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
+    // Render at high DPR for crisp output (sharp on screen, sharp PNG download)
+    const DPR = Math.max(2, (typeof window !== "undefined" && window.devicePixelRatio) || 1);
     const W = 600, H = 920;
-    canvas.width = W; canvas.height = H;
+    canvas.width  = Math.round(W * DPR);
+    canvas.height = Math.round(H * DPR);
+    canvas.style.width  = "100%";
+    canvas.style.height = "auto";
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
+    ctx.textBaseline = "alphabetic";
+
     ctx.fillStyle="#0c1409"; ctx.fillRect(0,0,W,H);
     ctx.fillStyle="#1a2518"; ctx.fillRect(0,0,W,70);
     ctx.fillStyle="#e8a020"; ctx.beginPath(); ctx.arc(36,35,18,0,Math.PI*2); ctx.fill();
-    ctx.fillStyle="#0a0d0f"; ctx.font="bold 14px Arial"; ctx.textAlign="center"; ctx.fillText("CK",36,40);
-    ctx.fillStyle="#e8e4dc"; ctx.font="bold 17px Arial"; ctx.textAlign="left"; ctx.fillText("CoachKit",62,28);
-    ctx.fillStyle="#7a7570"; ctx.font="9px Arial"; ctx.fillText("SAY East Youth Soccer",62,44);
-    ctx.fillStyle="#e8a020"; ctx.font="bold 11px Arial"; ctx.textAlign="right"; ctx.fillText(league,W-14,28);
-    ctx.fillStyle="#7a7570"; ctx.font="9px Arial"; ctx.fillText(new Date().toLocaleDateString(),W-14,44);
-    ctx.fillStyle="rgba(232,160,32,0.1)"; roundRect(ctx,12,78,W-24,50,7); ctx.fill();
-    ctx.strokeStyle="rgba(232,160,32,0.3)"; ctx.lineWidth=1; roundRect(ctx,12,78,W-24,50,7); ctx.stroke();
+    ctx.fillStyle="#0a0d0f"; ctx.font="900 14px Arial, sans-serif"; ctx.textAlign="center"; ctx.fillText("CK",36,40);
+    ctx.fillStyle="#e8e4dc"; ctx.font="bold 18px Arial, sans-serif"; ctx.textAlign="left"; ctx.fillText("CoachKit",64,29);
+    ctx.fillStyle="#a8a39e"; ctx.font="11px Arial, sans-serif"; ctx.fillText("SAY East Youth Soccer",64,46);
+    ctx.fillStyle="#e8a020"; ctx.font="bold 13px Arial, sans-serif"; ctx.textAlign="right"; ctx.fillText(league,W-14,29);
+    ctx.fillStyle="#a8a39e"; ctx.font="11px Arial, sans-serif"; ctx.fillText(new Date().toLocaleDateString(),W-14,46);
+    ctx.fillStyle="rgba(232,160,32,0.1)"; roundRect(ctx,12,78,W-24,52,7); ctx.fill();
+    ctx.strokeStyle="rgba(232,160,32,0.35)"; ctx.lineWidth=1; roundRect(ctx,12,78,W-24,52,7); ctx.stroke();
     ctx.textAlign="center";
-    ctx.fillStyle="#7a7570"; ctx.font="bold 9px Arial"; ctx.fillText("US",W/2-70,93);
-    ctx.fillStyle=opponent?"#e8e4dc":"#7a7570"; ctx.fillText((opponent||"THEM").toUpperCase(),W/2+70,93);
-    ctx.fillStyle="#e8a020"; ctx.font="bold 28px Arial"; ctx.fillText(homeScore,W/2-70,118);
-    ctx.fillStyle="#555"; ctx.font="bold 18px Arial"; ctx.fillText(":",W/2,114);
-    ctx.fillStyle=homeScore<awayScore?"#e74c3c":"#e8e4dc"; ctx.font="bold 28px Arial"; ctx.fillText(awayScore,W/2+70,118);
+    ctx.fillStyle="#a8a39e"; ctx.font="bold 11px Arial, sans-serif"; ctx.fillText("US",W/2-70,94);
+    ctx.fillStyle=opponent?"#e8e4dc":"#a8a39e"; ctx.fillText((opponent||"THEM").toUpperCase(),W/2+70,94);
+    ctx.fillStyle="#e8a020"; ctx.font="900 30px Arial, sans-serif"; ctx.fillText(homeScore,W/2-70,121);
+    ctx.fillStyle="#666"; ctx.font="bold 20px Arial, sans-serif"; ctx.fillText(":",W/2,116);
+    ctx.fillStyle=homeScore<awayScore?"#e74c3c":"#e8e4dc"; ctx.font="900 30px Arial, sans-serif"; ctx.fillText(awayScore,W/2+70,121);
     var pad=10, fw=(W-pad*3)/2, fh=330;
     [[1,0,0],[2,1,0],[3,0,1],[4,1,1]].forEach(function(qc) {
       var q=qc[0], col=qc[1], row=qc[2];
       drawField(ctx, pad+col*(fw+pad), 136+row*(fh+pad), fw, fh, q);
     });
     var benchY=136+2*(fh+pad)+6;
-    ctx.fillStyle="#141a12"; roundRect(ctx,12,benchY,W-24,72,5); ctx.fill();
-    ctx.strokeStyle="rgba(255,255,255,0.06)"; roundRect(ctx,12,benchY,W-24,72,5); ctx.stroke();
-    ctx.fillStyle="#e8a020"; ctx.font="bold 8px Arial"; ctx.textAlign="left";
-    ctx.fillText("BENCH",20,benchY+14);
+    ctx.fillStyle="#141a12"; roundRect(ctx,12,benchY,W-24,76,5); ctx.fill();
+    ctx.strokeStyle="rgba(255,255,255,0.08)"; roundRect(ctx,12,benchY,W-24,76,5); ctx.stroke();
+    ctx.fillStyle="#e8a020"; ctx.font="bold 11px Arial, sans-serif"; ctx.textAlign="left";
+    ctx.fillText("BENCH",20,benchY+16);
     var bench=(lineupsByQuarter[1]&&lineupsByQuarter[1].bench)||[];
     bench.forEach(function(p,i) {
       var bx=20+(i%6)*((W-40)/6);
-      var by=benchY+22+Math.floor(i/6)*22;
-      ctx.fillStyle="rgba(255,255,255,0.05)"; roundRect(ctx,bx,by,(W-40)/6-3,16,3); ctx.fill();
-      ctx.fillStyle="#e8e4dc"; ctx.font="8px Arial"; ctx.textAlign="left";
-      ctx.fillText("#"+p.number+" "+p.name.split(" ")[0],bx+3,by+11);
+      var by=benchY+24+Math.floor(i/6)*22;
+      ctx.fillStyle="rgba(255,255,255,0.06)"; roundRect(ctx,bx,by,(W-40)/6-3,18,3); ctx.fill();
+      ctx.fillStyle="#e8e4dc"; ctx.font="bold 10px Arial, sans-serif"; ctx.textAlign="left";
+      ctx.fillText("#"+p.number+" "+p.name.split(" ")[0],bx+5,by+12);
     });
-    ctx.fillStyle="#444"; ctx.font="8px Arial"; ctx.textAlign="center";
-    ctx.fillText("CoachKit - "+league+" - "+new Date().toLocaleDateString(),W/2,H-8);
-  }, [lineupsByQuarter]);
+    ctx.fillStyle="#666"; ctx.font="bold 10px Arial, sans-serif"; ctx.textAlign="center";
+    ctx.fillText("CoachKit - "+league+" - "+new Date().toLocaleDateString(),W/2,H-9);
+  }, [lineupsByQuarter, homeScore, awayScore, opponent, league]);
 
   const handleDownload = function() {
     var a = document.createElement("a");
