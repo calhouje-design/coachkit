@@ -1031,7 +1031,11 @@ const IS = {
   boxSizing: "border-box",
 };
 
-const SS = { ...IS, cursor: "pointer" };
+// Solid background for selects so the open dropdown is readable in all browsers
+const SS = { ...IS, cursor: "pointer", background: "#141a12", color: C.text };
+
+// Inline style for <option> elements so dropdown popup text is readable
+const OPT = { background: "#141a12", color: "#e8e4dc" };
 
 function Btn({ children, onClick, sm, danger, warn, primary, ghost, disabled, full, style:sx }) {
   const bg = danger ? C.danger : warn ? C.warn : primary ? `linear-gradient(135deg,${C.gold},${C.goldDark})` : ghost ? "transparent" : "rgba(255,255,255,0.1)";
@@ -1736,7 +1740,7 @@ function TabGame({ format, league, onLeagueChange, onFormatChange, players, setP
                 <label style={{...lbl,marginBottom:4}}>League</label>
                 <select value={league} onChange={e=>onLeagueChange&&onLeagueChange(e.target.value)}
                   style={{...SS,width:"100%",fontSize:12,padding:"6px 8px"}}>
-                  {LEAGUES.map(l=><option key={l} value={l}>{leagueShortLabel(l)}</option>)}
+                  {LEAGUES.map(l=><option key={l} value={l} style={OPT}>{leagueShortLabel(l)}</option>)}
                 </select>
               </div>
               <div>
@@ -1748,7 +1752,7 @@ function TabGame({ format, league, onLeagueChange, onFormatChange, players, setP
                 </label>
                 <select value={format} onChange={e=>onFormatChange&&onFormatChange(e.target.value)}
                   style={{...SS,width:"100%",fontSize:12,padding:"6px 8px"}}>
-                  {FORMATS.map(f=><option key={f} value={f}>{f}{f===leagueDefaultFormat(league)?"  default":""}</option>)}
+                  {FORMATS.map(f=><option key={f} value={f} style={OPT}>{f}{f===leagueDefaultFormat(league)?"  default":""}</option>)}
                 </select>
               </div>
             </div>
@@ -1790,7 +1794,7 @@ function TabGame({ format, league, onLeagueChange, onFormatChange, players, setP
                   <select value={activeFormation} onChange={e=>setActiveFormation(e.target.value)}
                     style={{...SS, width:"100%", marginBottom:8, fontSize:12, padding:"7px 8px"}}>
                     {templates.map(t => (
-                      <option key={t.name} value={t.name}>{t.name}  {t.label}</option>
+                      <option key={t.name} value={t.name} style={OPT}>{t.name}  {t.label}</option>
                     ))}
                   </select>
                   {active && (
@@ -2752,19 +2756,19 @@ function TabDrills({ drills, league, addCustomDrill, removeCustomDrill }) {
             <div>
               <label style={lbl}>Category</label>
               <select value={newDrill.category} onChange={e=>setNewDrill(d=>({...d,category:e.target.value}))} style={SS}>
-                {CATEGORIES.map(c=><option key={c}>{c}</option>)}
+                {CATEGORIES.map(c=><option key={c} style={OPT}>{c}</option>)}
               </select>
             </div>
             <div>
               <label style={lbl}>Difficulty</label>
               <select value={newDrill.difficulty} onChange={e=>setNewDrill(d=>({...d,difficulty:e.target.value}))} style={SS}>
-                {DIFFICULTIES.map(c=><option key={c}>{c}</option>)}
+                {DIFFICULTIES.map(c=><option key={c} style={OPT}>{c}</option>)}
               </select>
             </div>
             <div>
               <label style={lbl}>Age Min</label>
               <select value={newDrill.ageMin} onChange={e=>setNewDrill(d=>({...d,ageMin:e.target.value}))} style={SS}>
-                {LEAGUES.map(l=><option key={l} value={l}>{leagueShortLabel(l)}</option>)}
+                {LEAGUES.map(l=><option key={l} value={l} style={OPT}>{leagueShortLabel(l)}</option>)}
               </select>
             </div>
             <div>
@@ -3066,13 +3070,13 @@ function TabPractice({ drills, league }) {
           <div>
             <label style={lbl}>Focus Area</label>
             <select value={focus} onChange={e=>setFocus(e.target.value)} style={SS}>
-              {FOCUS_AREAS.map(f=><option key={f}>{f}</option>)}
+              {FOCUS_AREAS.map(f=><option key={f} style={OPT}>{f}</option>)}
             </select>
           </div>
           <div>
             <label style={lbl}>Duration (minutes)</label>
             <select value={duration} onChange={e=>setDuration(+e.target.value)} style={SS}>
-              {[30,45,60,75,90].map(d=><option key={d}>{d}</option>)}
+              {[30,45,60,75,90].map(d=><option key={d} style={OPT}>{d}</option>)}
             </select>
           </div>
           <Btn primary onClick={generate}> Generate</Btn>
@@ -3772,9 +3776,9 @@ function TabTeam({ players, updatePlayer, league, games }) {
                 <div>
                   <label style={lbl}>Type</label>
                   <select value={newScheduleItem.type} onChange={e=>setNewScheduleItem(p=>({...p,type:e.target.value}))} style={SS}>
-                    <option value="game">Game</option>
-                    <option value="practice">Practice</option>
-                    <option value="other">Other</option>
+                    <option value="game" style={OPT}>Game</option>
+                    <option value="practice" style={OPT}>Practice</option>
+                    <option value="other" style={OPT}>Other</option>
                   </select>
                 </div>
                 <div><label style={lbl}>Opponent / Title</label><input value={newScheduleItem.opponent} onChange={e=>setNewScheduleItem(p=>({...p,opponent:e.target.value}))} placeholder="Team / event name" style={IS}/></div>
