@@ -1267,6 +1267,66 @@ function InjuryAlert({ player, quarter, onDismiss }) {
 }
 
 //
+// WEATHER BUTTON  compact game-day weather check (used in App header)
+//
+function WeatherButton() {
+  const [weather, setWeather] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState(null);
+
+  const fetchWeather = () => {
+    if (!navigator.geolocation) { setErr("Geo not supported"); return; }
+    setLoading(true); setErr(null);
+    navigator.geolocation.getCurrentPosition(async (pos) => {
+      try {
+        const { latitude: lat, longitude: lon } = pos.coords;
+        const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,apparent_temperature,wind_speed_10m,precipitation_probability,weather_code&temperature_unit=fahrenheit&wind_speed_unit=mph`;
+        const r = await fetch(url);
+        const j = await r.json();
+        const c = j.current || {};
+        const codeMap = { 0:"Clear",1:"Mostly clear",2:"Partly cloudy",3:"Cloudy",45:"Foggy",48:"Foggy",51:"Drizzle",53:"Drizzle",55:"Drizzle",61:"Light rain",63:"Rain",65:"Heavy rain",71:"Light snow",73:"Snow",75:"Heavy snow",80:"Showers",81:"Showers",82:"Heavy showers",95:"Thunderstorm" };
+        setWeather({
+          temp: Math.round(c.temperature_2m),
+          feels: Math.round(c.apparent_temperature),
+          wind: Math.round(c.wind_speed_10m),
+          precip: c.precipitation_probability ?? 0,
+          desc: codeMap[c.weather_code] || "Unknown",
+        });
+        setLoading(false);
+      } catch (e) { setErr("Fetch failed"); setLoading(false); }
+    }, () => { setErr("Location denied"); setLoading(false); });
+  };
+
+  if (loading) return <div style={{fontSize:11,color:C.muted,padding:"4px 10px"}}>Loading</div>;
+  if (err) return (
+    <button onClick={fetchWeather} style={{padding:"5px 10px",borderRadius:7,border:`1px solid ${C.border}`,background:"transparent",color:"#e74c3c",fontSize:11,cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>{err}  retry</button>
+  );
+  if (!weather) return (
+    <button onClick={fetchWeather} style={{
+      padding:"6px 12px",borderRadius:7,
+      border:`1px solid ${C.border}`,background:"rgba(255,255,255,0.04)",
+      color:C.muted,fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit",letterSpacing:"0.03em",textTransform:"uppercase",
+    }}>Game Day Weather</button>
+  );
+  return (
+    <div onClick={fetchWeather} title="Click to refresh" style={{
+      display:"flex",alignItems:"center",gap:8,padding:"4px 10px",
+      background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,
+      cursor:"pointer",fontFamily:"inherit",
+    }}>
+      <div style={{textAlign:"left"}}>
+        <div style={{fontSize:14,fontWeight:800,color:C.text,lineHeight:1}}>{weather.temp}F</div>
+        <div style={{fontSize:9,color:C.muted,lineHeight:1.2,marginTop:1}}>{weather.desc}</div>
+      </div>
+      <div style={{display:"flex",flexDirection:"column",gap:1,alignItems:"flex-end",fontSize:9,color:C.muted}}>
+        <div>{weather.wind} mph</div>
+        <div>{weather.precip}% rain</div>
+      </div>
+    </div>
+  );
+}
+
+//
 // PLAYER EDIT PANEL  inline editor for a single player (used in Play Time tracker)
 //
 function PlayerEditPanel({ player, onUpdate, onDelete, onClose }) {
@@ -1355,7 +1415,7 @@ function PlayerEditPanel({ player, onUpdate, onDelete, onClose }) {
 //
 // TAB: GAME DAY
 //
-function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer, lineupsByQuarter, setLineupsByQuarter }) {
+function TabGame({ format, league, onLeagueChange, onFormatChange, players, setPlayers, addPlayer, removePlayer, lineupsByQuarter, setLineupsByQuarter }) {
   const [quarter,       setQuarter]       = useState(1);
   const [injuryAlerts,  setInjuryAlerts]  = useState([]);
   const [justRegenned,  setJustRegenned]  = useState(false);
@@ -1395,38 +1455,6 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
   const [awayScore, setAwayScore] = useState(0);
   const [opponent,  setOpponent]  = useState("");
   const [editOpp,   setEditOpp]   = useState(false);
-
-  // -- WEATHER ----
-  const [weather,      setWeather]      = useState(null);
-  const [weatherErr,   setWeatherErr]   = useState(null);
-  const [weatherLoading,setWeatherLoading] = useState(false);
-
-  const fetchWeather = () => {
-    if (!navigator.geolocation) { setWeatherErr("Geolocation not supported"); return; }
-    setWeatherLoading(true);
-    setWeatherErr(null);
-    navigator.geolocation.getCurrentPosition(
-      async pos => {
-        try {
-          const { latitude: lat, longitude: lon } = pos.coords;
-          const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,apparent_temperature,precipitation_probability,windspeed_10m,weathercode&temperature_unit=fahrenheit&windspeed_unit=mph&timezone=auto`;
-          const res = await fetch(url);
-          const data = await res.json();
-          const c = data.current;
-          const codeMap = {0:"Clear ",1:"Mostly Clear ",2:"Partly Cloudy ",3:"Overcast ",45:"Foggy ",48:"Foggy ",51:"Drizzle ",53:"Drizzle ",55:"Drizzle ",61:"Rain ",63:"Rain ",65:"Heavy Rain ",71:"Snow ",73:"Snow ",75:"Heavy Snow ",80:"Showers ",81:"Showers ",82:"Heavy Showers ",95:"Thunderstorm ",96:"Thunderstorm ",99:"Thunderstorm "};
-          setWeather({
-            temp: Math.round(c.temperature_2m),
-            feels: Math.round(c.apparent_temperature),
-            wind: Math.round(c.windspeed_10m),
-            precip: c.precipitation_probability,
-            desc: codeMap[c.weathercode] || "Unknown",
-          });
-        } catch { setWeatherErr("Couldn't load weather"); }
-        setWeatherLoading(false);
-      },
-      () => { setWeatherErr("Location access denied"); setWeatherLoading(false); }
-    );
-  };
 
   // -- SHARE LINEUP --
   const [showShare, setShowShare] = useState(false);
@@ -1648,52 +1676,6 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
         </div>
       </div>
 
-      {/* WEATHER */}
-      <div style={{marginBottom:12}}>
-        {!weather && !weatherLoading && (
-          <button onClick={fetchWeather} style={{
-            width:"100%",padding:"8px 14px",borderRadius:9,
-            border:`1px solid ${C.border}`,background:"transparent",
-            color:C.muted,fontSize:12,fontWeight:600,cursor:"pointer",fontFamily:"inherit",
-            display:"flex",alignItems:"center",justifyContent:"center",gap:6,
-          }}>
-             Check Game Day Weather
-          </button>
-        )}
-        {weatherLoading && (
-          <div style={{textAlign:"center",padding:"8px",fontSize:12,color:C.muted}}>Fetching weather</div>
-        )}
-        {weatherErr && (
-          <div style={{textAlign:"center",padding:"8px",fontSize:11,color:"#e74c3c"}}>{weatherErr}</div>
-        )}
-        {weather && (
-          <div style={{
-            display:"flex",alignItems:"center",gap:10,padding:"10px 14px",
-            background:C.surface,borderRadius:9,border:`1px solid ${C.border}`,
-          }}>
-            <div style={{fontSize:28,lineHeight:1}}>{weather.desc.split(" ").pop()}</div>
-            <div style={{flex:1}}>
-              <div style={{fontSize:15,fontWeight:800,color:C.text}}>
-                {weather.temp}F <span style={{fontSize:11,fontWeight:400,color:C.muted}}>feels {weather.feels}F</span>
-              </div>
-              <div style={{fontSize:11,color:C.muted}}>
-                {weather.desc.split(" ").slice(0,-1).join(" ")}   {weather.wind} mph   {weather.precip}% rain
-              </div>
-            </div>
-            <div style={{display:"flex",flexDirection:"column",gap:4,alignItems:"flex-end"}}>
-              {weather.precip >= 60 && <div style={{fontSize:10,color:"#3498db",fontWeight:700}}> Wet field likely</div>}
-              {weather.wind >= 20 && <div style={{fontSize:10,color:C.gold,fontWeight:700}}> High wind</div>}
-              {weather.temp <= 40 && <div style={{fontSize:10,color:"#5dade2",fontWeight:700}}> Cold  extra layers</div>}
-              {weather.temp >= 85 && <div style={{fontSize:10,color:"#e74c3c",fontWeight:700}}> Heat  water breaks</div>}
-              <button onClick={fetchWeather} style={{
-                background:"none",border:"none",cursor:"pointer",
-                color:C.muted,fontSize:10,padding:0,
-              }}> refresh</button>
-            </div>
-          </div>
-        )}
-      </div>
-
       {/* Success flash */}
       {justRegenned && (
         <div style={{
@@ -1746,6 +1728,31 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
 
         {/* -- LEFT PANEL (Play Time, Strategy, etc.) -- */}
         <div style={{flex:"1 1 320px",minWidth:0,maxWidth:400}}>
+
+          {/* League + Format selectors  above Strategy */}
+          <Card style={{marginBottom:14}}>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+              <div>
+                <label style={{...lbl,marginBottom:4}}>League</label>
+                <select value={league} onChange={e=>onLeagueChange&&onLeagueChange(e.target.value)}
+                  style={{...SS,width:"100%",fontSize:12,padding:"6px 8px"}}>
+                  {LEAGUES.map(l=><option key={l} value={l}>{leagueShortLabel(l)}</option>)}
+                </select>
+              </div>
+              <div>
+                <label style={{...lbl,marginBottom:4,display:"flex",alignItems:"center",gap:4}}>
+                  <span>Format</span>
+                  {format !== leagueDefaultFormat(league) && (
+                    <span style={{fontSize:8,color:C.gold,fontWeight:700,letterSpacing:"0.04em"}}>OVERRIDE</span>
+                  )}
+                </label>
+                <select value={format} onChange={e=>onFormatChange&&onFormatChange(e.target.value)}
+                  style={{...SS,width:"100%",fontSize:12,padding:"6px 8px"}}>
+                  {FORMATS.map(f=><option key={f} value={f}>{f}{f===leagueDefaultFormat(league)?"  default":""}</option>)}
+                </select>
+              </div>
+            </div>
+          </Card>
 
           {/* Strategy / Formation Picker  minimized */}
           <Card style={{marginBottom:14}}>
@@ -1819,22 +1826,6 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
               );
             })}
           </div>
-
-          {/* Status */}
-          <Card style={{marginBottom:12}}>
-            <div style={{fontSize:11,color:C.muted,marginBottom:6,fontWeight:700,textTransform:"uppercase",letterSpacing:"0.05em"}}>Game Status</div>
-            <div style={{fontSize:12,color:C.text,marginBottom:3}}>{active.length} active  {needed} per side</div>
-            {active.length > needed && (
-              <div style={{fontSize:11,color:C.muted}}>{active.length - needed} rotating through bench</div>
-            )}
-            {players.filter(p=>p.injured&&!p.midGameInjury).length > 0 && (
-              <div style={{fontSize:11,color:"#e74c3c",marginTop:3}}> {players.filter(p=>p.injured&&!p.midGameInjury).length} pre-game injured</div>
-            )}
-            {midGameInjured.length > 0 && (
-              <div style={{fontSize:11,color:"#e74c3c",marginTop:3}}> {midGameInjured.length} mid-game injur{midGameInjured.length>1?"ies":"y"}</div>
-            )}
-            {minQ > 0 && <div style={{fontSize:11,color:C.muted,marginTop:3}}>Min: {minQ}Q per player ({rule.minFraction*100|0}%)</div>}
-          </Card>
 
           {/* PRIMARY ACTION */}
           <div style={{marginBottom:14}}>
@@ -2158,6 +2149,23 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
           )}
         </div>
       </div>
+
+      {/* GAME STATUS  bottom of Game Day tab */}
+      <Card style={{marginTop:18}}>
+        <div style={{fontSize:11,color:C.muted,marginBottom:6,fontWeight:700,textTransform:"uppercase",letterSpacing:"0.05em"}}>Game Status</div>
+        <div style={{fontSize:12,color:C.text,marginBottom:3}}>{active.length} active  {needed} per side</div>
+        {active.length > needed && (
+          <div style={{fontSize:11,color:C.muted}}>{active.length - needed} rotating through bench</div>
+        )}
+        {players.filter(p=>p.injured&&!p.midGameInjury).length > 0 && (
+          <div style={{fontSize:11,color:"#e74c3c",marginTop:3}}> {players.filter(p=>p.injured&&!p.midGameInjury).length} pre-game injured</div>
+        )}
+        {midGameInjured.length > 0 && (
+          <div style={{fontSize:11,color:"#e74c3c",marginTop:3}}> {midGameInjured.length} mid-game injur{midGameInjured.length>1?"ies":"y"}</div>
+        )}
+        {minQ > 0 && <div style={{fontSize:11,color:C.muted,marginTop:3}}>Min: {minQ}Q per player ({rule.minFraction*100|0}%)</div>}
+      </Card>
+
       {/* Share Lineup Modal */}
       {showShare && (
         <ShareLineupModal
@@ -3362,23 +3370,7 @@ function CoachKitApp() {
             </div>
 
             <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
-              <div>
-                <label style={{...lbl,marginBottom:2}}>League</label>
-                <select value={league} onChange={e=>handleLeagueChange(e.target.value)} style={{...SS,width:"auto",padding:"5px 8px",fontSize:12}}>
-                  {LEAGUES.map(l=><option key={l} value={l}>{leagueShortLabel(l)}</option>)}
-                </select>
-              </div>
-              <div>
-                <label style={{...lbl,marginBottom:2}}>
-                  Format
-                  {format !== leagueDefaultFormat(league) && (
-                    <span style={{marginLeft:6,fontSize:8,color:C.gold,fontWeight:700,letterSpacing:"0.04em"}}>OVERRIDE</span>
-                  )}
-                </label>
-                <select value={format} onChange={e=>handleFormatChange(e.target.value)} style={{...SS,width:"auto",padding:"5px 8px",fontSize:12}}>
-                  {FORMATS.map(f=><option key={f} value={f}>{f}{f===leagueDefaultFormat(league)?"  default":""}</option>)}
-                </select>
-              </div>
+              <WeatherButton />
               <div style={{display:"flex",gap:10,alignItems:"center"}}>
                 <Stat label="Roster"   val={players.length}    color={C.text}/>
                 {injured>0&&<Stat label=" Injured" val={injured} color="#e74c3c"/>}
@@ -3406,7 +3398,7 @@ function CoachKitApp() {
 
       {/* BODY */}
       <div style={{maxWidth:960,margin:"0 auto",padding:"20px 16px"}}>
-        {tab==="game"     && <TabGame     format={format} league={league} players={players} setPlayers={setPlayers} addPlayer={addPlayer} removePlayer={removePlayer} lineupsByQuarter={lineupsByQuarter} setLineupsByQuarter={setLineupsByQuarter}/>}
+        {tab==="game"     && <TabGame     format={format} league={league} onLeagueChange={handleLeagueChange} onFormatChange={handleFormatChange} players={players} setPlayers={setPlayers} addPlayer={addPlayer} removePlayer={removePlayer} lineupsByQuarter={lineupsByQuarter} setLineupsByQuarter={setLineupsByQuarter}/>}
         {tab==="season"   && <TabSeason   players={players} playerStats={playerStats} setPlayerStats={setPlayerStats} games={games} setGames={setGames} practiceDates={practiceDates} setPracticeDates={setPracticeDates} practiceAttendance={practiceAttendance} setPracticeAttendance={setPracticeAttendance}/>}
         {tab==="team"     && <TabTeam     players={players} updatePlayer={updatePlayer} league={league} games={games}/>}
         {tab==="rules"    && <TabRules    league={league} setLeague={setLeague} setFormat={setFormat}/>}
