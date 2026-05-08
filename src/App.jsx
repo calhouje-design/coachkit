@@ -1215,15 +1215,25 @@ function SoccerField({ lineup, onSwap, format, quarter }) {
             }}>
               {slot.player ? (
                 <>
-                  <div style={{fontSize:8,color:"#1a1a1a",lineHeight:1,fontWeight:700}}>{slot.player.number}</div>
-                  <div style={{fontSize:7,color:"#2a1a0a",lineHeight:1,maxWidth:34,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",fontWeight:600}}>
-                    {slot.player.name?.split(" ")[0]}
-                  </div>
-                  {rating > 0 && <div style={{fontSize:6,color:"#2a1a0a",lineHeight:1}}>{"".repeat(Math.round(rating))}</div>}
+                  <div style={{fontSize:9,color:"#1a1a1a",lineHeight:1,fontWeight:800}}>{slot.player.number}</div>
+                  <div style={{fontSize:8,color:"#2a1a0a",lineHeight:1.1,fontWeight:800,letterSpacing:"0.03em",marginTop:1}}>{pos}</div>
                 </>
               ) : <span style={{color:"rgba(255,255,255,0.4)",fontSize:10}}></span>}
             </div>
-            <div style={{fontSize:8,color:"#fff",fontWeight:700,textShadow:"0 1px 3px rgba(0,0,0,0.9)",marginTop:2,letterSpacing:"0.03em"}}>{pos}</div>
+            {slot.player && (
+              <div style={{marginTop:2, height:11, position:"relative"}}>
+                <div style={{
+                  position:"absolute", left:"50%", top:0,
+                  transform:"translateX(-50%)",
+                  fontSize:8, color:"#fff", fontWeight:700,
+                  textShadow:"0 1px 3px rgba(0,0,0,0.9), 0 0 4px rgba(0,0,0,0.6)",
+                  letterSpacing:"0.02em", whiteSpace:"nowrap", lineHeight:1.2,
+                  pointerEvents:"none",
+                }} title={slot.player.name}>
+                  {slot.player.name}
+                </div>
+              </div>
+            )}
           </div>
         );
       })}
@@ -1668,8 +1678,8 @@ function TabGame({ format, league, onLeagueChange, onFormatChange, players, setP
         <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginTop:10}}>
           <div style={{fontSize:11,fontWeight:700,
             color:homeScore>awayScore?C.ok:homeScore<awayScore?"#e74c3c":C.muted}}>
-            {homeScore>awayScore?" Winning":homeScore<awayScore?" Trailing":" Tied"}
-            {homeScore-awayScore>5 && <span style={{color:"#e67e22"}}>   Blowout Rule</span>}
+            {homeScore>awayScore?"Winning":homeScore<awayScore?"Trailing":"Tied"}
+            {homeScore-awayScore>5 && <span style={{color:"#e67e22",marginLeft:8}}>- Blowout Rule -</span>}
           </div>
           <div style={{display:"flex",gap:6}}>
             <button onClick={()=>{setHomeScore(0);setAwayScore(0);}} style={{
@@ -1834,7 +1844,7 @@ function TabGame({ format, league, onLeagueChange, onFormatChange, players, setP
           {/* PRIMARY ACTION */}
           <div style={{marginBottom:14}}>
             <Btn primary full onClick={() => planWholeGame(1)} style={{marginBottom:6,padding:"11px 18px",fontSize:13}}>
-               Plan Full Game (Q1Q4)
+              Plan Full Game (Q1-Q4)
             </Btn>
             <div style={{fontSize:10,color:C.muted,lineHeight:1.5,textAlign:"center"}}>
               Schedules all 4 quarters at once, guaranteeing every player gets {minQ} quarter{minQ!==1?"s":""} of play.
@@ -1844,7 +1854,7 @@ function TabGame({ format, league, onLeagueChange, onFormatChange, players, setP
           {/* Secondary: regen from current quarter */}
           {allPlanned && (
             <Btn full ghost onClick={() => planWholeGame(quarter)} style={{marginBottom:14,fontSize:11}}>
-               Replan Q{quarter}Q4 (keep Q1{quarter>1?`Q${quarter-1}`:""})
+              Replan Q{quarter}-Q4 {quarter>1?`(keep Q1-Q${quarter-1})`:"(keep Q1)"}
             </Btn>
           )}
 
@@ -3082,7 +3092,7 @@ function TabPractice({ drills, league }) {
           <Btn primary onClick={generate}> Generate</Btn>
         </div>
         <div>
-          <label style={lbl}>Skill Focus Tags (optional  refines drill selection)</label>
+          <label style={lbl}>Skill Focus Tags (optional - refines drill selection)</label>
           <div style={{display:"flex",flexWrap:"wrap",gap:4}}>
             {SKILL_TAGS.map(s=>(
               <FilterPill key={s} label={s} active={skills.includes(s)} onClick={()=>toggleSkill(s)}/>
@@ -3099,7 +3109,7 @@ function TabPractice({ drills, league }) {
           background:level==="Beginner"?`${C.ok}22`:level==="Intermediate"?`${C.gold}22`:`${C.warn}22`,
           color:level==="Beginner"?C.ok:level==="Intermediate"?C.gold:C.warn,
         }}>{level} Level</div>
-        {isYoung && <div style={{fontSize:11,color:C.muted}}> Fun-focused  Short activities  Simple instructions</div>}
+        {isYoung && <div style={{fontSize:11,color:C.muted}}>Fun-focused - Short activities - Simple instructions</div>}
       </div>
 
       {plan && (
@@ -3305,6 +3315,8 @@ function CoachKitApp() {
   const [format,          setFormat]          = useState("6v6");
   const [lineupsByQuarter,setLineupsByQuarter]= usePersistedState(pfx+"lineups", {});
 
+  const [teamName,           setTeamName]          = usePersistedState(pfx+"teamName",     "");
+  const [editingTeamName,    setEditingTeamName]   = useState(false);
   const [players,            setPlayers]            = usePersistedState(pfx+"players",      SAMPLE_PLAYERS);
   const [customDrills,       setCustomDrills]       = usePersistedState(pfx+"customDrills", []);
   const [playerStats,        setPlayerStats]        = usePersistedState(pfx+"playerStats",  (() => { const s={}; SAMPLE_PLAYERS.forEach(p=>{s[p.id]={goals:0,assists:0,gamesPlayed:0};}); return s; })());
@@ -3369,7 +3381,28 @@ function CoachKitApp() {
               </div>
               <div>
                 <div style={{fontSize:19,fontWeight:800,color:C.text,letterSpacing:"-0.01em"}}>CoachKit</div>
-                <div style={{fontSize:9,color:C.muted,letterSpacing:"0.1em",textTransform:"uppercase"}}>Youth Soccer Manager</div>
+                {editingTeamName ? (
+                  <input
+                    autoFocus value={teamName} onChange={e=>setTeamName(e.target.value)}
+                    onBlur={()=>setEditingTeamName(false)}
+                    onKeyDown={e=>{ if(e.key==="Enter"||e.key==="Escape") setEditingTeamName(false); }}
+                    placeholder="Team name"
+                    style={{...IS, fontSize:11, padding:"3px 7px", width:180, marginTop:2}}
+                  />
+                ) : (
+                  <div onClick={()=>setEditingTeamName(true)} title="Click to edit team name"
+                    style={{
+                      fontSize:11, color:teamName?C.gold:C.muted, fontWeight:teamName?700:400,
+                      letterSpacing:"0.08em", textTransform:"uppercase", marginTop:2,
+                      cursor:"pointer", padding:"2px 6px", marginLeft:-6,
+                      borderRadius:4, border:"1px dashed transparent",
+                      transition:"all 0.15s",
+                    }}
+                    onMouseEnter={e=>{e.currentTarget.style.borderColor="rgba(232,160,32,0.35)";}}
+                    onMouseLeave={e=>{e.currentTarget.style.borderColor="transparent";}}>
+                    {teamName || "+ Add Team Name"}
+                  </div>
+                )}
               </div>
             </div>
 
