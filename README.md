@@ -44,15 +44,21 @@ On the first signed-in load, if that team has no cloud rows yet and this browser
 
 Each coach gets a default team the first time they sign in with an empty membership list. The Team tab can add another coach by Clerk user id (`user_…`) or leave an email invite. Everyone on the team shares the roster, lineups, drills, season log, and practice attendance. The owner row cannot be removed in the app. If a person belongs to more than one team, the header switches teams and prefers the team that already has players.
 
-Live Game Day score is saved on this device only (`ck_{userId}_homeScore` / `awayScore` / `opponent`). It is not in the shared cloud record.
+Live Game Day score, the quarter clock, the minute bank, appearance credit, and the mid-quarter sub queue are saved on this device only. They are not in the shared cloud record.
+
+The contacts, schedule, and coach notes screen is the **Contacts** tab. Roster edits stay on Game Day.
 
 ## Fair play
 
 Planning is blocked when `active players × minimum quarters` is greater than `spots on the field × 4`. The minimum for SAY East 50% is 2 of 4 **quarters on the field**, not clock minutes. The green “planned” flash only appears when nobody is under that minimum.
 
-On the field, tap a player then tap another spot or a bench player to swap. Drag between field spots still works. A swap that changes who is on the field warns, and does not undo itself, if someone can no longer reach the quarter minimum.
+On the field, drag a player onto another spot or the bench to swap. That uses pointer events so it works with touch. Tap-select is still there when Plan sub is off. A swap that changes who is on the field warns, and does not undo itself, if someone can no longer reach the quarter minimum.
 
-**Scramble positions** reshuffles spots for the current quarter only. **Redraw who plays** builds a new on-field group for that quarter and leaves the other quarters alone. It refuses when the quarter cannot cover everyone who still needs it.
+**Plan sub** queues up to three upcoming swaps. Run now plays one. Cancel removes that one swap. Dragging still swaps immediately.
+
+The quarter clock counts up against the league period length and feeds a minute gap on the bench. Fair play itself stays quarter counts. Injury or a late scratch pulls that player from the current quarter forward, keeps minutes already played, and does not rebuild the other players’ plan. Plan Full Game from Q1 clears the clock, the minute bank, and the queue.
+
+**Scramble positions** reshuffles spots for the current quarter only. **Redraw who plays** builds a new on-field group for that quarter and leaves the other quarters alone. It refuses when the quarter cannot cover everyone who still needs it. Neither one is the sub queue.
 
 ## Checks
 
