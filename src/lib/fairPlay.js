@@ -1,0 +1,170 @@
+/** Quarter-based fair play helpers. Round One counts quarters on the field, not clock minutes. */
+
+export const TOTAL_PERIODS = 4;
+
+export function minQuarters(minFraction, periods = TOTAL_PERIODS) {
+  const frac = Number(minFraction);
+  if (!Number.isFinite(frac) || frac <= 0) return 0;
+  return Math.ceil(frac * periods);
+}
+
+/**
+ * Block planning when the roster cannot meet the quarter minimum.
+ * demand = active players × min quarters; supply = spots on the field × periods.
+ */
+export function feasibility({ activeCount, slotsPerPeriod, minQ, periods = TOTAL_PERIODS }) {
+  const demand = activeCount * minQ;
+  const supply = slotsPerPeriod * periods;
+  let reason = "";
+  if (activeCount <= 0) {
+    reason = "Add at least one active player before planning.";
+  } else if (slotsPerPeriod <= 0) {
+    reason = "Pick a format so the field has spots to fill.";
+  } else if (demand > supply) {
+    reason = `${activeCount} active players × ${minQ} quarters = ${demand} required appearances, but ${slotsPerPeriod} spots × ${periods} quarters = ${supply}. Sit players out or use a larger format. Fair play cannot be guaranteed.`;
+  }
+  return {
+    ok: reason === "",
+    demand,
+    supply,
+    activeCount,
+    slotsPerPeriod,
+    minQ,
+    periods,
+    reason,
+  };
+}
+
+export function computePlayTime(players, lineupsByQuarter, totalQuarters = TOTAL_PERIODS) {
+  const counts = {};
+  (players || []).forEach(p => { counts[p.id] = 0; });
+  for (let q = 1; q <= totalQuarters; q++) {
+    const lineup = lineupsByQuarter?.[q];
+    if (!lineup?.starters) continue;
+    lineup.starters.forEach(slot => {
+      if (slot?.player) counts[slot.player.id] = (counts[slot.player.id] || 0) + 1;
+    });
+  }
+  return counts;
+}
+
+/** Players under the minimum once every period has a lineup. */
+export function playersUnderMin(players, lineupsByQuarter, minQ, totalQuarters = TOTAL_PERIODS) {
+  if (minQ <= 0) return [];
+  const allPlanned = Array.from({ length: totalQuarters }, (_, i) => i + 1)
+    .every(q => lineupsByQuarter?.[q]);
+  if (!allPlanned) return [];
+  const counts = computePlayTime(players, lineupsByQuarter, totalQuarters);
+  return (players || []).filter(p =>
+    !p.injured && !p.out && !p.midGameInjury && (counts[p.id] || 0) < minQ
+  );
+}
+
+/**
+ * Players who cannot reach minQ even if they play every still-unplanned quarter.
+ * Used to warn after a manual sub. Does not block the edit.
+ */
+export function playersWhoCannotReachMin(players, lineupsByQuarter, minQ, totalQuarters = TOTAL_PERIODS) {
+  if (minQ <= 0) return [];
+  const counts = computePlayTime(players, lineupsByQuarter, totalQuarters);
+  const unplanned = Array.from({ length: totalQuarters }, (_, i) => i + 1)
+    .filter(q => !lineupsByQuarter?.[q]).length;
+  return (players || []).filter(p =>
+    !p.injured && !p.out && !p.midGameInjury && (counts[p.id] || 0) + unplanned < minQ
+  );
+}
+
+function shuffle(arr) {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+/** Assign the same players onto the existing formation slots. */
+export function assignPositions(players, slotPositions) {
+  const pool = [...players];
+  const chosenPos = {};
+  for (const p of pool) {
+    const allowed = p.positions && p.positions.length > 0 ? p.positions : ["CM"];
+    chosenPos[p.id] = allowed[Math.floor(Math.random() * allowed.length)];
+  }
+  const shuffled = shuffle(pool);
+  const assigned = new Set();
+  return slotPositions.map(slotPos => {
+    let pick = shuffled.find(p => !assigned.has(p.id) && chosenPos[p.id] === slotPos);
+    if (!pick) pick = shuffled.find(p => !assigned.has(p.id) && (p.positions || []).includes(slotPos));
+    if (!pick) pick = shuffled.find(p => !assigned.has(p.id));
+    if (pick) assigned.add(pick.id);
+    return { pos: slotPos, player: pick || null };
+  });
+}
+
+/** Mode A: same kids on the field, new positions. Other quarters are untouched. */
+export function scrambleQuarterPositions(lineup) {
+  if (!lineup?.starters?.length) return lineup;
+  const slotPositions = lineup.starters.map(s => s.pos);
+  const onField = lineup.starters.map(s => s.player).filter(Boolean);
+  return {
+    starters: assignPositions(onField, slotPositions),
+    bench: [...(lineup.bench || [])],
+  };
+}
+
+function sameIdSet(a, b) {
+  if (a.size !== b.size) return false;
+  for (const id of a) if (!b.has(id)) return false;
+  return true;
+}
+
+/**
+ * Mode B: redraw who plays ONE quarter. Other quarters stay locked.
+ * Refuses when the only legal on-field sets would drop someone under minQ.
+ */
+export function redrawQuarterMembership(players, lineupsByQuarter, quarter, minQ, totalQuarters = TOTAL_PERIODS) {
+  const lineup = lineupsByQuarter?.[quarter];
+  if (!lineup?.starters?.length) {
+    return { ok: false, reason: `Plan Q${quarter} before redrawing it.` };
+  }
+  const active = (players || []).filter(p => !p.injured && !p.out);
+  const playedOther = {};
+  active.forEach(p => { playedOther[p.id] = 0; });
+  for (let q = 1; q <= totalQuarters; q++) {
+    if (q === quarter) continue;
+    const starters = lineupsByQuarter?.[q]?.starters || [];
+    starters.forEach(s => {
+      if (s.player && playedOther[s.player.id] !== undefined) playedOther[s.player.id]++;
+    });
+  }
+  const unplannedOther = Array.from({ length: totalQuarters }, (_, i) => i + 1)
+    .filter(q => q !== quarter && !lineupsByQuarter?.[q]).length;
+  const mustStart = active.filter(p => (playedOther[p.id] || 0) + unplannedOther < minQ);
+  const slots = lineup.starters.map(s => s.pos);
+  if (mustStart.length > slots.length) {
+    return {
+      ok: false,
+      reason: `Q${quarter} has ${slots.length} spots, but ${mustStart.length} players must play this quarter to stay at ${minQ} quarters on the field. Plan the full game instead.`,
+    };
+  }
+  const rest = active.filter(p => !mustStart.some(m => m.id === p.id));
+  const currentIds = new Set(lineup.starters.map(s => s.player?.id).filter(Boolean));
+  const need = Math.max(0, Math.min(slots.length, active.length) - mustStart.length);
+  const canChange = rest.length > need;
+  let chosen = [...mustStart];
+  const attempts = canChange ? 10 : 1;
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    const fill = shuffle(rest).slice(0, need);
+    const group = [...mustStart, ...fill];
+    chosen = group;
+    const ids = new Set(group.map(p => p.id));
+    if (!sameIdSet(ids, currentIds)) break;
+  }
+  const starterIds = new Set(chosen.map(p => p.id));
+  const bench = active.filter(p => !starterIds.has(p.id));
+  return {
+    ok: true,
+    lineup: { starters: assignPositions(chosen, slots), bench },
+  };
+}

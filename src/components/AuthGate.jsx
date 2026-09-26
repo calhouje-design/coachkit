@@ -74,7 +74,7 @@ export default function AuthGate({ children }) {
       <div style={{width:'100%',maxWidth:420}}>
         {mode==='signin'?<SignIn routing="hash" appearance={appearance} localization={localization}/>:<SignUp routing="hash" appearance={appearance} localization={localization}/>}
       </div>
-      <div style={{marginTop:22,fontSize:12,color:C.muted,textAlign:'center'}}>Your data stays on this device. No subscription required.</div>
+      <div style={{marginTop:22,fontSize:12,color:C.muted,textAlign:'center',maxWidth:420,lineHeight:1.5}}>Sign in to keep the roster with your team. Other coaches can share the same players. No subscription required.</div>
     </div>
   )
 }
