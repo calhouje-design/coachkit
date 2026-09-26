@@ -130,3 +130,121 @@ export function addLateArrival(lineup, player) {
   if ((lineup.bench || []).some(existing => existing.id === player.id)) return lineup;
   return { ...lineup, bench: [...(lineup.bench || []), player] };
 }
+
+/** A quarter counts once if the player is in that lineup or already credited for leaving it. */
+export function countedQuarters(lineupQuarters, creditedQuarters) {
+  return new Set([...(lineupQuarters || []), ...(creditedQuarters || [])]).size;
+}
+
+/**
+ * Credit a quarter while the player is off the sheet, and drop that credit
+ * once they are in the lineup again so the same quarter is not counted twice.
+ */
+export function setAppearanceCreditFor(credit, playerId, quarter, countWhileOff) {
+  const base = { ...(credit || {}) };
+  const list = Array.isArray(base[playerId]) ? [...base[playerId]] : [];
+  const has = list.includes(quarter);
+  if (countWhileOff && !has) return { ...base, [playerId]: [...list, quarter] };
+  if (!countWhileOff && has) {
+    const nextList = list.filter(q => q !== quarter);
+    if (nextList.length) return { ...base, [playerId]: nextList };
+    delete base[playerId];
+    return base;
+  }
+  return credit || {};
+}
+
+/** Visual mark only. "entered" came on mid-quarter. "left" started and came off. */
+export function noteSubSegment(segments, playerId, quarter, kind) {
+  if (!playerId || !quarter || !kind) return segments || {};
+  return {
+    ...(segments || {}),
+    [playerId]: { ...(segments?.[playerId] || {}), [quarter]: kind },
+  };
+}
+
+export function clearSubSegmentsFrom(segments, fromQuarter) {
+  const next = {};
+  Object.entries(segments || {}).forEach(([playerId, row]) => {
+    const kept = {};
+    Object.entries(row || {}).forEach(([quarter, kind]) => {
+      if (Number(quarter) < fromQuarter) kept[quarter] = kind;
+    });
+    if (Object.keys(kept).length) next[playerId] = kept;
+  });
+  return next;
+}
+
+/**
+ * Chart cell. Fair-play still counts the quarter; this only separates a full
+ * stint from a mid-quarter sub.
+ */
+export function playCellKind({ onField, segment }) {
+  if (onField && (segment === "entered" || segment === "left")) return "partial-on";
+  if (onField) return "full";
+  if (segment === "left" || segment === "entered") return "partial-off";
+  return "bench";
+}
+
+function byMinutesThenName(minutesById, direction) {
+  return (a, b) => {
+    const diff = ((minutesById?.[a.id] || 0) - (minutesById?.[b.id] || 0)) * direction;
+    if (diff !== 0) return diff;
+    return String(a.name || "").localeCompare(String(b.name || ""));
+  };
+}
+
+/**
+ * Pair every current bench player with the field player they replace.
+ * Prefer the next quarter's plan. Anyone the plan does not cover still comes
+ * on, for the field player with the most minutes. Does not change the lineup.
+ */
+export function planBenchRotation(lineup, { minutesById = {}, nextLineup = null } = {}) {
+  const bench = [...(lineup?.bench || [])].filter(Boolean);
+  const field = (lineup?.starters || [])
+    .map(slot => slot?.player)
+    .filter(Boolean);
+  if (!bench.length || !field.length) return [];
+
+  const nextOn = new Set((nextLineup?.starters || []).map(slot => slot.player?.id).filter(Boolean));
+  const nextBench = new Set((nextLineup?.bench || []).map(player => player.id));
+  const pairs = [];
+  const usedIn = new Set();
+  const usedOut = new Set();
+
+  if (nextOn.size) {
+    const plannedIn = bench.filter(player => nextOn.has(player.id)).sort(byMinutesThenName(minutesById, 1));
+    const plannedOut = field.filter(player => nextBench.has(player.id)).sort(byMinutesThenName(minutesById, -1));
+    const count = Math.min(plannedIn.length, plannedOut.length);
+    for (let i = 0; i < count; i++) {
+      pairs.push({ inId: plannedIn[i].id, outId: plannedOut[i].id, fromPlan: true });
+      usedIn.add(plannedIn[i].id);
+      usedOut.add(plannedOut[i].id);
+    }
+  }
+
+  const restIn = bench.filter(player => !usedIn.has(player.id)).sort(byMinutesThenName(minutesById, 1));
+  const restOut = field.filter(player => !usedOut.has(player.id)).sort(byMinutesThenName(minutesById, -1));
+  const count = Math.min(restIn.length, restOut.length);
+  for (let i = 0; i < count; i++) {
+    pairs.push({ inId: restIn[i].id, outId: restOut[i].id, fromPlan: false });
+  }
+  return pairs;
+}
+
+/** Apply planned pairs on this quarter only. Slot positions stay put. */
+export function applyBenchRotation(lineup, pairs) {
+  if (!lineup?.starters) return lineup;
+  let starters = lineup.starters.map(slot => ({ ...slot }));
+  let bench = [...(lineup.bench || [])];
+  (pairs || []).forEach(pair => {
+    const idx = starters.findIndex(slot => slot.player?.id === pair.outId);
+    const bIdx = bench.findIndex(player => player.id === pair.inId);
+    if (idx < 0 || bIdx < 0) return;
+    const outgoing = starters[idx].player;
+    const incoming = bench[bIdx];
+    starters = starters.map((slot, i) => (i === idx ? { ...slot, player: incoming } : slot));
+    bench = bench.map((player, i) => (i === bIdx ? outgoing : player));
+  });
+  return { starters, bench };
+}

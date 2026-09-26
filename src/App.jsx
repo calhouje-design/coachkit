@@ -5,12 +5,10 @@ import UserMenu from "./components/UserMenu.jsx";
 import {
   minQuarters,
   feasibility,
-  computePlayTime,
   scrambleQuarterPositions,
   redrawQuarterMembership,
 } from "./lib/fairPlay.js";
 import {
-  effectiveQuarters,
   addMinutes,
   earnedMinutes,
   minuteGap,
@@ -21,6 +19,13 @@ import {
   resolveDragDrop,
   pullFromPlan,
   addLateArrival,
+  countedQuarters,
+  setAppearanceCreditFor,
+  noteSubSegment,
+  clearSubSegmentsFrom,
+  playCellKind,
+  planBenchRotation,
+  applyBenchRotation,
 } from "./lib/gameDay.js";
 import { useTeamCloud } from "./lib/teamCloud.js";
 
@@ -1044,15 +1049,25 @@ const SS = { ...IS, cursor: "pointer", background: "#141a12", color: C.text };
 // Inline style for <option> elements so dropdown popup text is readable
 const OPT = { background: "#141a12", color: "#e8e4dc" };
 
-function Btn({ children, onClick, sm, danger, warn, primary, ghost, disabled, full, style:sx }) {
-  const bg = danger ? C.danger : warn ? C.warn : primary ? `linear-gradient(135deg,${C.gold},${C.goldDark})` : ghost ? "transparent" : "rgba(255,255,255,0.1)";
+function Btn({ children, onClick, sm, danger, warn, primary, secondary, ghost, disabled, full, style:sx }) {
+  const bg = danger ? C.danger
+    : warn ? C.warn
+    : primary ? `linear-gradient(135deg,${C.gold},${C.goldDark})`
+    : secondary ? "rgba(255,255,255,0.03)"
+    : ghost ? "transparent"
+    : "rgba(255,255,255,0.1)";
   const col = primary ? "#0a0d0f" : C.text;
+  const border = secondary
+    ? "1px solid rgba(255,255,255,0.22)"
+    : ghost ? `1px solid ${C.border}` : "none";
   return (
     <button onClick={onClick} disabled={disabled} style={{
-      padding: sm ? "5px 11px" : "9px 18px",
-      borderRadius: 7, border: ghost ? `1px solid ${C.border}` : "none",
+      padding: sm ? "8px 12px" : "11px 16px",
+      minHeight: sm ? 36 : 44,
+      borderRadius: 8, border,
       cursor: disabled ? "not-allowed" : "pointer",
-      fontWeight: 600, fontSize: sm ? 11 : 13,
+      fontWeight: primary ? 800 : 600,
+      fontSize: sm ? 12 : 13,
       fontFamily: "inherit",
       background: bg, color: col,
       opacity: disabled ? 0.45 : 1,
@@ -1533,7 +1548,9 @@ function TabGame({ format, league, onLeagueChange, onFormatChange, players, setP
   const [opponent,  setOpponent]  = usePersistedState(storagePrefix+"opponent", "");
   const [minuteBank, setMinuteBank] = usePersistedState(storagePrefix+"minuteBank", {});
   const [appearanceCredit, setAppearanceCredit] = usePersistedState(storagePrefix+"appearanceCredit", {});
+  const [subSegments, setSubSegments] = usePersistedState(storagePrefix+"subSegments", {});
   const [subQueue, setSubQueue] = usePersistedState(storagePrefix+"subQueue", []);
+  const [chartFocusId, setChartFocusId] = useState(null);
   const [clockSec, setClockSec] = usePersistedState(storagePrefix+"clockSec", 0);
   const [editOpp,   setEditOpp]   = useState(false);
   const clockRef = useRef(0);
@@ -1560,7 +1577,6 @@ function TabGame({ format, league, onLeagueChange, onFormatChange, players, setP
   const rule   = PLAY_TIME_RULES[league] || { minFraction: 0, note: "" };
   const minQ   = minQuarters(rule.minFraction, totalQuarters);
 
-  const playCounts     = computePlayTime(players, lineupsByQuarter, totalQuarters);
   const currentLineup  = lineupsByQuarter[quarter] || null;
   const active         = players.filter(p => !p.injured && !p.out);
   const needed         = (POSITIONS_BY_FORMAT[format] || []).length;
@@ -1570,8 +1586,15 @@ function TabGame({ format, league, onLeagueChange, onFormatChange, players, setP
 
   const periodMin = (LEAGUE_RULES[league] || {}).periodMin || 10;
   const targetMin = (rule.minFraction || 0) * totalQuarters * periodMin;
-  const quartersOf = (id, counts = playCounts, credit = appearanceCredit) =>
-    effectiveQuarters(counts?.[id], credit?.[id]);
+  const lineupQuartersOf = (id, lineups = lineupsByQuarter) => {
+    const found = [];
+    for (let q = 1; q <= totalQuarters; q++) {
+      if (lineups?.[q]?.starters?.some(slot => slot.player?.id === id)) found.push(q);
+    }
+    return found;
+  };
+  const quartersOf = (id, lineups = lineupsByQuarter, credit = appearanceCredit) =>
+    countedQuarters(lineupQuartersOf(id, lineups), credit?.[id]);
 
   const violations = allPlanned && minQ > 0
     ? players.filter(p => !p.injured && !p.out && !p.midGameInjury && quartersOf(p.id) < minQ)
@@ -1644,13 +1667,16 @@ function TabGame({ format, league, onLeagueChange, onFormatChange, players, setP
     return () => window.removeEventListener("pagehide", onLeave);
   }, []);
 
-  const notePlanResult = (nextLineups, roster = players) => {
+  const notePlanResult = (nextLineups, roster = players, credit = appearanceCredit) => {
     setLineupsByQuarter(nextLineups);
     setFairWarn(null);
     setScrambleNote(null);
     setSwapSel(null);
-    const counts = computePlayTime(roster, nextLineups, totalQuarters);
-    const viol = roster.filter(p => !p.injured && !p.out && !p.midGameInjury && minQ > 0 && quartersOf(p.id, counts) < minQ);
+    const quarters = (id) => countedQuarters(
+      [1, 2, 3, 4].filter(q => nextLineups?.[q]?.starters?.some(slot => slot.player?.id === id)),
+      credit?.[id]
+    );
+    const viol = roster.filter(p => !p.injured && !p.out && !p.midGameInjury && minQ > 0 && quarters(p.id) < minQ);
     const complete = [1,2,3,4].every(q => nextLineups?.[q]);
     if (viol.length === 0 && complete) {
       setJustRegenned(true);
@@ -1660,11 +1686,14 @@ function TabGame({ format, league, onLeagueChange, onFormatChange, players, setP
     }
   };
 
-  const warnIfShort = (nextLineups, roster = players) => {
-    const counts = computePlayTime(roster, nextLineups, totalQuarters);
+  const warnIfShort = (nextLineups, roster = players, credit = appearanceCredit) => {
     const unplanned = [1,2,3,4].filter(q => !nextLineups?.[q]).length;
+    const quarters = (id) => countedQuarters(
+      [1, 2, 3, 4].filter(q => nextLineups?.[q]?.starters?.some(slot => slot.player?.id === id)),
+      credit?.[id]
+    );
     const short = roster.filter(p =>
-      !p.injured && !p.out && !p.midGameInjury && quartersOf(p.id, counts) + unplanned < minQ
+      !p.injured && !p.out && !p.midGameInjury && quarters(p.id) + unplanned < minQ
     );
     if (short.length) {
       setFairWarn(`${short.map(p => p.name.split(" ")[0]).join(", ")} would finish under ${minQ} of ${totalQuarters} quarters on the field. Other quarters were not changed.`);
@@ -1677,6 +1706,7 @@ function TabGame({ format, league, onLeagueChange, onFormatChange, players, setP
     writeBank({});
     setMinuteBank({});
     setAppearanceCredit({});
+    setSubSegments({});
     setSubQueue([]);
     setRunning(false);
     clockRef.current = 0;
@@ -1695,7 +1725,10 @@ function TabGame({ format, league, onLeagueChange, onFormatChange, players, setP
       return;
     }
     if (fromQ === 1) resetLiveTracking();
-    else if (fromQ === quarter) commitOnFieldMinutes();
+    else {
+      if (fromQ === quarter) commitOnFieldMinutes();
+      setSubSegments(prev => clearSubSegmentsFrom(prev, fromQ));
+    }
     const locked = {};
     if (fromQ > 1) {
       for (let q = 1; q < fromQ; q++) {
@@ -1703,7 +1736,7 @@ function TabGame({ format, league, onLeagueChange, onFormatChange, players, setP
       }
     }
     const result = scheduleWholeGame(players, format, league, locked, fromQ);
-    notePlanResult(result);
+    notePlanResult(result, players, fromQ === 1 ? {} : appearanceCredit);
     if (fromQ !== 1 && fromQ === quarter && running) {
       const next = {};
       (result[quarter]?.starters || []).forEach(slot => {
@@ -1724,13 +1757,11 @@ function TabGame({ format, league, onLeagueChange, onFormatChange, players, setP
     if (!player) return;
     const currentL = lineupsByQuarter[quarter];
     const wasOn = !!currentL?.starters?.some(slot => slot.player?.id === playerId);
+    const live = running || (clockRef.current || 0) > 0;
     if (wasOn) {
       bankLeave(playerId);
-      setAppearanceCredit(prev => {
-        const list = prev?.[playerId] || [];
-        if (list.includes(quarter)) return prev;
-        return { ...(prev || {}), [playerId]: [...list, quarter] };
-      });
+      setAppearanceCredit(prev => setAppearanceCreditFor(prev, playerId, quarter, true));
+      if (live) setSubSegments(prev => noteSubSegment(prev, playerId, quarter, "left"));
     }
     const updatedPlayers = players.map(p => {
       if (p.id !== playerId) return p;
@@ -1744,7 +1775,13 @@ function TabGame({ format, league, onLeagueChange, onFormatChange, players, setP
     const before = new Set((currentL.starters || []).map(slot => slot.player?.id).filter(Boolean));
     const next = pullFromPlan(lineupsByQuarter, playerId, quarter, totalQuarters);
     const incoming = (next[quarter]?.starters || []).map(slot => slot.player?.id).find(id => id && !before.has(id));
-    if (incoming) beginStint(incoming);
+    if (incoming) {
+      beginStint(incoming);
+      if (live) {
+        setAppearanceCredit(prev => setAppearanceCreditFor(prev, incoming, quarter, false));
+        setSubSegments(prev => noteSubSegment(prev, incoming, quarter, "entered"));
+      }
+    }
     setLineupsByQuarter(next);
     setSwapSel(null);
     setFairWarn(null);
@@ -1790,15 +1827,26 @@ function TabGame({ format, league, onLeagueChange, onFormatChange, players, setP
     starters[fieldIdx] = { ...starters[fieldIdx], player: incoming };
     if (outgoing) bench[bIdx] = outgoing;
     else bench.splice(bIdx, 1);
+    let credit = appearanceCredit;
     if (doBank) {
       if (outgoing) bankLeave(outgoing.id);
       beginStint(incoming.id);
+      const live = running || (clockRef.current || 0) > 0;
+      if (live) {
+        if (outgoing) {
+          credit = setAppearanceCreditFor(credit, outgoing.id, qKey, true);
+          setSubSegments(prev => noteSubSegment(prev, outgoing.id, qKey, "left"));
+        }
+        credit = setAppearanceCreditFor(credit, incoming.id, qKey, false);
+        setSubSegments(prev => noteSubSegment(prev, incoming.id, qKey, "entered"));
+        setAppearanceCredit(credit);
+      }
     }
     const nextLineup = { starters, bench };
     const nextAll = { ...lineupsByQuarter, [qKey]: nextLineup };
     setLineupsByQuarter(nextAll);
     setSwapSel(null);
-    warnIfShort(nextAll);
+    warnIfShort(nextAll, players, credit);
     return true;
   };
 
@@ -1981,13 +2029,73 @@ function TabGame({ format, league, onLeagueChange, onFormatChange, players, setP
     });
     setRunning(true);
   };
-  const queueWhosNext = (benchPlayer) => {
+  const longestOnField = () => {
     const on = (currentLineup?.starters || []).map(slot => slot.player).filter(Boolean);
-    if (!on.length) { setQueueNote("Nobody is on the field."); return; }
-    const leaving = [...on].sort((a, b) => (minutesById[b.id] || 0) - (minutesById[a.id] || 0))[0];
-    queueSwap(leaving.id, benchPlayer.id);
+    if (!on.length) return null;
+    return [...on].sort((a, b) => (minutesById[b.id] || 0) - (minutesById[a.id] || 0) || String(a.name || "").localeCompare(String(b.name || "")))[0];
+  };
+  const queueWhosNext = (benchPlayer) => {
+    const planned = planBenchRotation(currentLineup, {
+      minutesById,
+      nextLineup: quarter < totalQuarters ? lineupsByQuarter[quarter + 1] : null,
+    }).find(pair => pair.inId === benchPlayer.id);
+    const leavingId = planned?.outId || longestOnField()?.id;
+    if (!leavingId) { setQueueNote("Nobody is on the field."); return; }
+    queueSwap(leavingId, benchPlayer.id);
   };
   const playerName = (id) => players.find(p => p.id === id)?.name || "Player";
+  const plannedNext = quarter < totalQuarters ? lineupsByQuarter[quarter + 1] : null;
+  const benchPairs = currentLineup
+    ? planBenchRotation(currentLineup, { minutesById, nextLineup: plannedNext })
+    : [];
+  const bringBenchOn = () => {
+    if (!currentLineup || benchPairs.length === 0) {
+      setQueueNote("Nobody is waiting on the bench.");
+      return;
+    }
+    const live = running || (clockRef.current || 0) > 0;
+    const rotated = applyBenchRotation(currentLineup, benchPairs);
+    let credit = appearanceCredit || {};
+    if (live) {
+      let segments = subSegments || {};
+      benchPairs.forEach(pair => {
+        bankLeave(pair.outId);
+        credit = setAppearanceCreditFor(credit, pair.outId, quarter, true);
+        credit = setAppearanceCreditFor(credit, pair.inId, quarter, false);
+        segments = noteSubSegment(segments, pair.outId, quarter, "left");
+        segments = noteSubSegment(segments, pair.inId, quarter, "entered");
+      });
+      setAppearanceCredit(credit);
+      setSubSegments(segments);
+      benchPairs.forEach(pair => beginStint(pair.inId));
+    }
+    const nextAll = { ...lineupsByQuarter, [quarter]: rotated };
+    setLineupsByQuarter(nextAll);
+    const involved = new Set(benchPairs.flatMap(pair => [pair.inId, pair.outId]));
+    setSubQueue(prev => (prev || []).filter(row => row.quarter !== quarter || (!involved.has(row.inId) && !involved.has(row.outId))));
+    setSwapSel(null);
+    warnIfShort(nextAll, players, live ? credit : appearanceCredit);
+    const named = benchPairs.map(pair => `${playerName(pair.inId)} on for ${playerName(pair.outId)}`).join(", ");
+    setQueueNote(`Bench is on: ${named}. Minutes already played stay. Other quarters stay.`);
+  };
+  const cellKind = (playerId, q, status) => {
+    if (status === "unplanned") return "unplanned";
+    return playCellKind({ onField: status === "on", segment: subSegments?.[playerId]?.[q] || null });
+  };
+  const quarterStory = (playerId) => {
+    const bits = [1, 2, 3, 4].map(q => {
+      const lineup = lineupsByQuarter[q];
+      if (!lineup) return null;
+      const on = lineup.starters.some(slot => slot.player?.id === playerId);
+      const kind = playCellKind({ onField: on, segment: subSegments?.[playerId]?.[q] || null });
+      if (kind === "full") return `Q${q} full quarter`;
+      if (kind === "partial-on") return `Q${q} came on mid-quarter`;
+      if (kind === "partial-off") return `Q${q} played, then off`;
+      return null;
+    }).filter(Boolean);
+    if (!bits.length) return "Still on the bench. A box turns green once they are on the field. The count is still quarters, not minutes.";
+    return `${bits.join(". ")}. Each of those still counts as one quarter on the field.`;
+  };
 
   // Build rotation grid: rows = players, cols = Q1Q4
   const allTrackedPlayers = [...active, ...midGameInjured];
@@ -2234,10 +2342,10 @@ function TabGame({ format, league, onLeagueChange, onFormatChange, players, setP
               };
               return (
                 <div>
-                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10,gap:8}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:10,gap:8}}>
                     <div style={{fontSize:11,color:C.muted,fontWeight:700,textTransform:"uppercase",letterSpacing:"0.05em"}}>Strategy</div>
-                    <div style={{fontSize:20,fontWeight:900,color:C.gold,letterSpacing:"0.02em"}}>
-                      {active ? active.name : "  "}
+                    <div style={{fontSize:15,fontWeight:800,color:C.text,letterSpacing:"0.02em"}}>
+                      {active ? active.name : ""}
                     </div>
                   </div>
                   <select value={activeFormation} onChange={e=>setActiveFormation(e.target.value)}
@@ -2251,51 +2359,51 @@ function TabGame({ format, league, onLeagueChange, onFormatChange, players, setP
                       {active.desc}
                     </div>
                   )}
-                  <Btn primary full onClick={handleApply}>Apply to Q{quarter}</Btn>
+                  <Btn secondary full onClick={handleApply}>Apply shape to Q{quarter}</Btn>
                 </div>
               );
             })()}
           </Card>
 
-          {/* Quarter tabs */}
-          <label style={lbl}>Viewing Quarter</label>
-          <div style={{display:"flex",gap:5,marginBottom:14}}>
-            {[1,2,3,4].map(q => {
-              const hasLineup = !!lineupsByQuarter[q];
-              const hasInjury = midGameInjured.some(p => p.injuredInQuarter === q);
-              return (
-                <button key={q} onClick={() => setQuarter(q)} style={{
-                  flex:1, padding:"7px 0", borderRadius:7, border:"none", cursor:"pointer",
-                  fontWeight:700, fontSize:13, fontFamily:"inherit",
-                  background: quarter===q ? `linear-gradient(135deg,${C.gold},${C.goldDark})` : C.surface,
-                  color: quarter===q ? "#0a0d0f" : C.text,
-                  boxShadow: hasLineup ? `0 0 0 1px ${hasInjury?"#e74c3c55":C.gold+"44"}` : "none",
-                }}>
-                  Q{q}
-                  <span style={{display:"block",fontSize:8,lineHeight:1.2,opacity:0.75,marginTop:1}}>
-                    {hasLineup ? (hasInjury ? "" : "") : ""}
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-
-          {/* PRIMARY ACTION */}
-          <div style={{marginBottom:14}}>
-            <Btn primary full disabled={!gate.ok} onClick={() => planWholeGame(1)} style={{marginBottom:6,padding:"11px 18px",fontSize:13}}>
-              Plan Full Game (Q1-Q4)
-            </Btn>
-            <div style={{fontSize:10,color:C.muted,lineHeight:1.5,textAlign:"center"}}>
-              Plans all 4 quarters. Target is {minQ} of {totalQuarters} quarters on the field per eligible player — quarter counts, not clock minutes.
+          <Card style={{marginBottom:14}}>
+            <div style={{fontSize:11,color:C.muted,fontWeight:700,textTransform:"uppercase",letterSpacing:"0.05em",marginBottom:8}}>Plan</div>
+            <div style={{fontSize:10,color:C.muted,fontWeight:700,letterSpacing:"0.04em",textTransform:"uppercase",marginBottom:6}}>Viewing quarter</div>
+            <div style={{display:"flex",marginBottom:12,border:`1px solid ${C.border}`,borderRadius:10,overflow:"hidden",background:"rgba(255,255,255,0.02)"}}>
+              {[1,2,3,4].map(q => {
+                const hasLineup = !!lineupsByQuarter[q];
+                const hasInjury = midGameInjured.some(p => p.injuredInQuarter === q);
+                const selected = quarter === q;
+                return (
+                  <button key={q} onClick={() => setQuarter(q)} style={{
+                    flex:1, minHeight:44, border:"none", cursor:"pointer",
+                    borderRight: q < 4 ? `1px solid ${C.border}` : "none",
+                    fontWeight:800, fontSize:14, fontFamily:"inherit",
+                    background: selected ? "rgba(232,160,32,0.16)" : "transparent",
+                    color: selected ? C.gold : C.text,
+                    boxShadow: selected ? "inset 0 -2px 0 #e8a020" : "none",
+                  }}>
+                    Q{q}
+                    {hasLineup && (
+                      <span style={{display:"block",fontSize:8,lineHeight:1,marginTop:2,color:hasInjury?"#e74c3c":C.muted}}>
+                        {hasInjury ? "inj" : "set"}
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
             </div>
-          </div>
-
-          {/* Secondary: regen from current quarter */}
-          {allPlanned && (
-            <Btn full ghost disabled={!gate.ok} onClick={() => planWholeGame(quarter)} style={{marginBottom:14,fontSize:11}}>
-              Replan Q{quarter}-Q4 {quarter>1?`(keep Q1-Q${quarter-1})`:"(keep Q1)"}
+            <Btn primary full disabled={!gate.ok} onClick={() => planWholeGame(1)} style={{marginBottom:8}}>
+              Plan full game
             </Btn>
-          )}
+            <div style={{fontSize:11,color:C.muted,lineHeight:1.45,marginBottom:allPlanned?10:0}}>
+              Fills Q1–Q4. Target is {minQ} of {totalQuarters} quarters on the field per eligible player. Quarter counts, not clock minutes.
+            </div>
+            {allPlanned && (
+              <Btn secondary full disabled={!gate.ok} onClick={() => planWholeGame(quarter)}>
+                Replan Q{quarter}–Q4{quarter>1?` · keep Q1–Q${quarter-1}`:""}
+              </Btn>
+            )}
+          </Card>
 
           {/* Play-time tracker + roster manager */}
           <Card style={{marginBottom:12}}>
@@ -2308,28 +2416,42 @@ function TabGame({ format, league, onLeagueChange, onFormatChange, players, setP
                 : <div style={{fontSize:9,color:C.muted}}>not fully planned</div>
               }
             </div>
-            <div style={{fontSize:10,color:C.muted,lineHeight:1.4,marginBottom:8}}>
-              Each box is a quarter on the field, not minutes. Minimum is {minQ} of {totalQuarters}.
+            <div style={{fontSize:11,color:C.muted,lineHeight:1.45,marginBottom:8}}>
+              Solid green is a full quarter on the field. A split box is a mid-quarter sub. Gray is the bench. Minimum is still {minQ} of {totalQuarters} quarters, not minutes.
+            </div>
+            <div style={{display:"flex",gap:10,marginBottom:10,flexWrap:"wrap"}}>
+              {[
+                ["Full", "#2ecc71", "#0a0d0f"],
+                ["Partial", "linear-gradient(90deg, rgba(255,255,255,0.16) 0 46%, #2ecc71 46% 100%)", "#fff"],
+                ["Bench", "rgba(255,255,255,0.12)", C.muted],
+              ].map(([label, background, color]) => (
+                <span key={label} style={{display:"inline-flex",alignItems:"center",gap:5,fontSize:10,color:C.muted,fontWeight:700}}>
+                  <span style={{width:22,height:12,borderRadius:3,background,color,display:"inline-block"}}/>
+                  {label}
+                </span>
+              ))}
             </div>
 
             {/* Sort + add roster controls */}
-            <div style={{display:"flex",gap:4,alignItems:"center",marginBottom:8,flexWrap:"wrap"}}>
-              <span style={{fontSize:9,color:C.muted,fontWeight:700,textTransform:"uppercase",letterSpacing:"0.05em",marginRight:2}}>Sort</span>
-              {[["name","A-Z"],["rating","Rating"],["position","Pos"]].map(([k,label])=>(
-                <button key={k} onClick={()=>setRosterSort(k)} style={{
-                  padding:"2px 8px",borderRadius:4,border:"none",cursor:"pointer",
-                  fontSize:9,fontWeight:700,fontFamily:"inherit",letterSpacing:"0.04em",
-                  background:rosterSort===k?C.gold:"rgba(255,255,255,0.06)",
-                  color:rosterSort===k?"#0a0d0f":C.muted,textTransform:"uppercase",
-                }}>{label}</button>
-              ))}
+            <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:10,flexWrap:"wrap"}}>
+              <div style={{display:"flex",border:`1px solid ${C.border}`,borderRadius:8,overflow:"hidden"}}>
+                {[["name","A-Z"],["rating","Rating"],["position","Pos"]].map(([k,label], idx)=>(
+                  <button key={k} onClick={()=>setRosterSort(k)} style={{
+                    minHeight:36, padding:"0 10px", border:"none", cursor:"pointer",
+                    borderRight: idx<2 ? `1px solid ${C.border}` : "none",
+                    fontSize:11, fontWeight:700, fontFamily:"inherit",
+                    background: rosterSort===k ? "rgba(232,160,32,0.16)" : "transparent",
+                    color: rosterSort===k ? C.gold : C.muted,
+                  }}>{label}</button>
+                ))}
+              </div>
               <button onClick={()=>setShowAddPlayer(s=>!s)} style={{
-                marginLeft:"auto",padding:"2px 8px",borderRadius:4,
-                border:`1px solid ${C.border}`,cursor:"pointer",
-                fontSize:9,fontWeight:800,fontFamily:"inherit",letterSpacing:"0.04em",
-                background:showAddPlayer?C.gold:"rgba(255,255,255,0.06)",
-                color:showAddPlayer?"#0a0d0f":C.gold,textTransform:"uppercase",
-              }}>{showAddPlayer?"  Close":"+ Add Player"}</button>
+                marginLeft:"auto", minHeight:36, padding:"0 10px", borderRadius:8,
+                border:"1px solid rgba(255,255,255,0.22)", cursor:"pointer",
+                fontSize:11, fontWeight:700, fontFamily:"inherit",
+                background: showAddPlayer ? "rgba(255,255,255,0.08)" : "transparent",
+                color: C.text,
+              }}>{showAddPlayer ? "Close" : "Add player"}</button>
             </div>
 
             {/* Add player form */}
@@ -2372,40 +2494,52 @@ function TabGame({ format, league, onLeagueChange, onFormatChange, players, setP
                 const isInjured = !!p.injured;
                 const isOut     = !!p.out;
                 const isInactive = isInjured || isOut;
-                const planned = quartersOf(p.id, playCounts);
+                const planned = quartersOf(p.id);
                 const target  = minQ;
                 const pct     = target > 0 ? Math.min(1, planned / target) : 1;
                 const ok      = planned >= target || target === 0 || isMGI || isInactive;
                 const isEditing = editingPlayerId === p.id;
                 const tinyBtn = {
-                  padding:"2px 6px", fontSize:9, fontWeight:800, fontFamily:"inherit",
-                  borderRadius:3, cursor:"pointer", letterSpacing:"0.04em",
-                  border:`1px solid ${C.border}`, background:"rgba(255,255,255,0.05)",
-                  color:C.muted, lineHeight:1.4, textTransform:"uppercase",
+                  minHeight:32, padding:"4px 8px", fontSize:10, fontWeight:700, fontFamily:"inherit",
+                  borderRadius:6, cursor:"pointer",
+                  border:`1px solid ${C.border}`, background:"rgba(255,255,255,0.04)",
+                  color:C.muted,
                 };
+                const onNowKind = cellKind(p.id, quarter, (rotationGrid.find(r=>r.player.id===p.id)?.quarters[quarter-1]) || "unplanned");
+                const onNow = onNowKind === "full" || onNowKind === "partial-on";
+                const focused = chartFocusId === p.id;
                 const nameColor = isMGI ? "#e74c3c"
                                 : isInjured ? "#e74c3c"
                                 : isOut ? "#e67e22"
                                 : ok ? C.text : C.gold;
                 return (
                   <div key={p.id} style={{
-                    marginBottom:7,
+                    marginBottom:8,
                     opacity:isMGI?0.55:isInactive?0.7:1,
-                    paddingBottom:isEditing?2:0,
-                    borderBottom:isEditing?`1px solid ${C.border}`:"none",
+                    padding: focused ? "6px 6px 4px" : 0,
+                    borderRadius:8,
+                    background: focused ? "rgba(46,204,113,0.06)" : "transparent",
+                    border: focused ? "1px solid rgba(46,204,113,0.28)" : "1px solid transparent",
                   }}>
                     {/* Name + status row */}
-                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",fontSize:11,marginBottom:3,gap:6}}>
-                      <span style={{color:nameColor,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",flex:"1 1 auto",minWidth:0}}>
-                        {p.name} <span style={{color:C.muted}}>#{p.number}</span>
-                      </span>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",fontSize:12,marginBottom:4,gap:6}}>
+                      <button onClick={()=>setChartFocusId(focused?null:p.id)} style={{
+                        background:"none", border:"none", padding:0, cursor:"pointer", fontFamily:"inherit",
+                        color:nameColor, fontSize:12, fontWeight:700, textAlign:"left",
+                        overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", flex:"1 1 auto", minWidth:0,
+                      }}>
+                        {p.name} <span style={{color:C.muted,fontWeight:600}}>#{p.number}</span>
+                      </button>
                       {isInjured ? (
-                        <span style={{fontSize:9,fontWeight:800,color:"#e74c3c",background:"rgba(231,76,60,0.15)",padding:"2px 6px",borderRadius:3,letterSpacing:"0.04em"}}>INJ</span>
+                        <span style={{fontSize:9,fontWeight:800,color:"#e74c3c",background:"rgba(231,76,60,0.15)",padding:"2px 6px",borderRadius:3}}>INJ</span>
                       ) : isOut ? (
-                        <span style={{fontSize:9,fontWeight:800,color:"#e67e22",background:"rgba(230,126,34,0.15)",padding:"2px 6px",borderRadius:3,letterSpacing:"0.04em"}}>OUT</span>
+                        <span style={{fontSize:9,fontWeight:800,color:"#e67e22",background:"rgba(230,126,34,0.15)",padding:"2px 6px",borderRadius:3}}>OUT</span>
                       ) : (
-                        <span style={{fontSize:10,color:ok?C.ok:C.gold,fontWeight:700,flexShrink:0}}>
-                          {allPlanned ? `${planned}/${target}Q` : ""}
+                        <span style={{display:"flex",alignItems:"center",gap:6,flexShrink:0}}>
+                          {onNow && <span style={{fontSize:9,fontWeight:800,color:"#0a0d0f",background:"#2ecc71",borderRadius:3,padding:"2px 5px"}}>IN</span>}
+                          <span style={{fontSize:10,color:ok?"#2ecc71":C.gold,fontWeight:700}}>
+                            {allPlanned ? `${planned}/${target}Q` : ""}
+                          </span>
                         </span>
                       )}
                     </div>
@@ -2413,9 +2547,9 @@ function TabGame({ format, league, onLeagueChange, onFormatChange, players, setP
                     {/* Action buttons */}
                     <div style={{display:"flex",gap:4,marginBottom:isEditing?6:4}}>
                       <button onClick={()=>setEditingPlayerId(isEditing?null:p.id)} style={{...tinyBtn,
-                        color:isEditing?"#0a0d0f":C.gold,
-                        background:isEditing?C.gold:"rgba(232,160,32,0.08)",
-                        borderColor:"rgba(232,160,32,0.4)"}}>{isEditing?"Done":"Edit"}</button>
+                        color:isEditing?"#0a0d0f":C.text,
+                        background:isEditing?"rgba(255,255,255,0.85)":"rgba(255,255,255,0.04)",
+                        borderColor:"rgba(255,255,255,0.22)"}}>{isEditing?"Done":"Edit"}</button>
                       <button onClick={()=>{
                         if (p.injured) restorePlayer(p.id);
                         else if (Object.keys(lineupsByQuarter).length > 0) markUnavailable(p.id, "injury");
@@ -2449,35 +2583,49 @@ function TabGame({ format, league, onLeagueChange, onFormatChange, players, setP
                     {/* Per-quarter position tiles + progress  only for active players */}
                     {!isInactive && !isEditing && (
                       <>
-                        <div style={{display:"flex",gap:3,marginBottom:3}}>
+                        <div style={{display:"flex",gap:4,marginBottom:4}}>
                           {[1,2,3,4].map(q => {
                             const entry = rotationGrid.find(r=>r.player.id===p.id);
                             const status = entry ? entry.quarters[q-1] : "unplanned";
+                            const kind = cellKind(p.id, q, status);
                             const qLineup = lineupsByQuarter[q];
                             const slot = qLineup?.starters?.find(s=>s.player?.id===p.id);
-                            const posLabel = status==="on" && slot ? (POS_LABEL[slot.pos] || slot.pos) : status==="bench" ? "" : "?";
-                            const bg = status==="on" ? C.ok : status==="bench" ? "rgba(255,255,255,0.12)" : "rgba(255,255,255,0.04)";
-                            const textColor = status==="on" ? "#0a0d0f" : "rgba(255,255,255,0.3)";
-                            const isActiveQ = quarter===q;
+                            const pos = slot ? (POS_LABEL[slot.pos] || slot.pos) : "";
+                            const label = kind==="full" || kind==="partial-on" ? pos : kind==="partial-off" ? "½" : kind==="unplanned" ? "?" : "";
+                            const title = kind==="full" ? `Q${q} full quarter${pos?` · ${pos}`:""}`
+                              : kind==="partial-on" ? `Q${q} partial · came on${pos?` · ${pos}`:""}`
+                              : kind==="partial-off" ? `Q${q} partial · played, then off`
+                              : kind==="bench" ? `Q${q} bench` : `Q${q} not planned`;
+                            const background = kind==="full" ? "#2ecc71"
+                              : kind==="partial-on" ? "linear-gradient(90deg, rgba(255,255,255,0.16) 0 46%, #2ecc71 46% 100%)"
+                              : kind==="partial-off" ? "linear-gradient(90deg, #2ecc71 0 46%, rgba(255,255,255,0.12) 46% 100%)"
+                              : kind==="bench" ? "rgba(255,255,255,0.12)"
+                              : "rgba(255,255,255,0.04)";
+                            const textColor = kind==="full" ? "#0a0d0f"
+                              : kind==="partial-on" || kind==="partial-off" ? "#fff"
+                              : "rgba(255,255,255,0.35)";
                             return (
-                              <div key={q} onClick={()=>setQuarter(q)}
-                                title={`Q${q}: ${status==="on"?posLabel:status}`}
+                              <div key={q} onClick={()=>{ setQuarter(q); setChartFocusId(p.id); }}
+                                title={title}
                                 style={{
-                                  flex:1, height:20, borderRadius:3, background:bg,
+                                  flex:1, height:28, borderRadius:4, background,
                                   display:"flex", alignItems:"center", justifyContent:"center",
-                                  fontSize:status==="on"?7:9, color:textColor,
-                                  fontWeight:800, cursor:"pointer", letterSpacing:"0.02em",
-                                  border:isActiveQ?"1px solid rgba(255,255,255,0.35)":"1px solid transparent",
-                                  boxShadow:isActiveQ?"0 0 0 1px rgba(255,255,255,0.1)":"none",
+                                  fontSize:8, color:textColor, fontWeight:800, cursor:"pointer",
+                                  letterSpacing:"0.02em",
+                                  textShadow: kind.startsWith("partial") ? "0 1px 2px rgba(0,0,0,0.55)" : "none",
+                                  border: quarter===q ? "1px solid rgba(255,255,255,0.7)" : "1px solid transparent",
                                 }}>
-                                {posLabel}
+                                {label}
                               </div>
                             );
                           })}
                         </div>
+                        {focused && (
+                          <div style={{fontSize:11,color:C.muted,lineHeight:1.4,marginBottom:4}}>{quarterStory(p.id)}</div>
+                        )}
                         <div style={{height:3,background:"rgba(255,255,255,0.07)",borderRadius:2}}>
                           <div style={{height:"100%",width:`${pct*100}%`,borderRadius:2,transition:"width 0.4s",
-                            background:isMGI?"#e74c3c":ok?C.ok:C.gold}}/>
+                            background:isMGI?"#e74c3c":ok?"#2ecc71":C.gold}}/>
                         </div>
                       </>
                     )}
@@ -2498,55 +2646,102 @@ function TabGame({ format, league, onLeagueChange, onFormatChange, players, setP
                 <div style={{fontSize:12,fontWeight:800,color:C.text}}>{clockLabel(clockSec)} <span style={{color:C.muted,fontWeight:600}}>/ {periodMin}:00</span></div>
               </div>
               <div style={{display:"flex",gap:8,marginBottom:10,flexWrap:"wrap"}}>
-                <Btn sm primary onClick={() => running ? setRunning(false) : startClock()}>{running ? "Pause clock" : "Start clock"}</Btn>
+                <Btn sm secondary onClick={() => running ? setRunning(false) : startClock()}>{running ? "Pause clock" : "Start clock"}</Btn>
                 <button onClick={() => { setPlanSub(v => !v); setSwapSel(null); setQueueNote(null); }} style={{
-                  padding:"8px 12px", borderRadius:8, cursor:"pointer", fontFamily:"inherit",
+                  minHeight:36, padding:"8px 12px", borderRadius:8, cursor:"pointer", fontFamily:"inherit",
                   fontSize:12, fontWeight:800,
-                  border:`1px solid ${planSub ? C.gold : C.border}`,
-                  background: planSub ? C.gold : "rgba(255,255,255,0.04)",
-                  color: planSub ? "#0a0d0f" : C.text,
+                  border:`1px solid ${planSub ? C.gold : "rgba(255,255,255,0.22)"}`,
+                  background: planSub ? "rgba(232,160,32,0.18)" : "transparent",
+                  color: planSub ? C.gold : C.text,
                 }}>{planSub ? "Plan sub: on" : "Plan sub"}</button>
               </div>
-              <div style={{fontSize:11,color:C.muted,lineHeight:1.45,marginBottom:8}}>
+              <div style={{fontSize:11,color:C.muted,lineHeight:1.45,marginBottom:10}}>
                 {planSub
-                  ? "Tap who leaves, then who comes on. That queues the swap. Drag still swaps right away."
-                  : "Drag players to swap now. Tap still works. Plan sub queues the next 2–3 swaps without moving anyone yet."}
+                  ? "Tap who leaves, then who comes on. The queue shows that pair by name. Drag still swaps right away."
+                  : "Drag or tap to swap now. Plan sub queues the next 2–3 swaps without moving anyone yet."}
                 {" "}Changing quarter saves minutes and resets this clock.
               </div>
-              <div style={{fontSize:11,color:C.gold,fontWeight:700,marginBottom:6}}>Who’s next</div>
+              {benchPairs.length > 0 && (
+                <div style={{marginBottom:12,padding:"10px",borderRadius:10,background:"rgba(0,0,0,0.2)",border:"1px solid rgba(46,204,113,0.28)"}}>
+                  <div style={{fontSize:13,fontWeight:800,color:C.text,marginBottom:4}}>Subs go in for who?</div>
+                  <div style={{fontSize:11,color:C.muted,lineHeight:1.4,marginBottom:8}}>
+                    {benchPairs.every(pair => pair.fromPlan)
+                      ? `Everyone on the bench comes on, matching Q${Math.min(quarter + 1, totalQuarters)}.`
+                      : plannedNext
+                        ? "Everyone on the bench comes on. Pairs that match the next quarter are marked. The rest replace whoever has played the most."
+                        : "Everyone on the bench comes on, for the players who have been on the longest."}
+                  </div>
+                  {benchPairs.map(pair => (
+                    <div key={`${pair.inId}-${pair.outId}`} style={{display:"flex",alignItems:"baseline",gap:6,marginBottom:6,flexWrap:"wrap",fontSize:13}}>
+                      <span style={{fontWeight:800,color:"#2ecc71"}}>{playerName(pair.inId)}</span>
+                      <span style={{fontSize:10,fontWeight:800,color:"#2ecc71",letterSpacing:"0.04em"}}>ON</span>
+                      <span style={{color:C.muted}}>→</span>
+                      <span style={{fontWeight:800}}>{playerName(pair.outId)}</span>
+                      <span style={{fontSize:10,fontWeight:800,color:C.muted,letterSpacing:"0.04em"}}>OFF</span>
+                      {pair.fromPlan && <span style={{fontSize:10,color:C.muted}}>next quarter</span>}
+                    </div>
+                  ))}
+                  <Btn secondary full onClick={bringBenchOn} style={{marginTop:4,borderColor:"rgba(46,204,113,0.45)"}}>
+                    Bring the bench on
+                  </Btn>
+                  <div style={{fontSize:10,color:C.muted,lineHeight:1.4,marginTop:6}}>
+                    This quarter only. Minutes already played stay. Other quarters stay.
+                  </div>
+                </div>
+              )}
+              <div style={{fontSize:11,color:C.muted,fontWeight:700,marginBottom:6,textTransform:"uppercase",letterSpacing:"0.05em"}}>Who’s next</div>
               {whosNext.length === 0 && <div style={{fontSize:12,color:C.muted,marginBottom:8}}>Bench is empty.</div>}
-              {whosNext.slice(0, 3).map(p => (
-                <div key={p.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:4,fontSize:12}}>
-                  <span>#{p.number} {p.name}</span>
-                  <span style={{display:"flex",alignItems:"center",gap:8}}>
-                    <span style={{color:C.muted}}>
-                      {anyMinutes
-                        ? `${Math.round(minutesById[p.id] || 0)}m · ${Math.round(minuteGap(minutesById[p.id], targetMin))}m short`
-                        : `${quartersOf(p.id)}/${minQ} Q`}
+              {whosNext.slice(0, 3).map(p => {
+                const partner = benchPairs.find(pair => pair.inId === p.id);
+                const offPlayer = partner ? playerName(partner.outId) : longestOnField()?.name;
+                return (
+                  <div key={p.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:6,fontSize:12,flexWrap:"wrap"}}>
+                    <span>
+                      <b>{p.name}</b>
+                      {offPlayer && (
+                        <>
+                          <span style={{color:"#2ecc71",fontWeight:800}}> on </span>
+                          <span style={{color:C.muted}}>→</span>
+                          <span> {offPlayer} </span>
+                          <span style={{color:C.muted,fontWeight:700}}>off</span>
+                        </>
+                      )}
                     </span>
                     <button onClick={() => queueWhosNext(p)} style={{
-                      padding:"4px 8px", borderRadius:6, border:`1px solid ${C.border}`, cursor:"pointer",
-                      background:"rgba(255,255,255,0.05)", color:C.gold, fontSize:10, fontWeight:800, fontFamily:"inherit",
+                      minHeight:32, padding:"4px 8px", borderRadius:6, border:"1px solid rgba(255,255,255,0.22)", cursor:"pointer",
+                      background:"transparent", color:C.text, fontSize:11, fontWeight:700, fontFamily:"inherit", flexShrink:0,
                     }}>Queue</button>
-                  </span>
-                </div>
-              ))}
+                  </div>
+                );
+              })}
               {!anyMinutes && whosNext.length > 0 && (
-                <div style={{fontSize:10,color:C.muted,margin:"4px 0 8px"}}>Clock hasn’t started, so this list uses quarters on the field. Start the clock for minute gaps.</div>
+                <div style={{fontSize:10,color:C.muted,margin:"2px 0 8px"}}>Clock hasn’t started, so this order uses quarters on the field. Start the clock for minute gaps.</div>
               )}
-              <div style={{fontSize:11,color:C.gold,fontWeight:700,margin:"8px 0 6px"}}>Upcoming swaps ({pendingSwaps.length}/3)</div>
-              {pendingSwaps.length === 0 && <div style={{fontSize:12,color:C.muted}}>None queued.</div>}
+              {anyMinutes && whosNext.length > 0 && (
+                <div style={{fontSize:10,color:C.muted,margin:"0 0 8px"}}>
+                  {whosNext.slice(0, 3).map(p => `${p.name.split(" ")[0]} ${Math.round(minutesById[p.id] || 0)}m`).join(" · ")}
+                </div>
+              )}
+              <div style={{fontSize:11,color:C.muted,fontWeight:700,margin:"8px 0 6px",textTransform:"uppercase",letterSpacing:"0.05em"}}>Upcoming swaps ({pendingSwaps.length}/3)</div>
+              {pendingSwaps.length === 0 && <div style={{fontSize:12,color:C.muted}}>None queued. Plan sub, or bring the bench on.</div>}
               {pendingSwaps.map(row => (
-                <div key={row.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:6,flexWrap:"wrap"}}>
-                  <div style={{fontSize:12,color:C.text}}>Q{row.quarter}: {playerName(row.outId)} off, {playerName(row.inId)} on</div>
+                <div key={row.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:8,flexWrap:"wrap",padding:"8px",borderRadius:8,background:"rgba(0,0,0,0.18)"}}>
+                  <div style={{fontSize:13,color:C.text,lineHeight:1.35}}>
+                    <div style={{fontSize:10,color:C.muted,fontWeight:700,marginBottom:2}}>Q{row.quarter}</div>
+                    <span style={{fontWeight:800,color:"#2ecc71"}}>{playerName(row.inId)}</span>
+                    <span style={{fontSize:10,fontWeight:800,color:"#2ecc71"}}> ON </span>
+                    <span style={{color:C.muted}}>→</span>
+                    <span style={{fontWeight:800}}> {playerName(row.outId)}</span>
+                    <span style={{fontSize:10,fontWeight:800,color:C.muted}}> OFF</span>
+                  </div>
                   <div style={{display:"flex",gap:6}}>
                     <button onClick={() => executeSwap(row)} style={{
-                      padding:"6px 10px", borderRadius:6, border:"none", cursor:"pointer",
-                      background:C.gold, color:"#0a0d0f", fontSize:11, fontWeight:800, fontFamily:"inherit",
+                      minHeight:36, padding:"6px 10px", borderRadius:6, border:"none", cursor:"pointer",
+                      background:"#1e7a45", color:"#fff", fontSize:12, fontWeight:800, fontFamily:"inherit",
                     }}>Run now</button>
                     <button onClick={() => setSubQueue(prev => cancelOneSwap(prev, row.id))} style={{
-                      padding:"6px 10px", borderRadius:6, border:`1px solid ${C.border}`, cursor:"pointer",
-                      background:"transparent", color:C.muted, fontSize:11, fontWeight:700, fontFamily:"inherit",
+                      minHeight:36, padding:"6px 10px", borderRadius:6, border:"1px solid rgba(255,255,255,0.22)", cursor:"pointer",
+                      background:"transparent", color:C.text, fontSize:12, fontWeight:700, fontFamily:"inherit",
                     }}>Cancel</button>
                   </div>
                 </div>
@@ -2571,12 +2766,12 @@ function TabGame({ format, league, onLeagueChange, onFormatChange, players, setP
               Q{quarter} Field — drag to swap, tap as fallback
             </div>
             <button onClick={()=>setShowShare(true)} style={{
-              padding:"5px 11px",borderRadius:6,
-              border:`1px solid ${C.gold}55`,
-              background:`linear-gradient(135deg,rgba(232,160,32,0.18),rgba(184,120,24,0.10))`,
-              color:C.gold,fontSize:10,fontWeight:800,cursor:"pointer",fontFamily:"inherit",
-              letterSpacing:"0.05em",textTransform:"uppercase",flexShrink:0,
-            }}>Share Lineup</button>
+              minHeight:36, padding:"6px 12px", borderRadius:8,
+              border:"1px solid rgba(255,255,255,0.22)",
+              background:"transparent",
+              color:C.text, fontSize:11, fontWeight:700, cursor:"pointer", fontFamily:"inherit",
+              flexShrink:0,
+            }}>Share lineup</button>
           </div>
           {!allPlanned && !currentLineup && (
             <div style={{
@@ -2588,7 +2783,7 @@ function TabGame({ format, league, onLeagueChange, onFormatChange, players, setP
                 Hit <b style={{color:C.gold}}>Plan Full Game</b> to schedule all 4 quarters.<br/>
                 The target is {minQ} of {totalQuarters} quarters on the field for each eligible player.
               </div>
-              <Btn primary disabled={!gate.ok} onClick={() => planWholeGame(1)}> Plan Full Game</Btn>
+              <Btn primary disabled={!gate.ok} onClick={() => planWholeGame(1)}>Plan full game</Btn>
             </div>
           )}
           <div style={{position:"relative",userSelect:"none"}}>
@@ -2616,17 +2811,17 @@ function TabGame({ format, league, onLeagueChange, onFormatChange, players, setP
             </div>
             {currentLineup && (
               <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:8}}>
-                <Btn sm onClick={scramblePositions}>Scramble positions</Btn>
-                <Btn sm onClick={scrambleMembership}>Redraw who plays Q{quarter}</Btn>
+                <Btn sm secondary onClick={scramblePositions}>Scramble positions</Btn>
+                <Btn sm secondary onClick={scrambleMembership}>Redraw who plays Q{quarter}</Btn>
               </div>
             )}
             {swapSel && (
-              <div style={{fontSize:11,color:C.gold,textAlign:"center",marginBottom:6}}>
-                {planSub
-                  ? "Plan sub: tap the bench player who comes on."
+              <div style={{fontSize:12,color:C.text,textAlign:"center",marginBottom:6,lineHeight:1.4}}>
+                {planSub && swapSel.type==="field"
+                  ? `${playerName(swapSel.playerId)} off. Tap who comes on for ${playerName(swapSel.playerId)}.`
                   : swapSel.type==="field"
-                    ? "Field player selected. Tap another spot or a bench player."
-                    : "Bench player selected. Tap the field spot they should take."}
+                    ? `${playerName(currentLineup?.starters?.[swapSel.idx]?.player?.id)} selected. Tap who they swap with.`
+                    : `${playerName(swapSel.playerId)} on. Tap the field player they replace.`}
               </div>
             )}
             {scrambleNote && (

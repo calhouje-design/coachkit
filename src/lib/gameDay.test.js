@@ -13,6 +13,13 @@ import {
   pullFromQuarter,
   pullFromPlan,
   addLateArrival,
+  countedQuarters,
+  setAppearanceCreditFor,
+  noteSubSegment,
+  clearSubSegmentsFrom,
+  playCellKind,
+  planBenchRotation,
+  applyBenchRotation,
 } from "./gameDay.js";
 
 test("appearance credit stacks on lineup quarters and banked minutes are not replaced", () => {
@@ -99,4 +106,105 @@ test("late arrival joins the bench without taking a starter spot", () => {
   assert.equal(next.starters[0].player.id, "s");
   assert.equal(next.bench[0].id, "n");
   assert.equal(addLateArrival(next, newbie), next);
+});
+
+test("a quarter credited off the field is not counted again when the player returns", () => {
+  assert.equal(countedQuarters([1], [1, 2]), 2);
+  const off = setAppearanceCreditFor({}, "a", 2, true);
+  assert.deepEqual(off.a, [2]);
+  const back = setAppearanceCreditFor(off, "a", 2, false);
+  assert.equal(back.a, undefined);
+  const marked = noteSubSegment({}, "a", 2, "left");
+  assert.equal(marked.a[2], "left");
+  assert.deepEqual(clearSubSegmentsFrom({ a: { 1: "left", 2: "entered" } }, 2), { a: { 1: "left" } });
+});
+
+test("play chart distinguishes a full quarter from a partial sub", () => {
+  assert.equal(playCellKind({ onField: true, segment: null }), "full");
+  assert.equal(playCellKind({ onField: true, segment: "entered" }), "partial-on");
+  assert.equal(playCellKind({ onField: false, segment: "left" }), "partial-off");
+  assert.equal(playCellKind({ onField: false, segment: null }), "bench");
+});
+
+test("bench rotation names who comes on for whom from the next quarter", () => {
+  const lineup = {
+    starters: [
+      { pos: "GK", player: { id: "sam", name: "Sam" } },
+      { pos: "CF", player: { id: "dee", name: "Dee" } },
+    ],
+    bench: [
+      { id: "bea", name: "Bea" },
+      { id: "cal", name: "Cal" },
+    ],
+  };
+  const next = {
+    starters: [
+      { pos: "GK", player: { id: "bea", name: "Bea" } },
+      { pos: "CF", player: { id: "cal", name: "Cal" } },
+    ],
+    bench: [
+      { id: "sam", name: "Sam" },
+      { id: "dee", name: "Dee" },
+    ],
+  };
+  const pairs = planBenchRotation(lineup, {
+    minutesById: { sam: 10, dee: 4, bea: 1, cal: 2 },
+    nextLineup: next,
+  });
+  assert.equal(pairs.length, 2);
+  assert.ok(pairs.every(pair => pair.fromPlan));
+  assert.deepEqual(pairs.map(pair => pair.inId).sort(), ["bea", "cal"]);
+  assert.deepEqual(pairs.map(pair => pair.outId).sort(), ["dee", "sam"]);
+});
+
+test("everyone on the bench is paired even when the next quarter only covers some", () => {
+  const lineup = {
+    starters: [
+      { pos: "GK", player: { id: "a", name: "Ann" } },
+      { pos: "CF", player: { id: "b", name: "Bea" } },
+    ],
+    bench: [
+      { id: "c", name: "Cal" },
+      { id: "d", name: "Dee" },
+    ],
+  };
+  const next = {
+    starters: [
+      { pos: "GK", player: { id: "c", name: "Cal" } },
+      { pos: "CF", player: { id: "a", name: "Ann" } },
+    ],
+    bench: [
+      { id: "b", name: "Bea" },
+      { id: "d", name: "Dee" },
+    ],
+  };
+  const pairs = planBenchRotation(lineup, { minutesById: {}, nextLineup: next });
+  assert.deepEqual(pairs, [
+    { inId: "c", outId: "b", fromPlan: true },
+    { inId: "d", outId: "a", fromPlan: false },
+  ]);
+});
+
+test("bringing the bench on keeps positions and does not touch the original lineup", () => {
+  const lineup = {
+    starters: [
+      { pos: "GK", player: { id: "a", name: "Ann" } },
+      { pos: "CF", player: { id: "b", name: "Bea" } },
+      { pos: "CM", player: { id: "c", name: "Cal" } },
+    ],
+    bench: [
+      { id: "d", name: "Dee" },
+      { id: "e", name: "Eve" },
+    ],
+  };
+  const pairs = planBenchRotation(lineup, { minutesById: { a: 1, b: 9, c: 5, d: 0, e: 3 } });
+  assert.deepEqual(pairs, [
+    { inId: "d", outId: "b", fromPlan: false },
+    { inId: "e", outId: "c", fromPlan: false },
+  ]);
+  const next = applyBenchRotation(lineup, pairs);
+  assert.deepEqual(next.starters.map(slot => slot.player.id), ["a", "d", "e"]);
+  assert.deepEqual(next.starters.map(slot => slot.pos), ["GK", "CF", "CM"]);
+  assert.deepEqual(next.bench.map(player => player.id).sort(), ["b", "c"]);
+  assert.equal(lineup.starters[1].player.id, "b");
 });
