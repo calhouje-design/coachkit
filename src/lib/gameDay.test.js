@@ -20,6 +20,10 @@ import {
   playCellKind,
   planBenchRotation,
   applyBenchRotation,
+  segmentAt,
+  markQuarterSub,
+  retargetPair,
+  pairsForDisplay,
 } from "./gameDay.js";
 
 test("appearance credit stacks on lineup quarters and banked minutes are not replaced", () => {
@@ -183,6 +187,51 @@ test("everyone on the bench is paired even when the next quarter only covers som
     { inId: "c", outId: "b", fromPlan: true },
     { inId: "d", outId: "a", fromPlan: false },
   ]);
+});
+
+test("a mid-quarter sub in Q2, Q3, or Q4 is stored and read like Q1", () => {
+  let segments = markQuarterSub({}, 1, "ann", "bea");
+  segments = markQuarterSub(segments, 2, "cal", "dee");
+  segments = markQuarterSub(segments, 3, "gus", "hal");
+  segments = markQuarterSub(segments, 4, "eve", "fay");
+  const stored = JSON.parse(JSON.stringify(segments));
+  assert.equal(segmentAt(stored, "ann", 1), "left");
+  assert.equal(segmentAt(stored, "bea", 1), "entered");
+  assert.equal(segmentAt(stored, "cal", 2), "left");
+  assert.equal(segmentAt(stored, "dee", 2), "entered");
+  assert.equal(segmentAt(stored, "gus", 3), "left");
+  assert.equal(segmentAt(stored, "hal", 3), "entered");
+  assert.equal(segmentAt(stored, "eve", 4), "left");
+  assert.equal(segmentAt(stored, "fay", 4), "entered");
+  assert.equal(playCellKind({ onField: false, segment: segmentAt(stored, "cal", 2) }), "partial-off");
+  assert.equal(playCellKind({ onField: true, segment: segmentAt(stored, "dee", 2) }), "partial-on");
+  assert.equal(playCellKind({ onField: false, segment: segmentAt(stored, "gus", 3) }), "partial-off");
+  assert.equal(playCellKind({ onField: true, segment: segmentAt(stored, "hal", 3) }), "partial-on");
+  assert.equal(playCellKind({ onField: true, segment: segmentAt(stored, "fay", 4) }), "partial-on");
+  assert.equal(playCellKind({ onField: false, segment: segmentAt(stored, "eve", 4) }), "partial-off");
+  assert.equal(segmentAt(stored, "cal", 4), null);
+  assert.equal(playCellKind({ onField: true, segment: segmentAt(stored, "cal", 3) }), "full");
+});
+
+test("two taps retarget the dotted line without dropping the other bench players", () => {
+  const lineup = {
+    starters: [
+      { pos: "GK", player: { id: "sam", name: "Sam" } },
+      { pos: "CF", player: { id: "dee", name: "Dee" } },
+    ],
+    bench: [
+      { id: "bea", name: "Bea" },
+      { id: "cal", name: "Cal" },
+    ],
+  };
+  const auto = [
+    { inId: "bea", outId: "sam", fromPlan: true },
+    { inId: "cal", outId: "dee", fromPlan: true },
+  ];
+  const manual = retargetPair([], "bea", "dee");
+  const shown = pairsForDisplay(auto, manual, lineup);
+  assert.deepEqual(shown.find(pair => pair.inId === "bea"), { inId: "bea", outId: "dee", fromPlan: false });
+  assert.equal(shown.find(pair => pair.inId === "cal").outId, "sam");
 });
 
 test("bringing the bench on keeps positions and does not touch the original lineup", () => {

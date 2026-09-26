@@ -56,7 +56,9 @@ On the field, drag a player onto another spot or the bench to swap. That uses po
 
 **Plan sub** queues up to three upcoming swaps. Each one is named as who comes on for who goes off. Run now plays one. Cancel removes that one swap. Dragging still swaps immediately. **Bring the bench on** rotates everyone on the bench into this quarter and leaves the minute bank and the other quarters alone.
 
-The play-time chart uses solid green for a full quarter on the field and a split box for a mid-quarter sub. That split is only a picture. The fair-play count is still whole quarters.
+The play-time chart uses solid green for a full quarter on the field and a split box for a mid-quarter sub. A sub in Q2, Q3, or Q4 marks that quarter the same way as Q1. The split is only a picture. The fair-play count is still whole quarters.
+
+The quarter control stays at the top of Game Day. Bench players sit beside the pitch, with a dotted line to the field player they replace. Tap the bench player, then the field player, to move that line. A green ring on a drag means releasing will swap.
 
 The quarter clock counts up against the league period length and feeds a minute gap on the bench. Fair play itself stays quarter counts. Injury or a late scratch pulls that player from the current quarter forward, keeps minutes already played, and does not rebuild the other players’ plan. Plan Full Game from Q1 clears the clock, the minute bank, and the queue.
 

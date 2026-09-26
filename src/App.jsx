@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useEffect, useMemo } from "react";
+import { useState, useRef, useCallback, useEffect, useLayoutEffect, useMemo } from "react";
 import { useUser, useSession } from "@clerk/clerk-react";
 import AuthGate from "./components/AuthGate.jsx";
 import UserMenu from "./components/UserMenu.jsx";
@@ -22,10 +22,14 @@ import {
   countedQuarters,
   setAppearanceCreditFor,
   noteSubSegment,
+  segmentAt,
+  markQuarterSub,
   clearSubSegmentsFrom,
   playCellKind,
   planBenchRotation,
   applyBenchRotation,
+  retargetPair,
+  pairsForDisplay,
 } from "./lib/gameDay.js";
 import { useTeamCloud } from "./lib/teamCloud.js";
 
@@ -1134,6 +1138,7 @@ function usePitchDrag(onResolve) {
   const dragRef = useRef(null);
   const [ghost, setGhost] = useState(null);
   const [hover, setHover] = useState(null);
+  const [activeSource, setActiveSource] = useState(null);
 
   const pointerDown = (e, source, label) => {
     if (e.pointerType === "mouse" && e.button !== 0) return;
@@ -1152,6 +1157,7 @@ function usePitchDrag(onResolve) {
     drag.moved = true;
     setGhost({ x: e.clientX, y: e.clientY, label: drag.label });
     setHover(dropTokenAt(e.clientX, e.clientY));
+    setActiveSource(drag.source);
   };
 
   const pointerUp = (e) => {
@@ -1161,15 +1167,16 @@ function usePitchDrag(onResolve) {
     const moved = drag.moved;
     setGhost(null);
     setHover(null);
+    setActiveSource(null);
     if (!moved) return "tap";
     resolveRef.current(resolveDragDrop(drag.source, parseDrop(dropTokenAt(e.clientX, e.clientY))));
     return "drag";
   };
 
-  return { pointerDown, pointerMove, pointerUp, ghost, hover };
+  return { pointerDown, pointerMove, pointerUp, ghost, hover, activeSource };
 }
 
-function SoccerField({ lineup, onTap, selectedIdx, quarter, drag, hoverToken }) {
+function SoccerField({ lineup, onTap, selectedIdx, quarter, drag, hoverToken, activeSource }) {
 
   if (!lineup) return (
     <div style={{
@@ -1187,7 +1194,7 @@ function SoccerField({ lineup, onTap, selectedIdx, quarter, drag, hoverToken }) 
   const idxByPos = {};
 
   return (
-    <div style={{ position:"relative", width:"100%", maxWidth:320, margin:"0 auto", userSelect:"none" }}>
+    <div style={{ position:"relative", width:"100%", margin:"0 auto", userSelect:"none" }}>
       <svg viewBox="0 0 320 480" style={{ width:"100%", display:"block", borderRadius:10 }}>
         <rect x="5" y="5" width="310" height="470" rx="8" fill="#1e4d1a" stroke="#fff" strokeWidth="1.5"/>
         <rect x="5" y="5" width="310" height="470" rx="8" fill="url(#grass)"/>
@@ -1249,10 +1256,12 @@ function SoccerField({ lineup, onTap, selectedIdx, quarter, drag, hoverToken }) 
         const py = 5 + (base.y/100)*470;
         const isHovered = hoverToken === `field:${idx}`;
         const isSelected = selectedIdx === idx;
+        const isSource = activeSource?.type === "field" && activeSource.idx === idx;
 
         return (
           <div key={idx}
             data-drop={`field:${idx}`}
+            data-sub-to={slot.player?.id || undefined}
             onPointerDown={e => {
               if (!slot.player) return;
               drag?.pointerDown(e, { type: "field", idx }, `#${slot.player.number}`);
@@ -1268,20 +1277,23 @@ function SoccerField({ lineup, onTap, selectedIdx, quarter, drag, hoverToken }) 
               top:`calc(${(py/480)*100}% - 30px)`,
               textAlign:"center", width:56,
               cursor: slot.player ? "grab" : "default",
-              zIndex: isSelected || isHovered ? 10 : 1,
+              zIndex: isSelected || isHovered || isSource ? 10 : 3,
               touchAction: "none",
+              opacity: isSource ? 0.55 : 1,
             }}>
             <div style={{
               width: 46, height: 46, borderRadius:"50%", margin:"0 auto",
-              background: isHovered
-                ? `linear-gradient(135deg,#fff,${C.gold})`
-                : slot.player
-                  ? `linear-gradient(135deg,${C.gold},${C.goldDark})`
-                  : "rgba(255,255,255,0.1)",
-              border: isSelected ? "3px solid #fff" : isHovered ? "2px solid #fff" : "2px solid rgba(255,255,255,0.8)",
+              background: slot.player
+                ? `linear-gradient(135deg,${C.gold},${C.goldDark})`
+                : "rgba(255,255,255,0.1)",
+              border: isHovered || isSource ? "3px solid #2ecc71" : isSelected ? "3px solid #fff" : "2px solid rgba(255,255,255,0.8)",
               display:"flex", alignItems:"center", justifyContent:"center",
               flexDirection:"column",
-              boxShadow: isSelected ? `0 0 0 3px ${C.gold}` : slot.player ? "0 2px 10px rgba(0,0,0,0.6)" : "none",
+              boxShadow: isHovered
+                ? "0 0 0 5px rgba(46,204,113,0.55)"
+                : isSource
+                  ? "0 0 0 4px rgba(46,204,113,0.4)"
+                  : isSelected ? `0 0 0 3px ${C.gold}` : slot.player ? "0 2px 10px rgba(0,0,0,0.6)" : "none",
             }}>
               {slot.player ? (
                 <>
@@ -1549,6 +1561,7 @@ function TabGame({ format, league, onLeagueChange, onFormatChange, players, setP
   const [minuteBank, setMinuteBank] = usePersistedState(storagePrefix+"minuteBank", {});
   const [appearanceCredit, setAppearanceCredit] = usePersistedState(storagePrefix+"appearanceCredit", {});
   const [subSegments, setSubSegments] = usePersistedState(storagePrefix+"subSegments", {});
+  const [pairPlan, setPairPlan] = usePersistedState(storagePrefix+"pairPlan", {});
   const [subQueue, setSubQueue] = usePersistedState(storagePrefix+"subQueue", []);
   const [chartFocusId, setChartFocusId] = useState(null);
   const [clockSec, setClockSec] = usePersistedState(storagePrefix+"clockSec", 0);
@@ -1707,6 +1720,7 @@ function TabGame({ format, league, onLeagueChange, onFormatChange, players, setP
     setMinuteBank({});
     setAppearanceCredit({});
     setSubSegments({});
+    setPairPlan({});
     setSubQueue([]);
     setRunning(false);
     clockRef.current = 0;
@@ -1828,19 +1842,13 @@ function TabGame({ format, league, onLeagueChange, onFormatChange, players, setP
     if (outgoing) bench[bIdx] = outgoing;
     else bench.splice(bIdx, 1);
     let credit = appearanceCredit;
+    if (outgoing) credit = setAppearanceCreditFor(credit, outgoing.id, qKey, true);
+    if (incoming) credit = setAppearanceCreditFor(credit, incoming.id, qKey, false);
+    setAppearanceCredit(credit);
+    setSubSegments(prev => markQuarterSub(prev, qKey, outgoing?.id, incoming?.id));
     if (doBank) {
       if (outgoing) bankLeave(outgoing.id);
       beginStint(incoming.id);
-      const live = running || (clockRef.current || 0) > 0;
-      if (live) {
-        if (outgoing) {
-          credit = setAppearanceCreditFor(credit, outgoing.id, qKey, true);
-          setSubSegments(prev => noteSubSegment(prev, outgoing.id, qKey, "left"));
-        }
-        credit = setAppearanceCreditFor(credit, incoming.id, qKey, false);
-        setSubSegments(prev => noteSubSegment(prev, incoming.id, qKey, "entered"));
-        setAppearanceCredit(credit);
-      }
     }
     const nextLineup = { starters, bench };
     const nextAll = { ...lineupsByQuarter, [qKey]: nextLineup };
@@ -1890,7 +1898,14 @@ function TabGame({ format, league, onLeagueChange, onFormatChange, players, setP
       return;
     }
     if (swapSel?.type === "bench") {
-      swapBenchAndField(idx, swapSel.playerId);
+      const outPlayer = currentLineup.starters[idx]?.player;
+      if (!outPlayer) return;
+      setPairPlan(prev => ({
+        ...(prev || {}),
+        [quarter]: retargetPair(prev?.[quarter], swapSel.playerId, outPlayer.id),
+      }));
+      setSwapSel(null);
+      setQueueNote(`${playerName(swapSel.playerId)} on for ${outPlayer.name}. The dotted line moved. Drag when you want them to switch now.`);
       return;
     }
     if (swapSel?.type === "field") {
@@ -2034,60 +2049,105 @@ function TabGame({ format, league, onLeagueChange, onFormatChange, players, setP
     if (!on.length) return null;
     return [...on].sort((a, b) => (minutesById[b.id] || 0) - (minutesById[a.id] || 0) || String(a.name || "").localeCompare(String(b.name || "")))[0];
   };
-  const queueWhosNext = (benchPlayer) => {
-    const planned = planBenchRotation(currentLineup, {
-      minutesById,
-      nextLineup: quarter < totalQuarters ? lineupsByQuarter[quarter + 1] : null,
-    }).find(pair => pair.inId === benchPlayer.id);
-    const leavingId = planned?.outId || longestOnField()?.id;
-    if (!leavingId) { setQueueNote("Nobody is on the field."); return; }
-    queueSwap(leavingId, benchPlayer.id);
-  };
   const playerName = (id) => players.find(p => p.id === id)?.name || "Player";
   const plannedNext = quarter < totalQuarters ? lineupsByQuarter[quarter + 1] : null;
   const benchPairs = currentLineup
     ? planBenchRotation(currentLineup, { minutesById, nextLineup: plannedNext })
     : [];
+  const subPairs = pairsForDisplay(benchPairs, pairPlan?.[quarter], currentLineup);
+  const pairKey = subPairs.map(pair => `${pair.inId}>${pair.outId}`).join("|");
+  const lineupKey = [
+    (currentLineup?.starters || []).map(slot => `${slot.pos}:${slot.player?.id || ""}`).join(","),
+    (currentLineup?.bench || []).map(player => player?.id || "").join(","),
+  ].join("#");
+  const pitchWrapRef = useRef(null);
+  const [subLines, setSubLines] = useState([]);
+  const [headerOffset, setHeaderOffset] = useState(120);
+  useEffect(() => {
+    const el = document.getElementById("ck-app-header");
+    if (!el) return undefined;
+    const measure = () => setHeaderOffset(el.getBoundingClientRect().height || 0);
+    measure();
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
+  }, []);
+  useLayoutEffect(() => {
+    const root = pitchWrapRef.current;
+    if (!root) {
+      setSubLines(prev => (prev.length ? [] : prev));
+      return undefined;
+    }
+    const measure = () => {
+      const box = root.getBoundingClientRect();
+      const esc = (value) => (window.CSS && CSS.escape ? CSS.escape(String(value)) : String(value));
+      const next = subPairs.map(pair => {
+        const from = root.querySelector(`[data-sub-from="${esc(pair.inId)}"]`);
+        const to = root.querySelector(`[data-sub-to="${esc(pair.outId)}"]`);
+        if (!from || !to) return null;
+        const a = from.getBoundingClientRect();
+        const b = to.getBoundingClientRect();
+        return {
+          key: `${pair.inId}-${pair.outId}`,
+          x1: Math.round(a.right - box.left),
+          y1: Math.round(a.top + a.height / 2 - box.top),
+          x2: Math.round(b.left + b.width / 2 - box.left),
+          y2: Math.round(b.top + b.height / 2 - box.top),
+        };
+      }).filter(Boolean);
+      setSubLines(prev => {
+        if (prev.length === next.length && prev.every((line, i) =>
+          line.key === next[i].key && line.x1 === next[i].x1 && line.y1 === next[i].y1 && line.x2 === next[i].x2 && line.y2 === next[i].y2
+        )) return prev;
+        return next;
+      });
+    };
+    measure();
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
+  }, [pairKey, lineupKey, quarter, swapSel]);
+  const queueWhosNext = (benchPlayer) => {
+    const planned = subPairs.find(pair => pair.inId === benchPlayer.id);
+    const leavingId = planned?.outId || longestOnField()?.id;
+    if (!leavingId) { setQueueNote("Nobody is on the field."); return; }
+    queueSwap(leavingId, benchPlayer.id);
+  };
   const bringBenchOn = () => {
-    if (!currentLineup || benchPairs.length === 0) {
+    if (!currentLineup || subPairs.length === 0) {
       setQueueNote("Nobody is waiting on the bench.");
       return;
     }
     const live = running || (clockRef.current || 0) > 0;
-    const rotated = applyBenchRotation(currentLineup, benchPairs);
+    const rotated = applyBenchRotation(currentLineup, subPairs);
     let credit = appearanceCredit || {};
-    if (live) {
-      let segments = subSegments || {};
-      benchPairs.forEach(pair => {
-        bankLeave(pair.outId);
-        credit = setAppearanceCreditFor(credit, pair.outId, quarter, true);
-        credit = setAppearanceCreditFor(credit, pair.inId, quarter, false);
-        segments = noteSubSegment(segments, pair.outId, quarter, "left");
-        segments = noteSubSegment(segments, pair.inId, quarter, "entered");
-      });
-      setAppearanceCredit(credit);
-      setSubSegments(segments);
-      benchPairs.forEach(pair => beginStint(pair.inId));
-    }
+    let segments = subSegments || {};
+    subPairs.forEach(pair => {
+      if (live) bankLeave(pair.outId);
+      credit = setAppearanceCreditFor(credit, pair.outId, quarter, true);
+      credit = setAppearanceCreditFor(credit, pair.inId, quarter, false);
+      segments = markQuarterSub(segments, quarter, pair.outId, pair.inId);
+    });
+    setAppearanceCredit(credit);
+    setSubSegments(segments);
+    if (live) subPairs.forEach(pair => beginStint(pair.inId));
     const nextAll = { ...lineupsByQuarter, [quarter]: rotated };
     setLineupsByQuarter(nextAll);
-    const involved = new Set(benchPairs.flatMap(pair => [pair.inId, pair.outId]));
+    const involved = new Set(subPairs.flatMap(pair => [pair.inId, pair.outId]));
     setSubQueue(prev => (prev || []).filter(row => row.quarter !== quarter || (!involved.has(row.inId) && !involved.has(row.outId))));
     setSwapSel(null);
-    warnIfShort(nextAll, players, live ? credit : appearanceCredit);
-    const named = benchPairs.map(pair => `${playerName(pair.inId)} on for ${playerName(pair.outId)}`).join(", ");
+    warnIfShort(nextAll, players, credit);
+    const named = subPairs.map(pair => `${playerName(pair.inId)} on for ${playerName(pair.outId)}`).join(", ");
     setQueueNote(`Bench is on: ${named}. Minutes already played stay. Other quarters stay.`);
   };
   const cellKind = (playerId, q, status) => {
     if (status === "unplanned") return "unplanned";
-    return playCellKind({ onField: status === "on", segment: subSegments?.[playerId]?.[q] || null });
+    return playCellKind({ onField: status === "on", segment: segmentAt(subSegments, playerId, q) });
   };
   const quarterStory = (playerId) => {
     const bits = [1, 2, 3, 4].map(q => {
       const lineup = lineupsByQuarter[q];
       if (!lineup) return null;
       const on = lineup.starters.some(slot => slot.player?.id === playerId);
-      const kind = playCellKind({ onField: on, segment: subSegments?.[playerId]?.[q] || null });
+      const kind = playCellKind({ onField: on, segment: segmentAt(subSegments, playerId, q) });
       if (kind === "full") return `Q${q} full quarter`;
       if (kind === "partial-on") return `Q${q} came on mid-quarter`;
       if (kind === "partial-off") return `Q${q} played, then off`;
@@ -2115,6 +2175,37 @@ function TabGame({ format, league, onLeagueChange, onFormatChange, players, setP
 
   return (
     <div>
+      <div style={{
+        position:"sticky", top: headerOffset, zIndex: 40,
+        margin: "0 0 12px", padding: "8px 0 10px",
+        background: C.bg,
+      }}>
+        <div style={{fontSize:10, color:C.muted, fontWeight:800, letterSpacing:"0.06em", textTransform:"uppercase", marginBottom:6}}>Quarter</div>
+        <div style={{display:"flex", border:`1px solid ${C.border}`, borderRadius:10, overflow:"hidden", background:"rgba(255,255,255,0.02)"}}>
+          {[1,2,3,4].map(q => {
+            const hasLineup = !!lineupsByQuarter[q];
+            const hasInjury = midGameInjured.some(p => p.injuredInQuarter === q);
+            const selected = quarter === q;
+            return (
+              <button key={q} onClick={() => setQuarter(q)} style={{
+                flex:1, minHeight:48, border:"none", cursor:"pointer",
+                borderRight: q < 4 ? `1px solid ${C.border}` : "none",
+                fontWeight:800, fontSize:16, fontFamily:"inherit",
+                background: selected ? "rgba(232,160,32,0.16)" : "transparent",
+                color: selected ? C.gold : C.text,
+                boxShadow: selected ? "inset 0 -3px 0 #e8a020" : "none",
+              }}>
+                Q{q}
+                {hasLineup && (
+                  <span style={{display:"block", fontSize:9, lineHeight:1.1, marginTop:2, color:hasInjury?"#e74c3c":C.muted, fontWeight:700}}>
+                    {hasInjury ? "inj" : "set"}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      </div>
       {/* Injury alerts */}
       {injuryAlerts.map(alert => (
         <InjuryAlert key={alert.id} player={alert.player} quarter={alert.quarter}
@@ -2366,32 +2457,7 @@ function TabGame({ format, league, onLeagueChange, onFormatChange, players, setP
           </Card>
 
           <Card style={{marginBottom:14}}>
-            <div style={{fontSize:11,color:C.muted,fontWeight:700,textTransform:"uppercase",letterSpacing:"0.05em",marginBottom:8}}>Plan</div>
-            <div style={{fontSize:10,color:C.muted,fontWeight:700,letterSpacing:"0.04em",textTransform:"uppercase",marginBottom:6}}>Viewing quarter</div>
-            <div style={{display:"flex",marginBottom:12,border:`1px solid ${C.border}`,borderRadius:10,overflow:"hidden",background:"rgba(255,255,255,0.02)"}}>
-              {[1,2,3,4].map(q => {
-                const hasLineup = !!lineupsByQuarter[q];
-                const hasInjury = midGameInjured.some(p => p.injuredInQuarter === q);
-                const selected = quarter === q;
-                return (
-                  <button key={q} onClick={() => setQuarter(q)} style={{
-                    flex:1, minHeight:44, border:"none", cursor:"pointer",
-                    borderRight: q < 4 ? `1px solid ${C.border}` : "none",
-                    fontWeight:800, fontSize:14, fontFamily:"inherit",
-                    background: selected ? "rgba(232,160,32,0.16)" : "transparent",
-                    color: selected ? C.gold : C.text,
-                    boxShadow: selected ? "inset 0 -2px 0 #e8a020" : "none",
-                  }}>
-                    Q{q}
-                    {hasLineup && (
-                      <span style={{display:"block",fontSize:8,lineHeight:1,marginTop:2,color:hasInjury?"#e74c3c":C.muted}}>
-                        {hasInjury ? "inj" : "set"}
-                      </span>
-                    )}
-                  </button>
-                );
-              })}
-            </div>
+            <div style={{fontSize:11,color:C.muted,fontWeight:700,textTransform:"uppercase",letterSpacing:"0.05em",marginBottom:8}}>Plan · Q{quarter}</div>
             <Btn primary full disabled={!gate.ok} onClick={() => planWholeGame(1)} style={{marginBottom:8}}>
               Plan full game
             </Btn>
@@ -2661,17 +2727,15 @@ function TabGame({ format, league, onLeagueChange, onFormatChange, players, setP
                   : "Drag or tap to swap now. Plan sub queues the next 2–3 swaps without moving anyone yet."}
                 {" "}Changing quarter saves minutes and resets this clock.
               </div>
-              {benchPairs.length > 0 && (
+              {subPairs.length > 0 && (
                 <div style={{marginBottom:12,padding:"10px",borderRadius:10,background:"rgba(0,0,0,0.2)",border:"1px solid rgba(46,204,113,0.28)"}}>
                   <div style={{fontSize:13,fontWeight:800,color:C.text,marginBottom:4}}>Subs go in for who?</div>
                   <div style={{fontSize:11,color:C.muted,lineHeight:1.4,marginBottom:8}}>
-                    {benchPairs.every(pair => pair.fromPlan)
+                    {subPairs.every(pair => pair.fromPlan)
                       ? `Everyone on the bench comes on, matching Q${Math.min(quarter + 1, totalQuarters)}.`
-                      : plannedNext
-                        ? "Everyone on the bench comes on. Pairs that match the next quarter are marked. The rest replace whoever has played the most."
-                        : "Everyone on the bench comes on, for the players who have been on the longest."}
+                      : "Dotted lines on the field show the same pairs. Tap a bench player, then a field player, to move a line."}
                   </div>
-                  {benchPairs.map(pair => (
+                  {subPairs.map(pair => (
                     <div key={`${pair.inId}-${pair.outId}`} style={{display:"flex",alignItems:"baseline",gap:6,marginBottom:6,flexWrap:"wrap",fontSize:13}}>
                       <span style={{fontWeight:800,color:"#2ecc71"}}>{playerName(pair.inId)}</span>
                       <span style={{fontSize:10,fontWeight:800,color:"#2ecc71",letterSpacing:"0.04em"}}>ON</span>
@@ -2692,7 +2756,7 @@ function TabGame({ format, league, onLeagueChange, onFormatChange, players, setP
               <div style={{fontSize:11,color:C.muted,fontWeight:700,marginBottom:6,textTransform:"uppercase",letterSpacing:"0.05em"}}>Who’s next</div>
               {whosNext.length === 0 && <div style={{fontSize:12,color:C.muted,marginBottom:8}}>Bench is empty.</div>}
               {whosNext.slice(0, 3).map(p => {
-                const partner = benchPairs.find(pair => pair.inId === p.id);
+                const partner = subPairs.find(pair => pair.inId === p.id);
                 const offPlayer = partner ? playerName(partner.outId) : longestOnField()?.name;
                 return (
                   <div key={p.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:6,fontSize:12,flexWrap:"wrap"}}>
@@ -2763,7 +2827,7 @@ function TabGame({ format, league, onLeagueChange, onFormatChange, players, setP
           )}
           <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,marginBottom:10}}>
             <div style={{fontSize:11,color:C.gold,fontWeight:700,textTransform:"uppercase",letterSpacing:"0.07em"}}>
-              Q{quarter} Field — drag to swap, tap as fallback
+              Q{quarter} field
             </div>
             <button onClick={()=>setShowShare(true)} style={{
               minHeight:36, padding:"6px 12px", borderRadius:8,
@@ -2800,15 +2864,6 @@ function TabGame({ format, league, onLeagueChange, onFormatChange, players, setP
                 color:quarter===4?"rgba(255,255,255,0.1)":C.gold,fontSize:22,padding:"0 6px",lineHeight:1,
               }}>›</button>
             </div>
-            <div style={{display:"flex",justifyContent:"center",gap:6,marginBottom:8}}>
-              {[1,2,3,4].map(q=>(
-                <div key={q} onClick={()=>setQuarter(q)} style={{
-                  width:q===quarter?20:6,height:6,borderRadius:3,cursor:"pointer",
-                  background:q===quarter?C.gold:"rgba(255,255,255,0.15)",
-                  transition:"all 0.2s",
-                }}/>
-              ))}
-            </div>
             {currentLineup && (
               <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:8}}>
                 <Btn sm secondary onClick={scramblePositions}>Scramble positions</Btn>
@@ -2827,54 +2882,84 @@ function TabGame({ format, league, onLeagueChange, onFormatChange, players, setP
             {scrambleNote && (
               <div style={{fontSize:11,color:C.muted,textAlign:"center",marginBottom:6,lineHeight:1.4}}>{scrambleNote}</div>
             )}
-            <SoccerField
-              lineup={currentLineup}
-              onTap={onFieldTap}
-              selectedIdx={swapSel?.type==="field" ? swapSel.idx : null}
-              quarter={quarter}
-              drag={drag}
-              hoverToken={drag.hover}
-            />
-            {currentLineup && (
-              <div
-                data-drop="bench-zone"
-                style={{
-                  marginTop:12, padding:10, borderRadius:10,
-                  border:`1px dashed ${drag.hover==="bench-zone" ? C.gold : C.border}`,
-                  background: drag.hover==="bench-zone" ? "rgba(232,160,32,0.12)" : "rgba(255,255,255,0.03)",
-                }}
-              >
-                <div style={{fontSize:11,color:C.gold,fontWeight:700,marginBottom:6,textTransform:"uppercase",letterSpacing:"0.05em"}}>Q{quarter} Bench</div>
-                <div style={{fontSize:10,color:C.muted,lineHeight:1.4,marginBottom:8}}>
-                  Drag onto a field spot, or drop a field player here to swap with who’s next.
+            <div ref={pitchWrapRef} style={{position:"relative", display:"flex", gap:6, alignItems:"stretch"}}>
+              {currentLineup && (
+                <div
+                  data-drop="bench-zone"
+                  style={{
+                    width:76, flexShrink:0, display:"flex", flexDirection:"column",
+                    justifyContent:(currentLineup.bench||[]).length ? "space-evenly" : "center",
+                    gap:6, padding:"8px 4px", borderRadius:10,
+                    border: drag.hover==="bench-zone" ? "2px solid #2ecc71" : "1px dashed rgba(255,255,255,0.22)",
+                    background: drag.hover==="bench-zone" ? "rgba(46,204,113,0.14)" : "rgba(255,255,255,0.02)",
+                    boxShadow: drag.hover==="bench-zone" ? "0 0 0 4px rgba(46,204,113,0.28)" : "none",
+                  }}
+                >
+                  <div style={{fontSize:9, color:C.muted, fontWeight:800, textAlign:"center", letterSpacing:"0.06em"}}>BENCH</div>
+                  {(currentLineup.bench||[]).length === 0 && (
+                    <div style={{fontSize:10, color:C.muted, textAlign:"center", lineHeight:1.3}}>All on</div>
+                  )}
+                  {(currentLineup.bench||[]).map(p => {
+                    const selected = swapSel?.type==="bench" && swapSel.playerId===p.id;
+                    const hovered = drag.hover===`bench:${p.id}`;
+                    const sourced = drag.activeSource?.type==="bench" && drag.activeSource.playerId===p.id;
+                    const partner = subPairs.find(pair => pair.inId === p.id);
+                    return (
+                      <div key={p.id}
+                        data-sub-from={p.id}
+                        data-drop={`bench:${p.id}`}
+                        onPointerDown={e => drag.pointerDown(e, { type:"bench", playerId:p.id }, `#${p.number}`)}
+                        onPointerMove={drag.pointerMove}
+                        onPointerUp={e => { if (drag.pointerUp(e) === "tap") onBenchTap(p.id); }}
+                        onPointerCancel={e => { drag.pointerUp(e); }}
+                        style={{
+                          minHeight:48, borderRadius:8, padding:"6px 4px",
+                          border: hovered || sourced ? "2px solid #2ecc71" : selected ? "2px solid #2ecc71" : `1px solid ${C.border}`,
+                          boxShadow: hovered ? "0 0 0 4px rgba(46,204,113,0.45)" : "none",
+                          background: selected ? "rgba(46,204,113,0.16)" : "rgba(0,0,0,0.25)",
+                          color:C.text, textAlign:"center", cursor:"grab", touchAction:"none",
+                          opacity: sourced ? 0.55 : 1,
+                        }}
+                      >
+                        <div style={{fontSize:13, fontWeight:800, lineHeight:1.1}}>#{p.number}</div>
+                        <div style={{fontSize:10, fontWeight:700, lineHeight:1.2, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap"}}>
+                          {(p.name || "").split(" ")[0]}
+                        </div>
+                        {partner && (
+                          <div style={{fontSize:8, color:"#2ecc71", fontWeight:700, marginTop:2, lineHeight:1.2}}>
+                            for {(playerName(partner.outId) || "").split(" ")[0]}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
-                {(currentLineup.bench||[]).length === 0 && (
-                  <div style={{fontSize:12,color:C.muted}}>Everyone active is on the field.</div>
-                )}
-                {(currentLineup.bench||[]).map(p => {
-                  const selected = swapSel?.type==="bench" && swapSel.playerId===p.id;
-                  const hovered = drag.hover===`bench:${p.id}`;
-                  return (
-                    <div key={p.id}
-                      data-drop={`bench:${p.id}`}
-                      onPointerDown={e => drag.pointerDown(e, { type:"bench", playerId:p.id }, `#${p.number}`)}
-                      onPointerMove={drag.pointerMove}
-                      onPointerUp={e => { if (drag.pointerUp(e) === "tap") onBenchTap(p.id); }}
-                      onPointerCancel={e => { drag.pointerUp(e); }}
-                      style={{
-                        fontSize:12, color:C.text, padding:"10px 8px", marginBottom:4,
-                        borderRadius:8, border:`1px solid ${selected || hovered ? C.gold : C.border}`,
-                        background: selected || hovered ? "rgba(232,160,32,0.16)" : "rgba(255,255,255,0.03)",
-                        display:"flex", justifyContent:"space-between", alignItems:"center",
-                        cursor:"grab", minHeight:48, touchAction:"none",
-                      }}>
-                      <span>#{p.number} {p.name}</span>
-                      <span style={{fontSize:10,color:C.muted}}>
-                        {selected ? "Selected" : anyMinutes ? `${Math.round(minutesById[p.id] || 0)}m` : `${quartersOf(p.id)}/${minQ} Q`}
-                      </span>
-                    </div>
-                  );
-                })}
+              )}
+              <div style={{flex:"1 1 auto", minWidth:0}}>
+                <SoccerField
+                  lineup={currentLineup}
+                  onTap={onFieldTap}
+                  selectedIdx={swapSel?.type==="field" ? swapSel.idx : null}
+                  quarter={quarter}
+                  drag={drag}
+                  hoverToken={drag.hover}
+                  activeSource={drag.activeSource}
+                />
+              </div>
+              {subLines.length > 0 && (
+                <svg style={{position:"absolute", inset:0, width:"100%", height:"100%", pointerEvents:"none", zIndex:4, overflow:"visible"}}>
+                  {subLines.map(line => (
+                    <line key={line.key}
+                      x1={line.x1} y1={line.y1} x2={line.x2} y2={line.y2}
+                      stroke="#2ecc71" strokeWidth="2" strokeDasharray="5 4" strokeLinecap="round"
+                    />
+                  ))}
+                </svg>
+              )}
+            </div>
+            {currentLineup && (
+              <div style={{fontSize:11, color:C.muted, lineHeight:1.4, marginTop:8, textAlign:"center"}}>
+                Tap a bench player, then the field player they replace. A green ring means release will swap.
               </div>
             )}
           </div>
@@ -2890,12 +2975,18 @@ function TabGame({ format, league, onLeagueChange, onFormatChange, players, setP
       {drag.ghost && (
         <div style={{
           position:"fixed", left:drag.ghost.x, top:drag.ghost.y, transform:"translate(-50%,-50%)",
-          width:48, height:48, borderRadius:"50%", pointerEvents:"none", zIndex:10000,
+          width:52, height:52, borderRadius:"50%", pointerEvents:"none", zIndex:10000,
           background:`linear-gradient(135deg,${C.gold},${C.goldDark})`,
+          border:"3px solid #2ecc71",
           display:"flex", alignItems:"center", justifyContent:"center",
           fontWeight:800, fontSize:12, color:"#1a1a1a",
-          boxShadow:"0 8px 24px rgba(0,0,0,0.45)",
-        }}>{drag.ghost.label}</div>
+          boxShadow:"0 0 0 6px rgba(46,204,113,0.45), 0 8px 24px rgba(0,0,0,0.45)",
+        }}>
+          {drag.ghost.label}
+          <div style={{position:"absolute", top:"100%", marginTop:6, fontSize:11, fontWeight:800, color:"#2ecc71", whiteSpace:"nowrap", textShadow:"0 1px 2px #000"}}>
+            Release to swap
+          </div>
+        </div>
       )}
 
       {/* GAME STATUS  bottom of Game Day tab */}
@@ -4140,7 +4231,7 @@ function CoachKitLoaded() {
       color: C.text,
     }}>
       {/* HEADER */}
-      <div style={{
+      <div id="ck-app-header" style={{
         background:"linear-gradient(180deg,#111810 0%,#0c140a 100%)",
         borderBottom:`1px solid rgba(232,160,32,0.18)`,
         position:"sticky",top:0,zIndex:100,

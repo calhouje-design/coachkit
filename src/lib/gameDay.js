@@ -156,11 +156,28 @@ export function setAppearanceCreditFor(credit, playerId, quarter, countWhileOff)
 
 /** Visual mark only. "entered" came on mid-quarter. "left" started and came off. */
 export function noteSubSegment(segments, playerId, quarter, kind) {
-  if (!playerId || !quarter || !kind) return segments || {};
+  const q = Number(quarter);
+  if (!playerId || !q || !kind) return segments || {};
   return {
     ...(segments || {}),
-    [playerId]: { ...(segments?.[playerId] || {}), [quarter]: kind },
+    [playerId]: { ...(segments?.[playerId] || {}), [q]: kind },
   };
+}
+
+/** Read a quarter mark after JSON storage, where keys come back as strings. */
+export function segmentAt(segments, playerId, quarter) {
+  const row = segments?.[playerId];
+  if (!row) return null;
+  const q = Number(quarter);
+  return row[q] || row[String(q)] || null;
+}
+
+/** Record who left and who entered for this quarter. Q2–Q4 use the same marks as Q1. */
+export function markQuarterSub(segments, quarter, outId, inId) {
+  let next = segments || {};
+  if (outId) next = noteSubSegment(next, outId, quarter, "left");
+  if (inId) next = noteSubSegment(next, inId, quarter, "entered");
+  return next;
 }
 
 export function clearSubSegmentsFrom(segments, fromQuarter) {
@@ -230,6 +247,40 @@ export function planBenchRotation(lineup, { minutesById = {}, nextLineup = null 
     pairs.push({ inId: restIn[i].id, outId: restOut[i].id, fromPlan: false });
   }
   return pairs;
+}
+
+/** Point one bench player at a field player. Drops any line that used either player. */
+export function retargetPair(manualPairs, benchId, fieldPlayerId) {
+  const kept = (manualPairs || []).filter(pair => pair.inId !== benchId && pair.outId !== fieldPlayerId);
+  if (!benchId || !fieldPlayerId || benchId === fieldPlayerId) return kept;
+  return [...kept, { inId: benchId, outId: fieldPlayerId, fromPlan: false }];
+}
+
+/**
+ * Manual lines win. Automatic pairs fill the bench players who are still free,
+ * as long as that field player is not already taken.
+ */
+export function pairsForDisplay(autoPairs, manualPairs, lineup) {
+  const benchIds = new Set((lineup?.bench || []).map(player => player?.id).filter(Boolean));
+  const fieldIds = new Set((lineup?.starters || []).map(slot => slot?.player?.id).filter(Boolean));
+  const manual = (manualPairs || []).filter(pair => benchIds.has(pair.inId) && fieldIds.has(pair.outId));
+  const usedIn = new Set(manual.map(pair => pair.inId));
+  const usedOut = new Set(manual.map(pair => pair.outId));
+  const auto = (autoPairs || []).filter(pair =>
+    benchIds.has(pair.inId) && fieldIds.has(pair.outId) && !usedIn.has(pair.inId) && !usedOut.has(pair.outId)
+  );
+  auto.forEach(pair => {
+    usedIn.add(pair.inId);
+    usedOut.add(pair.outId);
+  });
+  const extra = [];
+  const openBench = (lineup?.bench || []).map(player => player?.id).filter(id => id && !usedIn.has(id));
+  const openField = (lineup?.starters || []).map(slot => slot?.player?.id).filter(id => id && !usedOut.has(id));
+  const count = Math.min(openBench.length, openField.length);
+  for (let i = 0; i < count; i++) {
+    extra.push({ inId: openBench[i], outId: openField[i], fromPlan: false });
+  }
+  return [...manual, ...auto, ...extra];
 }
 
 /** Apply planned pairs on this quarter only. Slot positions stay put. */
