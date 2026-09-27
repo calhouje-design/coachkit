@@ -19,7 +19,6 @@ import {
   resolveDragDrop,
   pullFromPlan,
   addLateArrival,
-  countedQuarters,
   setAppearanceCreditFor,
   noteSubSegment,
   segmentAt,
@@ -30,6 +29,9 @@ import {
   applyBenchRotation,
   retargetPair,
   pairsForDisplay,
+  equityHalves,
+  formatQuarterEquity,
+  lineStopAtCircle,
 } from "./lib/gameDay.js";
 import { useTeamCloud } from "./lib/teamCloud.js";
 
@@ -802,7 +804,7 @@ function uid() { return Math.random().toString(36).slice(2,9); }
  * 5. Within each quarter, players are sorted to best-fit positions.
  * 6. Players who sat last quarter get priority for the next one (rotation).
  */
-function scheduleWholeGame(players, format, league, lockedLineups = {}, fromQuarter = 1) {
+function scheduleWholeGame(players, format, league, lockedLineups = {}, fromQuarter = 1, segments = {}, credit = {}) {
   const TOTAL_Q  = 4;
   const slots    = POSITIONS_BY_FORMAT[format] || POSITIONS_BY_FORMAT["7v7"];
   const slotsPerQ = slots.length;
@@ -821,17 +823,19 @@ function scheduleWholeGame(players, format, league, lockedLineups = {}, fromQuar
   };
   const active = shuffle(players.filter(p => !p.injured && !p.out));
 
-  // Count play time already locked in from previous quarters
-  const alreadyPlayed = {};
-  active.forEach(p => { alreadyPlayed[p.id] = 0; });
-  for (let q = 1; q < fromQuarter; q++) {
-    const l = lockedLineups[q];
-    if (!l) continue;
-    l.starters.forEach(s => {
-      if (s.player && alreadyPlayed[s.player.id] !== undefined)
-        alreadyPlayed[s.player.id]++;
+  // Locked quarters count in halves so a mid-quarter split still owes time.
+  const minHalves = minQ * 2;
+  const lockedQuarters = [];
+  for (let q = 1; q < fromQuarter; q++) if (lockedLineups[q]) lockedQuarters.push(q);
+  const alreadyHalves = {};
+  active.forEach(p => {
+    alreadyHalves[p.id] = equityHalves(p.id, {
+      lineups: lockedLineups,
+      segments,
+      credit,
+      quarters: lockedQuarters,
     });
-  }
+  });
 
   // Quarters remaining to schedule
   const remainingQs = [];
@@ -845,7 +849,8 @@ function scheduleWholeGame(players, format, league, lockedLineups = {}, fromQuar
   // minQ total  but subtract what they've already played
   const quota = {};
   active.forEach(p => {
-    const remaining = Math.max(0, minQ - alreadyPlayed[p.id]);
+    const remainingHalves = Math.max(0, minHalves - (alreadyHalves[p.id] || 0));
+    const remaining = Math.ceil(remainingHalves / 2);
     quota[p.id] = Math.min(remaining, R); // can't exceed remaining quarters
   });
 
@@ -1261,7 +1266,6 @@ function SoccerField({ lineup, onTap, selectedIdx, quarter, drag, hoverToken, ac
         return (
           <div key={idx}
             data-drop={`field:${idx}`}
-            data-sub-to={slot.player?.id || undefined}
             onPointerDown={e => {
               if (!slot.player) return;
               drag?.pointerDown(e, { type: "field", idx }, `#${slot.player.number}`);
@@ -1277,12 +1281,14 @@ function SoccerField({ lineup, onTap, selectedIdx, quarter, drag, hoverToken, ac
               top:`calc(${(py/480)*100}% - 30px)`,
               textAlign:"center", width:56,
               cursor: slot.player ? "grab" : "default",
-              zIndex: isSelected || isHovered || isSource ? 10 : 3,
+              zIndex: isSelected || isHovered || isSource ? 12 : 6,
               touchAction: "none",
               opacity: isSource ? 0.55 : 1,
             }}>
-            <div style={{
-              width: 46, height: 46, borderRadius:"50%", margin:"0 auto",
+            <div
+              data-sub-to={slot.player?.id || undefined}
+              style={{
+              width: 46, height: 46, borderRadius:"50%", margin:"0 auto", position:"relative", zIndex:2,
               background: slot.player
                 ? `linear-gradient(135deg,${C.gold},${C.goldDark})`
                 : "rgba(255,255,255,0.1)",
@@ -1303,12 +1309,14 @@ function SoccerField({ lineup, onTap, selectedIdx, quarter, drag, hoverToken, ac
               ) : <span style={{color:"rgba(255,255,255,0.4)",fontSize:10}}></span>}
             </div>
             {slot.player && (
-              <div style={{marginTop:2, height:11, position:"relative"}}>
+              <div style={{marginTop:2, height:11, position:"relative", zIndex:3}}>
                 <div style={{
-                  position:"absolute", left:"50%", top:0,
+                  position:"absolute", left:"50%", top:0, zIndex:3,
                   transform:"translateX(-50%)",
-                  fontSize:8, color:"#fff", fontWeight:700,
-                  textShadow:"0 1px 3px rgba(0,0,0,0.9), 0 0 4px rgba(0,0,0,0.6)",
+                  fontSize:9, color:"#fff", fontWeight:800,
+                  background:"rgba(10,13,15,0.78)",
+                  borderRadius:4, padding:"1px 4px",
+                  textShadow:"0 1px 2px rgba(0,0,0,0.9)",
                   letterSpacing:"0.02em", whiteSpace:"nowrap", lineHeight:1.2,
                   pointerEvents:"none",
                 }} title={slot.player.name}>
@@ -1527,6 +1535,8 @@ function TabGame({ format, league, onLeagueChange, onFormatChange, players, setP
   const [fairWarn, setFairWarn] = useState(null);
   const [scrambleNote, setScrambleNote] = useState(null);
   const [planSub, setPlanSub] = useState(false);
+  const [subsOpen, setSubsOpen] = useState(false);
+  const [halfFlash, setHalfFlash] = useState(false);
   const [queueNote, setQueueNote] = useState(null);
   const [running, setRunning] = useState(false);
   const [stintStart, setStintStart] = useState({});
@@ -1576,6 +1586,7 @@ function TabGame({ format, league, onLeagueChange, onFormatChange, players, setP
   useEffect(() => { bankRef.current = minuteBank || {}; }, [minuteBank]);
   useEffect(() => { quarterRef.current = quarter; }, [quarter]);
   useEffect(() => { lineupsRef.current = lineupsByQuarter; }, [lineupsByQuarter]);
+  const halfFired = useRef(false);
   useEffect(() => {
     if (!running) return undefined;
     const id = setInterval(() => setClockSec(sec => sec + 1), 1000);
@@ -1598,19 +1609,35 @@ function TabGame({ format, league, onLeagueChange, onFormatChange, players, setP
   const gate           = feasibility({ activeCount: active.length, slotsPerPeriod: needed, minQ, periods: totalQuarters });
 
   const periodMin = (LEAGUE_RULES[league] || {}).periodMin || 10;
-  const targetMin = (rule.minFraction || 0) * totalQuarters * periodMin;
-  const lineupQuartersOf = (id, lineups = lineupsByQuarter) => {
-    const found = [];
-    for (let q = 1; q <= totalQuarters; q++) {
-      if (lineups?.[q]?.starters?.some(slot => slot.player?.id === id)) found.push(q);
+  useEffect(() => {
+    const half = periodMin * 30;
+    if (half <= 0) return undefined;
+    if (clockSec < half) {
+      halfFired.current = false;
+      setHalfFlash(false);
+      return undefined;
     }
-    return found;
-  };
-  const quartersOf = (id, lineups = lineupsByQuarter, credit = appearanceCredit) =>
-    countedQuarters(lineupQuartersOf(id, lineups), credit?.[id]);
+    if (!running) {
+      halfFired.current = true;
+      return undefined;
+    }
+    if (halfFired.current) return undefined;
+    halfFired.current = true;
+    setHalfFlash(true);
+    try {
+      if (typeof navigator !== "undefined" && typeof navigator.vibrate === "function") {
+        navigator.vibrate([200, 100, 200, 100, 200]);
+      }
+    } catch { /* this browser does not vibrate */ }
+    const id = setTimeout(() => setHalfFlash(false), 2000);
+    return () => clearTimeout(id);
+  }, [running, periodMin, clockSec >= periodMin * 30]);
+  const minHalves = minQ * 2;
+  const halvesFor = (id, lineups = lineupsByQuarter, credit = appearanceCredit, segments = subSegments) =>
+    equityHalves(id, { lineups, segments, credit, quarters: [1, 2, 3, 4] });
 
   const violations = allPlanned && minQ > 0
-    ? players.filter(p => !p.injured && !p.out && !p.midGameInjury && quartersOf(p.id) < minQ)
+    ? players.filter(p => !p.injured && !p.out && !p.midGameInjury && halvesFor(p.id) < minHalves)
     : [];
 
   useEffect(() => { setSwapSel(null); }, [quarter]);
@@ -1680,16 +1707,12 @@ function TabGame({ format, league, onLeagueChange, onFormatChange, players, setP
     return () => window.removeEventListener("pagehide", onLeave);
   }, []);
 
-  const notePlanResult = (nextLineups, roster = players, credit = appearanceCredit) => {
+  const notePlanResult = (nextLineups, roster = players, credit = appearanceCredit, segments = subSegments) => {
     setLineupsByQuarter(nextLineups);
     setFairWarn(null);
     setScrambleNote(null);
     setSwapSel(null);
-    const quarters = (id) => countedQuarters(
-      [1, 2, 3, 4].filter(q => nextLineups?.[q]?.starters?.some(slot => slot.player?.id === id)),
-      credit?.[id]
-    );
-    const viol = roster.filter(p => !p.injured && !p.out && !p.midGameInjury && minQ > 0 && quarters(p.id) < minQ);
+    const viol = roster.filter(p => !p.injured && !p.out && !p.midGameInjury && minQ > 0 && halvesFor(p.id, nextLineups, credit, segments) < minHalves);
     const complete = [1,2,3,4].every(q => nextLineups?.[q]);
     if (viol.length === 0 && complete) {
       setJustRegenned(true);
@@ -1699,17 +1722,19 @@ function TabGame({ format, league, onLeagueChange, onFormatChange, players, setP
     }
   };
 
-  const warnIfShort = (nextLineups, roster = players, credit = appearanceCredit) => {
+  const warnIfShort = (nextLineups, roster = players, credit = appearanceCredit, segments = subSegments) => {
     const unplanned = [1,2,3,4].filter(q => !nextLineups?.[q]).length;
-    const quarters = (id) => countedQuarters(
-      [1, 2, 3, 4].filter(q => nextLineups?.[q]?.starters?.some(slot => slot.player?.id === id)),
-      credit?.[id]
-    );
-    const short = roster.filter(p =>
-      !p.injured && !p.out && !p.midGameInjury && quarters(p.id) + unplanned < minQ
-    );
+    const short = roster.filter(p => {
+      if (p.injured || p.out || p.midGameInjury || minQ <= 0) return false;
+      const halves = halvesFor(p.id, nextLineups, credit, segments);
+      return halves + unplanned * 2 < minHalves;
+    });
     if (short.length) {
-      setFairWarn(`${short.map(p => p.name.split(" ")[0]).join(", ")} would finish under ${minQ} of ${totalQuarters} quarters on the field. Other quarters were not changed.`);
+      const names = short.map(p => {
+        const halves = halvesFor(p.id, nextLineups, credit, segments);
+        return `${p.name.split(" ")[0]} ${formatQuarterEquity(halves)}/${minQ}`;
+      }).join(", ");
+      setFairWarn(`${names} would finish under ${minQ} of ${totalQuarters} quarters. A split counts as half. Other quarters were not changed.`);
     } else {
       setFairWarn(null);
     }
@@ -1739,18 +1764,21 @@ function TabGame({ format, league, onLeagueChange, onFormatChange, players, setP
       return;
     }
     if (fromQ === 1) resetLiveTracking();
-    else {
-      if (fromQ === quarter) commitOnFieldMinutes();
-      setSubSegments(prev => clearSubSegmentsFrom(prev, fromQ));
-    }
+    else if (fromQ === quarter) commitOnFieldMinutes();
     const locked = {};
     if (fromQ > 1) {
       for (let q = 1; q < fromQ; q++) {
         if (lineupsByQuarter[q]) locked[q] = lineupsByQuarter[q];
       }
     }
-    const result = scheduleWholeGame(players, format, league, locked, fromQ);
-    notePlanResult(result, players, fromQ === 1 ? {} : appearanceCredit);
+    const nextSegments = fromQ === 1 ? {} : clearSubSegmentsFrom(subSegments, fromQ);
+    if (fromQ > 1) setSubSegments(nextSegments);
+    const result = scheduleWholeGame(
+      players, format, league, locked, fromQ,
+      nextSegments,
+      fromQ === 1 ? {} : appearanceCredit,
+    );
+    notePlanResult(result, players, fromQ === 1 ? {} : appearanceCredit, nextSegments);
     if (fromQ !== 1 && fromQ === quarter && running) {
       const next = {};
       (result[quarter]?.starters || []).forEach(slot => {
@@ -1844,8 +1872,9 @@ function TabGame({ format, league, onLeagueChange, onFormatChange, players, setP
     let credit = appearanceCredit;
     if (outgoing) credit = setAppearanceCreditFor(credit, outgoing.id, qKey, true);
     if (incoming) credit = setAppearanceCreditFor(credit, incoming.id, qKey, false);
+    const nextSegments = markQuarterSub(subSegments, qKey, outgoing?.id, incoming?.id);
     setAppearanceCredit(credit);
-    setSubSegments(prev => markQuarterSub(prev, qKey, outgoing?.id, incoming?.id));
+    setSubSegments(nextSegments);
     if (doBank) {
       if (outgoing) bankLeave(outgoing.id);
       beginStint(incoming.id);
@@ -1854,7 +1883,7 @@ function TabGame({ format, league, onLeagueChange, onFormatChange, players, setP
     const nextAll = { ...lineupsByQuarter, [qKey]: nextLineup };
     setLineupsByQuarter(nextAll);
     setSwapSel(null);
-    warnIfShort(nextAll, players, credit);
+    warnIfShort(nextAll, players, credit, nextSegments);
     return true;
   };
 
@@ -1984,7 +2013,10 @@ function TabGame({ format, league, onLeagueChange, onFormatChange, players, setP
   const scrambleMembership = () => {
     if (!currentLineup) return;
     commitOnFieldMinutes();
-    const result = redrawQuarterMembership(players, lineupsByQuarter, quarter, minQ, totalQuarters);
+    const result = redrawQuarterMembership(players, lineupsByQuarter, quarter, minQ, totalQuarters, {
+      segments: subSegments,
+      credit: appearanceCredit,
+    });
     setSwapSel(null);
     if (!result.ok) {
       if (running) {
@@ -2086,12 +2118,17 @@ function TabGame({ format, league, onLeagueChange, onFormatChange, players, setP
         if (!from || !to) return null;
         const a = from.getBoundingClientRect();
         const b = to.getBoundingClientRect();
+        const x1 = a.right - box.left;
+        const y1 = a.top + a.height / 2 - box.top;
+        const cx = b.left + b.width / 2 - box.left;
+        const cy = b.top + b.height / 2 - box.top;
+        const end = lineStopAtCircle(x1, y1, cx, cy, Math.min(b.width, b.height) / 2);
         return {
           key: `${pair.inId}-${pair.outId}`,
-          x1: Math.round(a.right - box.left),
-          y1: Math.round(a.top + a.height / 2 - box.top),
-          x2: Math.round(b.left + b.width / 2 - box.left),
-          y2: Math.round(b.top + b.height / 2 - box.top),
+          x1: Math.round(x1),
+          y1: Math.round(y1),
+          x2: Math.round(end.x),
+          y2: Math.round(end.y),
         };
       }).filter(Boolean);
       setSubLines(prev => {
@@ -2134,7 +2171,7 @@ function TabGame({ format, league, onLeagueChange, onFormatChange, players, setP
     const involved = new Set(subPairs.flatMap(pair => [pair.inId, pair.outId]));
     setSubQueue(prev => (prev || []).filter(row => row.quarter !== quarter || (!involved.has(row.inId) && !involved.has(row.outId))));
     setSwapSel(null);
-    warnIfShort(nextAll, players, credit);
+    warnIfShort(nextAll, players, credit, segments);
     const named = subPairs.map(pair => `${playerName(pair.inId)} on for ${playerName(pair.outId)}`).join(", ");
     setQueueNote(`Bench is on: ${named}. Minutes already played stay. Other quarters stay.`);
   };
@@ -2154,7 +2191,7 @@ function TabGame({ format, league, onLeagueChange, onFormatChange, players, setP
       return null;
     }).filter(Boolean);
     if (!bits.length) return "Still on the bench. A box turns green once they are on the field. The count is still quarters, not minutes.";
-    return `${bits.join(". ")}. Each of those still counts as one quarter on the field.`;
+    return `${bits.join(". ")}. A full quarter counts as 1. A split counts as half. Minimum is ${minQ} of ${totalQuarters}.`;
   };
 
   // Build rotation grid: rows = players, cols = Q1Q4
@@ -2368,6 +2405,10 @@ function TabGame({ format, league, onLeagueChange, onFormatChange, players, setP
           .ck-field { order: -1; width: 100%; }
           .ck-roster { order: 1; width: 100%; max-width: none !important; }
         }
+        @keyframes ckHalfFlash {
+          0%, 100% { transform: scale(1); }
+          50% { transform: scale(1.08); }
+        }
       `}</style>
       <div className="ck-gameday-row" style={{display:"flex",gap:18,flexWrap:"wrap"}}>
 
@@ -2462,7 +2503,7 @@ function TabGame({ format, league, onLeagueChange, onFormatChange, players, setP
               Plan full game
             </Btn>
             <div style={{fontSize:11,color:C.muted,lineHeight:1.45,marginBottom:allPlanned?10:0}}>
-              Fills Q1–Q4. Target is {minQ} of {totalQuarters} quarters on the field per eligible player. Quarter counts, not clock minutes.
+              Fills Q1–Q4. Target is {minQ} of {totalQuarters} quarters ({minHalves} halves). A split counts as half.
             </div>
             {allPlanned && (
               <Btn secondary full disabled={!gate.ok} onClick={() => planWholeGame(quarter)}>
@@ -2483,7 +2524,7 @@ function TabGame({ format, league, onLeagueChange, onFormatChange, players, setP
               }
             </div>
             <div style={{fontSize:11,color:C.muted,lineHeight:1.45,marginBottom:8}}>
-              Solid green is a full quarter on the field. A split box is a mid-quarter sub. Gray is the bench. Minimum is still {minQ} of {totalQuarters} quarters, not minutes.
+              Solid green is one quarter. A split box is half a quarter. Gray is the bench. Minimum is {minQ} of {totalQuarters} quarters, which is {minHalves} halves.
             </div>
             <div style={{display:"flex",gap:10,marginBottom:10,flexWrap:"wrap"}}>
               {[
@@ -2560,10 +2601,10 @@ function TabGame({ format, league, onLeagueChange, onFormatChange, players, setP
                 const isInjured = !!p.injured;
                 const isOut     = !!p.out;
                 const isInactive = isInjured || isOut;
-                const planned = quartersOf(p.id);
+                const plannedHalves = halvesFor(p.id);
                 const target  = minQ;
-                const pct     = target > 0 ? Math.min(1, planned / target) : 1;
-                const ok      = planned >= target || target === 0 || isMGI || isInactive;
+                const pct     = minHalves > 0 ? Math.min(1, plannedHalves / minHalves) : 1;
+                const ok      = plannedHalves >= minHalves || target === 0 || isMGI || isInactive;
                 const isEditing = editingPlayerId === p.id;
                 const tinyBtn = {
                   minHeight:32, padding:"4px 8px", fontSize:10, fontWeight:700, fontFamily:"inherit",
@@ -2604,7 +2645,7 @@ function TabGame({ format, league, onLeagueChange, onFormatChange, players, setP
                         <span style={{display:"flex",alignItems:"center",gap:6,flexShrink:0}}>
                           {onNow && <span style={{fontSize:9,fontWeight:800,color:"#0a0d0f",background:"#2ecc71",borderRadius:3,padding:"2px 5px"}}>IN</span>}
                           <span style={{fontSize:10,color:ok?"#2ecc71":C.gold,fontWeight:700}}>
-                            {allPlanned ? `${planned}/${target}Q` : ""}
+                            {allPlanned ? `${formatQuarterEquity(plannedHalves)}/${target}Q` : ""}
                           </span>
                         </span>
                       )}
@@ -2704,15 +2745,29 @@ function TabGame({ format, league, onLeagueChange, onFormatChange, players, setP
         </div>
 
         {/* -- FIELD -- */}
-        <div className="ck-field" style={{flex:"2 1 320px",minWidth:0}}>
+        <div className="ck-field" style={{flex:"2 1 320px",minWidth:0,display:"flex",flexDirection:"column"}}>
           {currentLineup && (
-            <Card style={{marginBottom:12,border:`1px solid ${C.gold}`,background:"rgba(232,160,32,0.06)"}}>
+            <Card style={{order:2,marginTop:12,border:`1px solid ${C.gold}`,background:"rgba(232,160,32,0.06)"}}>
+              <button onClick={() => setSubsOpen(v => !v)} style={{
+                width:"100%", minHeight:44, display:"flex", justifyContent:"space-between", alignItems:"center",
+                gap:8, marginBottom: subsOpen ? 8 : 0, padding:0, border:"none", background:"transparent",
+                color:C.gold, cursor:"pointer", fontFamily:"inherit",
+              }}>
+                <span style={{fontSize:12,fontWeight:800,textTransform:"uppercase",letterSpacing:"0.06em"}}>Mid-quarter subs</span>
+                <span style={{fontSize:12,fontWeight:800,color:C.text}}>{subsOpen ? "Hide" : "Show"}</span>
+              </button>
+              {!subsOpen && (
+                <div style={{fontSize:11,color:C.muted,lineHeight:1.4}}>
+                  {pendingSwaps.length}/3 queued. Play clock is on the field ({clockLabel(clockSec)} / {periodMin}:00).
+                </div>
+              )}
+              {subsOpen && (
+              <>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:8,flexWrap:"wrap"}}>
-                <div style={{fontSize:12,color:C.gold,fontWeight:800,textTransform:"uppercase",letterSpacing:"0.06em"}}>Mid-quarter subs</div>
+                <div style={{fontSize:11,color:C.muted,lineHeight:1.4}}>Same clock as the field. Tap the clock on the pitch to start or stop. It flashes at half.</div>
                 <div style={{fontSize:12,fontWeight:800,color:C.text}}>{clockLabel(clockSec)} <span style={{color:C.muted,fontWeight:600}}>/ {periodMin}:00</span></div>
               </div>
               <div style={{display:"flex",gap:8,marginBottom:10,flexWrap:"wrap"}}>
-                <Btn sm secondary onClick={() => running ? setRunning(false) : startClock()}>{running ? "Pause clock" : "Start clock"}</Btn>
                 <button onClick={() => { setPlanSub(v => !v); setSwapSel(null); setQueueNote(null); }} style={{
                   minHeight:36, padding:"8px 12px", borderRadius:8, cursor:"pointer", fontFamily:"inherit",
                   fontSize:12, fontWeight:800,
@@ -2823,6 +2878,8 @@ function TabGame({ format, league, onLeagueChange, onFormatChange, players, setP
                   ))}
                 </div>
               )}
+              </>
+              )}
             </Card>
           )}
           <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,marginBottom:10}}>
@@ -2889,12 +2946,22 @@ function TabGame({ format, league, onLeagueChange, onFormatChange, players, setP
                   style={{
                     width:76, flexShrink:0, display:"flex", flexDirection:"column",
                     justifyContent:(currentLineup.bench||[]).length ? "space-evenly" : "center",
-                    gap:6, padding:"8px 4px", borderRadius:10,
+                    gap:6, padding:"8px 4px", borderRadius:10, position:"relative", zIndex:5,
                     border: drag.hover==="bench-zone" ? "2px solid #2ecc71" : "1px dashed rgba(255,255,255,0.22)",
-                    background: drag.hover==="bench-zone" ? "rgba(46,204,113,0.14)" : "rgba(255,255,255,0.02)",
+                    background: drag.hover==="bench-zone" ? "rgba(46,204,113,0.14)" : "rgba(10,13,15,0.55)",
                     boxShadow: drag.hover==="bench-zone" ? "0 0 0 4px rgba(46,204,113,0.28)" : "none",
                   }}
                 >
+                  <button
+                    onClick={() => { setPlanSub(v => !v); setSwapSel(null); setQueueNote(planSub ? null : "Sub mode. Tap who leaves, then who comes on. Drag still swaps now."); }}
+                    style={{
+                      minHeight:44, borderRadius:8, border:"none", cursor:"pointer", fontFamily:"inherit",
+                      fontSize:13, fontWeight:900, letterSpacing:"0.04em",
+                      background: planSub ? `linear-gradient(135deg,${C.gold},${C.goldDark})` : "rgba(255,255,255,0.08)",
+                      color: planSub ? "#0a0d0f" : C.text,
+                      boxShadow: planSub ? "0 0 0 3px rgba(232,160,32,0.35)" : "none",
+                    }}
+                  >{planSub ? "SUB ON" : "SUB"}</button>
                   <div style={{fontSize:9, color:C.muted, fontWeight:800, textAlign:"center", letterSpacing:"0.06em"}}>BENCH</div>
                   {(currentLineup.bench||[]).length === 0 && (
                     <div style={{fontSize:10, color:C.muted, textAlign:"center", lineHeight:1.3}}>All on</div>
@@ -2935,7 +3002,7 @@ function TabGame({ format, league, onLeagueChange, onFormatChange, players, setP
                   })}
                 </div>
               )}
-              <div style={{flex:"1 1 auto", minWidth:0}}>
+              <div style={{flex:"1 1 auto", minWidth:0, position:"relative", zIndex:5}}>
                 <SoccerField
                   lineup={currentLineup}
                   onTap={onFieldTap}
@@ -2945,9 +3012,30 @@ function TabGame({ format, league, onLeagueChange, onFormatChange, players, setP
                   hoverToken={drag.hover}
                   activeSource={drag.activeSource}
                 />
+                {currentLineup && (
+                  <button
+                    onClick={() => running ? setRunning(false) : startClock()}
+                    aria-label={running ? "Pause play clock" : "Start play clock"}
+                    style={{
+                      position:"absolute", top:8, right:8, zIndex:14,
+                      minWidth:74, minHeight:44, padding:"4px 8px", borderRadius:10, cursor:"pointer",
+                      fontFamily:"inherit", fontWeight:900, lineHeight:1.05,
+                      border: halfFlash ? "2px solid #fff" : "1px solid rgba(255,255,255,0.75)",
+                      background: halfFlash ? C.gold : "rgba(10,13,15,0.88)",
+                      color: halfFlash ? "#0a0d0f" : "#fff",
+                      boxShadow: halfFlash ? "0 0 0 6px rgba(232,160,32,0.55)" : "0 2px 10px rgba(0,0,0,0.45)",
+                      animation: halfFlash ? "ckHalfFlash 0.35s linear 5" : "none",
+                    }}
+                  >
+                    <div style={{fontSize:16}}>{clockLabel(clockSec)}</div>
+                    <div style={{fontSize:8, fontWeight:800, letterSpacing:"0.04em", marginTop:2}}>
+                      {halfFlash ? "HALF" : running ? "TAP STOP" : "TAP START"}
+                    </div>
+                  </button>
+                )}
               </div>
               {subLines.length > 0 && (
-                <svg style={{position:"absolute", inset:0, width:"100%", height:"100%", pointerEvents:"none", zIndex:4, overflow:"visible"}}>
+                <svg style={{position:"absolute", inset:0, width:"100%", height:"100%", pointerEvents:"none", zIndex:2, overflow:"visible"}}>
                   {subLines.map(line => (
                     <line key={line.key}
                       x1={line.x1} y1={line.y1} x2={line.x2} y2={line.y2}
@@ -3002,7 +3090,7 @@ function TabGame({ format, league, onLeagueChange, onFormatChange, players, setP
         {midGameInjured.length > 0 && (
           <div style={{fontSize:11,color:"#e74c3c",marginTop:3}}> {midGameInjured.length} mid-game injur{midGameInjured.length>1?"ies":"y"}</div>
         )}
-        {minQ > 0 && <div style={{fontSize:11,color:C.muted,marginTop:3}}>Min: {minQ} of {totalQuarters} quarters on the field ({Math.round(rule.minFraction*100)}%). Not clock minutes.</div>}
+        {minQ > 0 && <div style={{fontSize:11,color:C.muted,marginTop:3}}>Min: {minQ} of {totalQuarters} quarters ({minHalves} halves, {Math.round(rule.minFraction*100)}%). A split counts as half.</div>}
       </Card>
 
       {/* Share Lineup Modal */}

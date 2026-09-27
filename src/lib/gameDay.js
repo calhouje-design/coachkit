@@ -193,14 +193,62 @@ export function clearSubSegmentsFrom(segments, fromQuarter) {
 }
 
 /**
- * Chart cell. Fair-play still counts the quarter; this only separates a full
- * stint from a mid-quarter sub.
+ * Chart cell. A full quarter is two halves. A mid-quarter sub is one half.
  */
 export function playCellKind({ onField, segment }) {
   if (onField && (segment === "entered" || segment === "left")) return "partial-on";
   if (onField) return "full";
   if (segment === "left" || segment === "entered") return "partial-off";
   return "bench";
+}
+
+/** Halves in one chart cell. Credit without a split still counts the whole quarter. */
+export function cellHalves({ onField, segment, credited = false } = {}) {
+  const kind = playCellKind({ onField: !!onField, segment: segment || null });
+  if (kind === "full") return 2;
+  if (kind === "partial-on" || kind === "partial-off") return 1;
+  if (credited) return 2;
+  return 0;
+}
+
+/**
+ * Sum of half-quarters. 50% of 4 quarters is 4 halves.
+ * A split does not also add the appearance credit for that same quarter.
+ */
+export function equityHalves(playerId, { lineups, segments, credit, quarters = [1, 2, 3, 4] } = {}) {
+  const credited = new Set((credit?.[playerId] || []).map(q => Number(q)));
+  let sum = 0;
+  quarters.forEach(q => {
+    const lineup = lineups?.[q] || lineups?.[String(q)];
+    if (!lineup) return;
+    const on = (lineup.starters || []).some(slot => slot.player?.id === playerId);
+    sum += cellHalves({
+      onField: on,
+      segment: segmentAt(segments, playerId, q),
+      credited: credited.has(Number(q)),
+    });
+  });
+  return sum;
+}
+
+/** 0, ½, 1, 1½, 2… so the label matches the green and split boxes. */
+export function formatQuarterEquity(halves) {
+  const n = Math.max(0, Math.round(Number(halves) || 0));
+  const whole = Math.floor(n / 2);
+  const half = n % 2 === 1;
+  if (half && whole === 0) return "½";
+  if (half) return `${whole}½`;
+  return String(whole);
+}
+
+/** Point on the circle closest to (x1, y1), so a connector stops on the rim. */
+export function lineStopAtCircle(x1, y1, cx, cy, radius) {
+  const dx = x1 - cx;
+  const dy = y1 - cy;
+  const len = Math.hypot(dx, dy);
+  const r = Math.max(0, Number(radius) || 0);
+  if (len < 0.001) return { x: cx, y: cy };
+  return { x: cx + (dx / len) * r, y: cy + (dy / len) * r };
 }
 
 function byMinutesThenName(minutesById, direction) {

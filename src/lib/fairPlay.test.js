@@ -90,6 +90,29 @@ test("redraw one quarter keeps other quarters and the minimum", () => {
   assert.equal(result.lineup.starters.filter(s => s.player).length, 6);
 });
 
+test("redraw keeps a half-short player on the field", () => {
+  const players = [player("ann"), player("bea"), player("cal")];
+  const pair = (a, b) => ({
+    starters: [
+      { pos: "GK", player: players.find(p => p.id === a) },
+      { pos: "CF", player: players.find(p => p.id === b) },
+    ],
+    bench: players.filter(p => p.id !== a && p.id !== b),
+  });
+  const lineups = {
+    1: pair("ann", "bea"),
+    2: pair("ann", "bea"),
+    3: pair("bea", "cal"),
+    4: pair("bea", "cal"),
+  };
+  const segments = { ann: { 1: "entered" } };
+  for (let i = 0; i < 8; i++) {
+    const result = redrawQuarterMembership(players, lineups, 4, 2, 4, { segments });
+    assert.equal(result.ok, true);
+    assert.deepEqual(result.lineup.starters.map(s => s.player.id).sort(), ["ann", "cal"]);
+  }
+});
+
 test("redraw refuses when this quarter cannot cover everyone who still needs it", () => {
   const players = Array.from({ length: 7 }, (_, i) => player(`p${i + 1}`));
   const empty = {

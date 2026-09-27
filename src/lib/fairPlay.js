@@ -1,4 +1,6 @@
-/** Quarter-based fair play helpers. Round One counts quarters on the field, not clock minutes. */
+/** Quarter-based fair play helpers. A full quarter is two halves. A mid-quarter split is one. */
+
+import { equityHalves } from "./gameDay.js";
 
 export const TOTAL_PERIODS = 4;
 
@@ -123,24 +125,25 @@ function sameIdSet(a, b) {
  * Mode B: redraw who plays ONE quarter. Other quarters stay locked.
  * Refuses when the only legal on-field sets would drop someone under minQ.
  */
-export function redrawQuarterMembership(players, lineupsByQuarter, quarter, minQ, totalQuarters = TOTAL_PERIODS) {
+export function redrawQuarterMembership(players, lineupsByQuarter, quarter, minQ, totalQuarters = TOTAL_PERIODS, options = {}) {
   const lineup = lineupsByQuarter?.[quarter];
   if (!lineup?.starters?.length) {
     return { ok: false, reason: `Plan Q${quarter} before redrawing it.` };
   }
   const active = (players || []).filter(p => !p.injured && !p.out);
-  const playedOther = {};
-  active.forEach(p => { playedOther[p.id] = 0; });
-  for (let q = 1; q <= totalQuarters; q++) {
-    if (q === quarter) continue;
-    const starters = lineupsByQuarter?.[q]?.starters || [];
-    starters.forEach(s => {
-      if (s.player && playedOther[s.player.id] !== undefined) playedOther[s.player.id]++;
+  const otherQuarters = Array.from({ length: totalQuarters }, (_, i) => i + 1).filter(q => q !== quarter);
+  const playedHalves = {};
+  active.forEach(p => {
+    playedHalves[p.id] = equityHalves(p.id, {
+      lineups: lineupsByQuarter,
+      segments: options.segments,
+      credit: options.credit,
+      quarters: otherQuarters.filter(q => lineupsByQuarter?.[q]),
     });
-  }
-  const unplannedOther = Array.from({ length: totalQuarters }, (_, i) => i + 1)
-    .filter(q => q !== quarter && !lineupsByQuarter?.[q]).length;
-  const mustStart = active.filter(p => (playedOther[p.id] || 0) + unplannedOther < minQ);
+  });
+  const unplannedOther = otherQuarters.filter(q => !lineupsByQuarter?.[q]).length;
+  const minHalves = minQ * 2;
+  const mustStart = active.filter(p => (playedHalves[p.id] || 0) + unplannedOther * 2 < minHalves);
   const slots = lineup.starters.map(s => s.pos);
   if (mustStart.length > slots.length) {
     return {

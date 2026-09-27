@@ -24,6 +24,10 @@ import {
   markQuarterSub,
   retargetPair,
   pairsForDisplay,
+  cellHalves,
+  equityHalves,
+  formatQuarterEquity,
+  lineStopAtCircle,
 } from "./gameDay.js";
 
 test("appearance credit stacks on lineup quarters and banked minutes are not replaced", () => {
@@ -232,6 +236,41 @@ test("two taps retarget the dotted line without dropping the other bench players
   const shown = pairsForDisplay(auto, manual, lineup);
   assert.deepEqual(shown.find(pair => pair.inId === "bea"), { inId: "bea", outId: "dee", fromPlan: false });
   assert.equal(shown.find(pair => pair.inId === "cal").outId, "sam");
+});
+
+test("half-quarters sum to the 50% line and a split is not a full quarter", () => {
+  const lineups = {
+    1: { starters: [{ player: { id: "jaxon" } }], bench: [] },
+    2: { starters: [{ player: { id: "ellis" } }], bench: [{ id: "jaxon" }] },
+    3: { starters: [{ player: { id: "jaxon" } }], bench: [] },
+    4: { starters: [{ player: { id: "ellis" } }], bench: [{ id: "jaxon" }] },
+  };
+  const segments = { jaxon: { 1: "entered" } };
+  const halves = equityHalves("jaxon", { lineups, segments, credit: { jaxon: [1] }, quarters: [1, 2, 3, 4] });
+  assert.equal(cellHalves({ onField: true, segment: "entered", credited: true }), 1);
+  assert.equal(cellHalves({ onField: true, segment: null }), 2);
+  assert.equal(cellHalves({ onField: false, segment: "left", credited: true }), 1);
+  assert.equal(cellHalves({ onField: false, segment: null, credited: true }), 2);
+  assert.equal(halves, 3);
+  assert.equal(formatQuarterEquity(halves), "1½");
+  assert.ok(halves < 4, "3 halves is under 2 of 4 quarters");
+  const met = equityHalves("ellis", {
+    lineups,
+    segments: {},
+    credit: {},
+    quarters: [1, 2, 3, 4],
+  });
+  assert.equal(met, 4);
+  assert.equal(formatQuarterEquity(5), "2½");
+});
+
+test("a connector stops on the circle rim, not the center", () => {
+  const end = lineStopAtCircle(0, 50, 100, 50, 20);
+  assert.equal(Math.round(end.x), 80);
+  assert.equal(Math.round(end.y), 50);
+  const diagonal = lineStopAtCircle(0, 0, 30, 40, 10);
+  const dist = Math.hypot(diagonal.x - 30, diagonal.y - 40);
+  assert.ok(Math.abs(dist - 10) < 0.001);
 });
 
 test("bringing the bench on keeps positions and does not touch the original lineup", () => {
