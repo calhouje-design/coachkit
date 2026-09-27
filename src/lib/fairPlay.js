@@ -1,6 +1,6 @@
 /** Quarter-based fair play helpers. A full quarter is two halves. A mid-quarter split is one. */
 
-import { equityHalves } from "./gameDay.js";
+import { equityHalves, isGkPosition, GK_FULL_QUARTER_REASON } from "./gameDay.js";
 
 export const TOTAL_PERIODS = 4;
 
@@ -111,15 +111,44 @@ export function assignPositions(players, slotPositions) {
   });
 }
 
-/** Mode A: same kids on the field, new positions. Other quarters are untouched. */
+/** Mode A: same kids on the field, new positions. The goalkeeper stays in goal. */
 export function scrambleQuarterPositions(lineup) {
   if (!lineup?.starters?.length) return lineup;
-  const slotPositions = lineup.starters.map(s => s.pos);
-  const onField = lineup.starters.map(s => s.player).filter(Boolean);
+  const movablePos = [];
+  const movable = [];
+  lineup.starters.forEach(slot => {
+    if (isGkPosition(slot.pos)) return;
+    movablePos.push(slot.pos);
+    if (slot.player) movable.push(slot.player);
+  });
+  const scrambled = assignPositions(movable, movablePos);
+  let cursor = 0;
+  const starters = lineup.starters.map(slot => {
+    if (isGkPosition(slot.pos)) return { ...slot };
+    const next = scrambled[cursor++] || { pos: slot.pos, player: null };
+    return { pos: slot.pos, player: next.player || null };
+  });
   return {
-    starters: assignPositions(onField, slotPositions),
+    starters,
     bench: [...(lineup.bench || [])],
   };
+}
+
+function pinGoalkeeper(nextLineup, previous) {
+  const keeper = (previous?.starters || []).find(slot => isGkPosition(slot.pos) && slot.player);
+  if (!keeper) return nextLineup;
+  const starters = (nextLineup.starters || []).map(slot => ({ ...slot }));
+  const gkIdx = starters.findIndex(slot => isGkPosition(slot.pos));
+  if (gkIdx < 0) return nextLineup;
+  if (starters[gkIdx].player?.id === keeper.player.id) return nextLineup;
+  let bench = [...(nextLineup.bench || [])];
+  const otherIdx = starters.findIndex(slot => slot.player?.id === keeper.player.id);
+  const displaced = starters[gkIdx].player || null;
+  starters[gkIdx] = { ...starters[gkIdx], player: keeper.player };
+  if (otherIdx >= 0) starters[otherIdx] = { ...starters[otherIdx], player: displaced };
+  else if (displaced) bench = [...bench.filter(player => player.id !== keeper.player.id), displaced];
+  else bench = bench.filter(player => player.id !== keeper.player.id);
+  return { starters, bench };
 }
 
 function sameIdSet(a, b) {
@@ -151,6 +180,14 @@ export function redrawQuarterMembership(players, lineupsByQuarter, quarter, minQ
   const unplannedOther = otherQuarters.filter(q => !lineupsByQuarter?.[q]).length;
   const minHalves = minQ * 2;
   const mustStart = active.filter(p => (playedHalves[p.id] || 0) + unplannedOther * 2 < minHalves);
+  const keeper = lineup.starters.find(slot => isGkPosition(slot.pos))?.player;
+  const lockGoalkeeper = !!options.lockGoalkeeper && keeper && active.some(player => player.id === keeper.id);
+  if (lockGoalkeeper && !mustStart.some(player => player.id === keeper.id)) {
+    if (mustStart.length + 1 > lineup.starters.length) {
+      return { ok: false, reason: GK_FULL_QUARTER_REASON };
+    }
+    mustStart.push(active.find(player => player.id === keeper.id));
+  }
   const slots = lineup.starters.map(s => s.pos);
   if (mustStart.length > slots.length) {
     return {
@@ -173,8 +210,9 @@ export function redrawQuarterMembership(players, lineupsByQuarter, quarter, minQ
   }
   const starterIds = new Set(chosen.map(p => p.id));
   const bench = active.filter(p => !starterIds.has(p.id));
+  const drafted = { starters: assignPositions(chosen, slots), bench };
   return {
     ok: true,
-    lineup: { starters: assignPositions(chosen, slots), bench },
+    lineup: lockGoalkeeper ? pinGoalkeeper(drafted, lineup) : drafted,
   };
 }

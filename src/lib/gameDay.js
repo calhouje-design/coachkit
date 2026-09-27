@@ -1,5 +1,17 @@
 /** Game Day helpers for Round Two. Quarter fair-play stays the rule; minutes are a live gap on top of it. */
 
+/** The goalkeeper plays the whole quarter. See HARD_RULES.md. */
+export const GK_FULL_QUARTER_REASON = "The goalkeeper plays the whole quarter. Change goalkeepers between quarters.";
+
+export function isGkPosition(pos) {
+  return String(pos || "").trim().toUpperCase() === "GK";
+}
+
+export function goalkeeperId(lineup) {
+  const slot = (lineup?.starters || []).find(item => isGkPosition(item?.pos) && item?.player?.id);
+  return slot?.player?.id || null;
+}
+
 export function effectiveQuarters(playCount, creditedQuarters) {
   const extra = Array.isArray(creditedQuarters) ? creditedQuarters.length : 0;
   return (playCount || 0) + extra;
@@ -375,9 +387,11 @@ function byMinutesThenName(minutesById, direction) {
  */
 export function planBenchRotation(lineup, { minutesById = {}, nextLineup = null } = {}) {
   const bench = [...(lineup?.bench || [])].filter(Boolean);
+  const gkId = goalkeeperId(lineup);
   const field = (lineup?.starters || [])
+    .filter(slot => !isGkPosition(slot?.pos))
     .map(slot => slot?.player)
-    .filter(Boolean);
+    .filter(player => player && player.id !== gkId);
   if (!bench.length || !field.length) return [];
 
   const nextOn = new Set((nextLineup?.starters || []).map(slot => slot.player?.id).filter(Boolean));
@@ -406,10 +420,11 @@ export function planBenchRotation(lineup, { minutesById = {}, nextLineup = null 
   return pairs;
 }
 
-/** Point one bench player at a field player. Drops any line that used either player. */
-export function retargetPair(manualPairs, benchId, fieldPlayerId) {
-  const kept = (manualPairs || []).filter(pair => pair.inId !== benchId && pair.outId !== fieldPlayerId);
+/** Point one bench player at a field player. Drops any line that used either player. Never the goalkeeper. */
+export function retargetPair(manualPairs, benchId, fieldPlayerId, lineup) {
+  const kept = (manualPairs || []).filter(pair => pair.inId !== benchId && pair.outId !== fieldPlayerId && pair.outId !== goalkeeperId(lineup));
   if (!benchId || !fieldPlayerId || benchId === fieldPlayerId) return kept;
+  if (lineup && fieldPlayerId === goalkeeperId(lineup)) return kept;
   return [...kept, { inId: benchId, outId: fieldPlayerId, fromPlan: false }];
 }
 
@@ -418,13 +433,19 @@ export function retargetPair(manualPairs, benchId, fieldPlayerId) {
  * as long as that field player is not already taken.
  */
 export function pairsForDisplay(autoPairs, manualPairs, lineup) {
+  const gkId = goalkeeperId(lineup);
   const benchIds = new Set((lineup?.bench || []).map(player => player?.id).filter(Boolean));
-  const fieldIds = new Set((lineup?.starters || []).map(slot => slot?.player?.id).filter(Boolean));
-  const manual = (manualPairs || []).filter(pair => benchIds.has(pair.inId) && fieldIds.has(pair.outId));
+  const fieldIds = new Set(
+    (lineup?.starters || [])
+      .filter(slot => !isGkPosition(slot?.pos) && slot?.player?.id !== gkId)
+      .map(slot => slot?.player?.id)
+      .filter(Boolean)
+  );
+  const manual = (manualPairs || []).filter(pair => benchIds.has(pair.inId) && fieldIds.has(pair.outId) && pair.outId !== gkId);
   const usedIn = new Set(manual.map(pair => pair.inId));
   const usedOut = new Set(manual.map(pair => pair.outId));
   const auto = (autoPairs || []).filter(pair =>
-    benchIds.has(pair.inId) && fieldIds.has(pair.outId) && !usedIn.has(pair.inId) && !usedOut.has(pair.outId)
+    benchIds.has(pair.inId) && fieldIds.has(pair.outId) && pair.outId !== gkId && !usedIn.has(pair.inId) && !usedOut.has(pair.outId)
   );
   auto.forEach(pair => {
     usedIn.add(pair.inId);
@@ -432,7 +453,10 @@ export function pairsForDisplay(autoPairs, manualPairs, lineup) {
   });
   const extra = [];
   const openBench = (lineup?.bench || []).map(player => player?.id).filter(id => id && !usedIn.has(id));
-  const openField = (lineup?.starters || []).map(slot => slot?.player?.id).filter(id => id && !usedOut.has(id));
+  const openField = (lineup?.starters || [])
+    .filter(slot => !isGkPosition(slot?.pos))
+    .map(slot => slot?.player?.id)
+    .filter(id => id && id !== gkId && !usedOut.has(id));
   const count = Math.min(openBench.length, openField.length);
   for (let i = 0; i < count; i++) {
     extra.push({ inId: openBench[i], outId: openField[i], fromPlan: false });
@@ -465,15 +489,35 @@ export function maxConsecutiveSits(masks) {
   return max;
 }
 
-function assignHalfSlots(startersPool, slotNames) {
-  const assigned = new Set();
+function assignHalfSlots(startersPool, slotNames, lockedGk = []) {
+  const assigned = new Set(lockedGk.filter(Boolean).map(player => player.id));
   const pool = [...startersPool];
+  let gkCursor = 0;
   return slotNames.map(slotPos => {
+    if (isGkPosition(slotPos) && lockedGk[gkCursor]) {
+      const player = lockedGk[gkCursor];
+      gkCursor += 1;
+      return { pos: slotPos, player };
+    }
     let pick = pool.find(p => !assigned.has(p.id) && (p.positions || []).includes(slotPos));
     if (!pick) pick = pool.find(p => !assigned.has(p.id));
     if (pick) assigned.add(pick.id);
     return { pos: slotPos, player: pick || null };
   });
+}
+
+function pickQuarterGoalkeepers(active, slotNames, remaining, satLast) {
+  const count = slotNames.filter(isGkPosition).length;
+  if (!count) return [];
+  const listed = active.filter(player => (player.positions || []).some(isGkPosition));
+  const pool = listed.length ? listed : active;
+  const rank = (a, b) => {
+    const aSat = satLast.has(a.id) ? 1 : 0;
+    const bSat = satLast.has(b.id) ? 1 : 0;
+    if (aSat !== bSat) return bSat - aSat;
+    return (remaining[b.id] || 0) - (remaining[a.id] || 0) || String(a.id).localeCompare(String(b.id));
+  };
+  return [...pool].sort(rank).slice(0, count);
 }
 
 /**
@@ -544,9 +588,15 @@ export function scheduleHalfRotation(players, slots, {
   const onHalf = {};
   remainingQs.forEach(q => { onHalf[q] = { 1: [], 2: [] }; });
 
+  const gkByQuarter = {};
   remainingQs.forEach(q => {
+    const keepers = pickQuarterGoalkeepers(active, slotNames, remaining, satLast);
+    gkByQuarter[q] = keepers;
     [1, 2].forEach(half => {
-      const chosen = [];
+      const chosen = keepers.map(player => player.id);
+      chosen.forEach(id => {
+        if (remaining[id] > 0) remaining[id] -= 1;
+      });
       const eligible = () => active.filter(p => remaining[p.id] > 0 && !chosen.includes(p.id));
       eligible().filter(p => satLast.has(p.id)).sort(byNeed).forEach(p => {
         if (chosen.length < slotNames.length) chosen.push(p.id);
@@ -554,7 +604,7 @@ export function scheduleHalfRotation(players, slots, {
       eligible().sort(byNeed).forEach(p => {
         if (chosen.length < slotNames.length) chosen.push(p.id);
       });
-      chosen.forEach(id => { remaining[id] -= 1; });
+      chosen.filter(id => !keepers.some(player => player.id === id)).forEach(id => { remaining[id] -= 1; });
       onHalf[q][half] = chosen;
       satLast = new Set(active.filter(p => !chosen.includes(p.id)).map(p => p.id));
     });
@@ -575,7 +625,7 @@ export function scheduleHalfRotation(players, slots, {
     const second = new Set(onHalf[q][2]);
     const startersPool = active.filter(p => second.has(p.id));
     const bench = active.filter(p => !second.has(p.id));
-    lineups[q] = { starters: assignHalfSlots(startersPool, slotNames), bench };
+    lineups[q] = { starters: assignHalfSlots(startersPool, slotNames, gkByQuarter[q] || []), bench };
     active.forEach(p => {
       const early = first.has(p.id);
       const late = second.has(p.id);
@@ -647,7 +697,7 @@ export function applyBenchRotation(lineup, pairs) {
   (pairs || []).forEach(pair => {
     const idx = starters.findIndex(slot => slot.player?.id === pair.outId);
     const bIdx = bench.findIndex(player => player.id === pair.inId);
-    if (idx < 0 || bIdx < 0) return;
+    if (idx < 0 || bIdx < 0 || isGkPosition(starters[idx].pos)) return;
     const outgoing = starters[idx].player;
     const incoming = bench[bIdx];
     starters = starters.map((slot, i) => (i === idx ? { ...slot, player: incoming } : slot));

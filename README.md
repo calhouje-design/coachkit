@@ -2,6 +2,12 @@
 
 SAY East youth soccer manager. Vite + React. Sign-in is Clerk. Team data is stored in Supabase and cached in the browser.
 
+## Hard rules
+
+Non-negotiable rules for every programming update are in [HARD_RULES.md](HARD_RULES.md).
+
+The goalkeeper plays a full quarter. No mid-quarter substitution for the goalkeeper. A new goalkeeper is allowed only between quarters.
+
 Live production: https://coachkit-ten.vercel.app
 
 ## Setup
@@ -58,7 +64,7 @@ On the field, drag a player onto another spot or the bench to swap. That uses po
 
 The play-time chart uses solid green for a full quarter and a split box for half a quarter. A sub in Q2, Q3, or Q4 marks that quarter the same way as Q1. Fair play adds those halves. Two of four quarters is four halves. The label uses the same sum as the boxes.
 
-The quarter control stays at the top of Game Day. Bench players sit beside the pitch. Dotted lines cross the field and stop on the circle, with the player names above the lines. SUB runs those listed swaps when sub mode is on. With nobody paired, it turns on two-tap planning. Full quarters turns half swaps off and plans whole quarters. Sub mode plans halves, spreads sit time, and still targets 4 of 8. The play clock sits on the top-right of the pitch. Tap it to start or stop. At half the quarter it flashes and vibrates when the phone allows it. The mid-quarter card is below the field and closed until you open it.
+The quarter control stays at the top of Game Day. Bench players sit beside the pitch. Dotted lines cross the field and stop on the circle, with the player names above the lines. Those lines never point at the goalkeeper. SUB runs the listed field swaps when sub mode is on and leaves the goalkeeper in goal. With nobody paired, it turns on two-tap planning. Full quarters turns half swaps off and plans whole quarters. Sub mode plans halves, spreads sit time, and still targets 4 of 8. The play clock sits on the top-right of the pitch. Tap it to start or stop. At half the quarter it flashes and vibrates when the phone allows it. The mid-quarter card is below the field and closed until you open it.
 
 Strategy sits beside the field. The arrows and the scrolling shapes change the formation for this quarter. Save strategy to game day writes that shape, the sub mode, the lineups, and both share sheets onto the season game log. That log already syncs with the Supabase `games` rows. No new table.
 

@@ -89,6 +89,9 @@ test("scramble positions keeps the same players on that quarter only", () => {
   assert.deepEqual(after, before);
   assert.deepEqual(next.bench.map(p => p.id).sort(), lineups[2].bench.map(p => p.id).sort());
   assert.deepEqual(next.starters.map(s => s.pos), lineups[2].starters.map(s => s.pos));
+  const gkBefore = lineups[2].starters.find(s => s.pos === "GK").player.id;
+  const gkAfter = next.starters.find(s => s.pos === "GK").player.id;
+  assert.equal(gkAfter, gkBefore);
 });
 
 test("redraw one quarter keeps other quarters and the minimum", () => {
@@ -101,6 +104,16 @@ test("redraw one quarter keeps other quarters and the minimum", () => {
   assert.deepEqual(merged[4], lineups[4]);
   assert.equal(playersUnderMin(players, merged, 2, 4).length, 0);
   assert.equal(result.lineup.starters.filter(s => s.player).length, 6);
+});
+
+test("redraw during a quarter keeps the goalkeeper in goal", () => {
+  const { players, lineups } = rotationFixture();
+  const gkBefore = lineups[2].starters.find(s => s.pos === "GK").player.id;
+  for (let i = 0; i < 6; i++) {
+    const result = redrawQuarterMembership(players, lineups, 2, 2, 4, { lockGoalkeeper: true });
+    assert.equal(result.ok, true);
+    assert.equal(result.lineup.starters.find(s => s.pos === "GK").player.id, gkBefore);
+  }
 });
 
 test("redraw keeps a half-short player on the field", () => {

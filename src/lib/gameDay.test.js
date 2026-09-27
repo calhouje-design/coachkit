@@ -142,6 +142,20 @@ test("play chart distinguishes a full quarter from a partial sub", () => {
   assert.equal(playCellKind({ onField: false, segment: null }), "bench");
 });
 
+test("a mid-quarter plan never sends the goalkeeper off, even with the most minutes", () => {
+  const lineup = {
+    starters: [
+      { pos: "GK", player: { id: "sam", name: "Sam" } },
+      { pos: "CF", player: { id: "dee", name: "Dee" } },
+    ],
+    bench: [{ id: "bea", name: "Bea" }],
+  };
+  const pairs = planBenchRotation(lineup, { minutesById: { sam: 40, dee: 1, bea: 0 } });
+  assert.deepEqual(pairs, [{ inId: "bea", outId: "dee", fromPlan: false }]);
+  const swapped = applyBenchRotation(lineup, [{ inId: "bea", outId: "sam", fromPlan: false }, ...pairs]);
+  assert.equal(swapped.starters.find(slot => slot.pos === "GK").player.id, "sam");
+});
+
 test("bench rotation names who comes on for whom from the next quarter", () => {
   const lineup = {
     starters: [
@@ -167,10 +181,8 @@ test("bench rotation names who comes on for whom from the next quarter", () => {
     minutesById: { sam: 10, dee: 4, bea: 1, cal: 2 },
     nextLineup: next,
   });
-  assert.equal(pairs.length, 2);
-  assert.ok(pairs.every(pair => pair.fromPlan));
-  assert.deepEqual(pairs.map(pair => pair.inId).sort(), ["bea", "cal"]);
-  assert.deepEqual(pairs.map(pair => pair.outId).sort(), ["dee", "sam"]);
+  assert.deepEqual(pairs, [{ inId: "bea", outId: "dee", fromPlan: true }]);
+  assert.ok(pairs.every(pair => pair.outId !== "sam"));
 });
 
 test("everyone on the bench is paired even when the next quarter only covers some", () => {
@@ -197,8 +209,8 @@ test("everyone on the bench is paired even when the next quarter only covers som
   const pairs = planBenchRotation(lineup, { minutesById: {}, nextLineup: next });
   assert.deepEqual(pairs, [
     { inId: "c", outId: "b", fromPlan: true },
-    { inId: "d", outId: "a", fromPlan: false },
   ]);
+  assert.ok(pairs.every(pair => pair.outId !== "a"));
 });
 
 test("a mid-quarter sub in Q2, Q3, or Q4 is stored and read like Q1", () => {
@@ -240,10 +252,12 @@ test("two taps retarget the dotted line without dropping the other bench players
     { inId: "bea", outId: "sam", fromPlan: true },
     { inId: "cal", outId: "dee", fromPlan: true },
   ];
-  const manual = retargetPair([], "bea", "dee");
+  const refused = retargetPair([], "bea", "sam", lineup);
+  assert.deepEqual(refused, []);
+  const manual = retargetPair([], "bea", "dee", lineup);
   const shown = pairsForDisplay(auto, manual, lineup);
   assert.deepEqual(shown.find(pair => pair.inId === "bea"), { inId: "bea", outId: "dee", fromPlan: false });
-  assert.equal(shown.find(pair => pair.inId === "cal").outId, "sam");
+  assert.equal(shown.find(pair => pair.outId === "sam"), undefined);
 });
 
 test("half-quarters sum to the 50% line and a split is not a full quarter", () => {
@@ -337,6 +351,11 @@ test("sub mode spreads sit halves and still reaches 4 of 8", () => {
   });
   const split = Object.values(segments).some(row => Object.keys(row).length > 0);
   assert.equal(split, true);
+  [1, 2, 3, 4].forEach(q => {
+    const gk = lineups[q].starters.find(slot => slot.pos === "GK");
+    assert.ok(gk?.player, `Q${q} has a goalkeeper`);
+    assert.equal(segments[gk.player.id]?.[q], undefined, `Q${q} goalkeeper is not a mid-quarter sub`);
+  });
 });
 
 test("sub mode keeps earlier quarters when replanning from Q3", () => {
@@ -420,6 +439,7 @@ test("share sheets keep the bench, the sub lines, and the green-bar cells", () =
   assert.equal(field.quarters[0].bench[0].id, "g");
   assert.equal(field.quarters[0].pairs.length, 1);
   assert.equal(field.quarters[0].pairs[0].inId, "g");
+  assert.notEqual(field.quarters[0].pairs[0].outId, "a");
   assert.ok(field.quarters[0].starters.every(slot => slot.x > 0 && slot.y > 0));
   const quiet = shareFieldSheet({ lineups, subMode: false });
   assert.equal(quiet.quarters[0].pairs.length, 0);

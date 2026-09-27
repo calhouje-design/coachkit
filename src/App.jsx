@@ -32,6 +32,9 @@ import {
   equityHalves,
   formatQuarterEquity,
   lineStopAtCircle,
+  isGkPosition,
+  goalkeeperId,
+  GK_FULL_QUARTER_REASON,
   fieldMarker,
   shareFieldSheet,
   sharePlayTimeSheet,
@@ -1862,9 +1865,20 @@ function TabGame({ format, league, onLeagueChange, onFormatChange, players, setP
     });
   };
 
+  const gkLocked = () => subMode || running || (clockRef.current || 0) > 0;
+  const refuseGoalkeeper = () => {
+    setQueueNote(GK_FULL_QUARTER_REASON);
+    setSwapSel(null);
+    return true;
+  };
+
   const handleSwap = (idxA, idxB) => {
     if (!currentLineup) return;
     const newStarters = currentLineup.starters.map(slot => ({ ...slot }));
+    if (gkLocked() && (isGkPosition(newStarters[idxA]?.pos) || isGkPosition(newStarters[idxB]?.pos))) {
+      refuseGoalkeeper();
+      return;
+    }
     const playerA = newStarters[idxA]?.player || null;
     newStarters[idxA] = { ...newStarters[idxA], player: newStarters[idxB]?.player || null };
     newStarters[idxB] = { ...newStarters[idxB], player: playerA };
@@ -1881,17 +1895,25 @@ function TabGame({ format, league, onLeagueChange, onFormatChange, players, setP
     const bench = [...(lineup.bench || [])];
     const bIdx = bench.findIndex(p => p.id === benchPlayerId);
     if (bIdx < 0 || fieldIdx == null || !lineup.starters[fieldIdx]) return false;
+    if (isGkPosition(lineup.starters[fieldIdx].pos) && (options.midQuarter || gkLocked())) {
+      refuseGoalkeeper();
+      return false;
+    }
     const starters = lineup.starters.map(slot => ({ ...slot }));
     const incoming = bench[bIdx];
     const outgoing = starters[fieldIdx].player || null;
     if (outgoing?.id === incoming.id) { setSwapSel(null); return false; }
+    const fullQuarterGk = isGkPosition(starters[fieldIdx].pos);
     starters[fieldIdx] = { ...starters[fieldIdx], player: incoming };
     if (outgoing) bench[bIdx] = outgoing;
     else bench.splice(bIdx, 1);
     let credit = appearanceCredit;
-    if (outgoing) credit = setAppearanceCreditFor(credit, outgoing.id, qKey, true);
-    if (incoming) credit = setAppearanceCreditFor(credit, incoming.id, qKey, false);
-    const nextSegments = markQuarterSub(subSegments, qKey, outgoing?.id, incoming?.id);
+    let nextSegments = subSegments;
+    if (!fullQuarterGk) {
+      if (outgoing) credit = setAppearanceCreditFor(credit, outgoing.id, qKey, true);
+      if (incoming) credit = setAppearanceCreditFor(credit, incoming.id, qKey, false);
+      nextSegments = markQuarterSub(subSegments, qKey, outgoing?.id, incoming?.id);
+    }
     setAppearanceCredit(credit);
     setSubSegments(nextSegments);
     if (doBank) {
@@ -1907,6 +1929,10 @@ function TabGame({ format, league, onLeagueChange, onFormatChange, players, setP
   };
 
   const queueSwap = (outId, inId) => {
+    if (outId && outId === goalkeeperId(currentLineup)) {
+      refuseGoalkeeper();
+      return;
+    }
     const added = addPendingSwap(subQueue, {
       id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
       quarter,
@@ -1928,6 +1954,7 @@ function TabGame({ format, league, onLeagueChange, onFormatChange, players, setP
     if (!lineup) { setQueueNote("That quarter has no lineup."); return; }
     const fieldIdx = lineup.starters.findIndex(slot => slot.player?.id === row.outId);
     if (fieldIdx < 0) { setQueueNote("That player is no longer on the field for that quarter."); return; }
+    if (isGkPosition(lineup.starters[fieldIdx]?.pos)) { refuseGoalkeeper(); return; }
     if (!(lineup.bench || []).some(p => p.id === row.inId)) { setQueueNote("The sub is not on the bench for that quarter."); return; }
     const ok = swapBenchAndField(fieldIdx, row.inId, {
       lineup,
@@ -1945,6 +1972,7 @@ function TabGame({ format, league, onLeagueChange, onFormatChange, players, setP
     if (subMode && planSub) {
       const player = currentLineup.starters[idx]?.player;
       if (!player) return;
+      if (isGkPosition(currentLineup.starters[idx]?.pos)) { refuseGoalkeeper(); return; }
       if (swapSel?.type === "field" && swapSel.idx === idx) { setSwapSel(null); setQueueNote(null); return; }
       setSwapSel({ type: "field", idx, playerId: player.id });
       setQueueNote("Tap the bench player who comes on.");
@@ -1953,9 +1981,10 @@ function TabGame({ format, league, onLeagueChange, onFormatChange, players, setP
     if (subMode && swapSel?.type === "bench") {
       const outPlayer = currentLineup.starters[idx]?.player;
       if (!outPlayer) return;
+      if (isGkPosition(currentLineup.starters[idx]?.pos)) { refuseGoalkeeper(); return; }
       setPairPlan(prev => ({
         ...(prev || {}),
-        [quarter]: retargetPair(prev?.[quarter], swapSel.playerId, outPlayer.id),
+        [quarter]: retargetPair(prev?.[quarter], swapSel.playerId, outPlayer.id, currentLineup),
       }));
       setSwapSel(null);
       setQueueNote(`${playerName(swapSel.playerId)} on for ${outPlayer.name}. The dotted line moved. Drag when you want them to switch now.`);
@@ -2001,6 +2030,7 @@ function TabGame({ format, league, onLeagueChange, onFormatChange, players, setP
 
   const clearSlotToBench = (fieldIdx) => {
     if (!currentLineup) return;
+    if (isGkPosition(currentLineup.starters[fieldIdx]?.pos) && gkLocked()) { refuseGoalkeeper(); return; }
     const outgoing = currentLineup.starters[fieldIdx]?.player;
     if (!outgoing) return;
     bankLeave(outgoing.id);
@@ -2039,7 +2069,7 @@ function TabGame({ format, league, onLeagueChange, onFormatChange, players, setP
     setLineupsByQuarter(prev => ({ ...prev, [quarter]: next }));
     setSwapSel(null);
     setFairWarn(null);
-    setScrambleNote(`Q${quarter} positions reshuffled. Same players stayed on the field.`);
+    setScrambleNote(`Q${quarter} positions reshuffled. Same players stayed on the field. The goalkeeper stayed in goal.`);
   };
 
   const scrambleMembership = () => {
@@ -2048,6 +2078,7 @@ function TabGame({ format, league, onLeagueChange, onFormatChange, players, setP
     const result = redrawQuarterMembership(players, lineupsByQuarter, quarter, minQ, totalQuarters, {
       segments: subSegments,
       credit: appearanceCredit,
+      lockGoalkeeper: gkLocked(),
     });
     setSwapSel(null);
     if (!result.ok) {
@@ -2181,8 +2212,12 @@ function TabGame({ format, league, onLeagueChange, onFormatChange, players, setP
       return;
     }
     const planned = shownPairs.find(pair => pair.inId === benchPlayer.id);
-    const leavingId = planned?.outId || longestOnField()?.id;
-    if (!leavingId) { setQueueNote("Nobody is on the field."); return; }
+    const longestField = (currentLineup?.starters || [])
+      .filter(slot => slot.player && !isGkPosition(slot.pos))
+      .map(slot => slot.player)
+      .sort((a, b) => (minutesById[b.id] || 0) - (minutesById[a.id] || 0) || String(a.name || "").localeCompare(String(b.name || "")))[0];
+    const leavingId = planned?.outId || longestField?.id;
+    if (!leavingId || leavingId === goalkeeperId(currentLineup)) { refuseGoalkeeper(); return; }
     queueSwap(leavingId, benchPlayer.id);
   };
   const bringBenchOn = () => {
