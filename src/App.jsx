@@ -1102,7 +1102,7 @@ function Card({ children, style: sx }) {
 function StarRating({ value, onChange, max=5, size=16 }) {
   const starPath = "M10 1.5l2.59 5.96L19 8.13l-5 4.36L15.5 19 10 15.77 4.5 19 6 12.49 1 8.13l6.41-.67z";
   return (
-    <div style={{ display:"flex", gap: 2, alignItems:"center" }}>
+    <div style={{ display:"flex", gap: 1, alignItems:"center", flexWrap:"wrap", flexShrink: 1, minWidth: 0 }}>
       {Array.from({length:max},(_,i) => {
         const filled = i < value;
         const next = value === i+1 ? 0 : i+1;   // click same rank to clear
@@ -1445,31 +1445,39 @@ function PlayerEditPanel({ player, onUpdate, onDelete, onClose }) {
   const overall = getOverallRating(player);
   const positions = player.positions || [];
 
+  const revealEdit = (event) => {
+    const card = event.target.closest("[data-player-card]");
+    window.setTimeout(() => {
+      (card || event.target)?.scrollIntoView({ block: "start", inline: "nearest" });
+    }, 300);
+  };
+
   return (
-    <div style={{
+    <div data-player-edit style={{
       marginTop: 6, padding: "10px 10px 10px",
       background: "rgba(0,0,0,0.25)",
       borderRadius: 6, border: `1px solid ${C.border}`,
+      maxWidth: "100%", minWidth: 0, boxSizing: "border-box", overflowX: "clip",
     }}>
-      <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
+      <div style={{ display: "flex", gap: 6, marginBottom: 8, minWidth: 0 }}>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontSize: 9, color: C.muted, fontWeight: 700, marginBottom: 2, textTransform: "uppercase", letterSpacing: "0.05em" }}>Name</div>
-          <input value={name} onChange={e => setName(e.target.value)} onBlur={saveBasics}
-            style={{ ...IS, fontSize: 11, padding: "5px 8px", width: "100%" }} />
+          <input value={name} onChange={e => setName(e.target.value)} onBlur={saveBasics} onFocus={revealEdit}
+            style={{ ...IS, fontSize: 16, padding: "8px 10px", width: "100%", maxWidth: "100%" }} />
         </div>
-        <div style={{ width: 50, flexShrink: 0 }}>
+        <div style={{ width: 64, flexShrink: 0 }}>
           <div style={{ fontSize: 9, color: C.muted, fontWeight: 700, marginBottom: 2, textTransform: "uppercase", letterSpacing: "0.05em" }}>#</div>
-          <input value={num} onChange={e => setNum(e.target.value)} onBlur={saveBasics}
-            style={{ ...IS, fontSize: 11, padding: "5px 8px", width: "100%" }} />
+          <input value={num} onChange={e => setNum(e.target.value)} onBlur={saveBasics} onFocus={revealEdit}
+            style={{ ...IS, fontSize: 16, padding: "8px 8px", width: "100%", maxWidth: "100%" }} />
         </div>
       </div>
 
       <div style={{ fontSize: 9, color: C.muted, fontWeight: 700, marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.05em" }}>Positions</div>
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 3, marginBottom: 10 }}>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 10, maxWidth: "100%" }}>
         {ALL_POSITIONS.map(p => (
           <button key={p} onClick={() => togglePosition(p)} style={{
-            padding: "3px 7px", borderRadius: 3, border: "none", cursor: "pointer",
-            fontSize: 9, fontWeight: 700, fontFamily: "inherit",
+            padding: "6px 8px", borderRadius: 4, border: "none", cursor: "pointer",
+            fontSize: 12, fontWeight: 700, fontFamily: "inherit", lineHeight: 1,
             background: positions.includes(p) ? C.gold : "rgba(255,255,255,0.08)",
             color: positions.includes(p) ? "#0a0d0f" : C.muted,
           }}>{p}</button>
@@ -1477,11 +1485,11 @@ function PlayerEditPanel({ player, onUpdate, onDelete, onClose }) {
       </div>
 
       <div style={{ fontSize: 9, color: C.muted, fontWeight: 700, marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.05em" }}>Skill Ratings</div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "4px 10px", marginBottom: 10 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) minmax(0,1fr)", gap: "6px 8px", marginBottom: 10, maxWidth: "100%" }}>
         {SKILL_CATEGORIES.map(cat => (
-          <div key={cat} style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <div style={{ fontSize: 10, color: C.text }}>{cat}</div>
-            <StarRating value={(player.ratings || {})[cat] || 0} onChange={v => setRating(cat, v)} />
+          <div key={cat} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 4, minWidth: 0 }}>
+            <div style={{ fontSize: 11, color: C.text, minWidth: 0 }}>{cat}</div>
+            <StarRating size={14} value={(player.ratings || {})[cat] || 0} onChange={v => setRating(cat, v)} />
           </div>
         ))}
       </div>
@@ -2556,7 +2564,7 @@ function TabGame({ format, league, onLeagueChange, onFormatChange, players, setP
       <style>{`
         @media (max-width: 820px) {
           .ck-field { order: -1; width: 100%; }
-          .ck-roster { order: 1; width: 100%; max-width: none !important; }
+          .ck-roster { order: 1; width: 100%; max-width: none !important; overflow-x: clip; }
         }
         @keyframes ckHalfFlash {
           0%, 100% { transform: scale(1); }
@@ -2669,11 +2677,11 @@ function TabGame({ format, league, onLeagueChange, onFormatChange, players, setP
                 <input value={newName} onChange={e=>setNewName(e.target.value)}
                   onKeyDown={e=>e.key==="Enter"&&handleAddPlayer()}
                   placeholder="Player name"
-                  style={{...IS,fontSize:11,padding:"5px 8px",flex:"1 1 auto",minWidth:0}}/>
+                  style={{...IS,fontSize:16,padding:"8px 10px",flex:"1 1 auto",minWidth:0}}/>
                 <input value={newNum} onChange={e=>setNewNum(e.target.value)}
                   onKeyDown={e=>e.key==="Enter"&&handleAddPlayer()}
                   placeholder="#"
-                  style={{...IS,fontSize:11,padding:"5px 8px",width:42,flex:"0 0 42px"}}/>
+                  style={{...IS,fontSize:16,padding:"8px 8px",width:64,flex:"0 0 64px"}}/>
                 <button onClick={handleAddPlayer} style={{
                   padding:"5px 10px",borderRadius:5,border:"none",cursor:"pointer",
                   fontSize:11,fontWeight:800,fontFamily:"inherit",
@@ -2718,8 +2726,10 @@ function TabGame({ format, league, onLeagueChange, onFormatChange, players, setP
                                 : isOut ? "#e67e22"
                                 : ok ? C.text : C.gold;
                 return (
-                  <div key={p.id} style={{
+                  <div key={p.id} data-player-card style={{
                     marginBottom:8,
+                    maxWidth:"100%",
+                    minWidth:0,
                     opacity:isMGI?0.55:isInactive?0.7:1,
                     padding: focused ? "6px 6px 4px" : 0,
                     borderRadius:8,
@@ -3464,9 +3474,10 @@ function PlayerRow({ player, onUpdate, onRemove }) {
   const sc = player.injured?"#e74c3c":player.out?"#e67e22":C.ok;
 
   return (
-    <div style={{
+    <div data-player-card style={{
       background:C.surface, borderRadius:10, padding:"10px 14px", marginBottom:8,
       border:`1px solid ${player.injured||player.out?"rgba(220,80,60,0.3)":C.border}`,
+      maxWidth:"100%", minWidth:0, boxSizing:"border-box",
     }}>
       <div style={{display:"flex",alignItems:"center",gap:10}}>
         <div style={{
@@ -3516,11 +3527,14 @@ function PlayerRow({ player, onUpdate, onRemove }) {
           <div style={{display:"flex",gap:8,marginBottom:10}}>
             <div style={{flex:1}}>
               <label style={lbl}>Name</label>
-              <input value={name} onChange={e=>setName(e.target.value)} style={IS} onBlur={save}/>
+              <input value={name} onChange={e=>setName(e.target.value)} style={{...IS, fontSize:16}} onBlur={save} onFocus={e => {
+                const card = e.target.closest("[data-player-card]");
+                window.setTimeout(() => card?.scrollIntoView({ block: "start", inline: "nearest" }), 300);
+              }}/>
             </div>
-            <div style={{width:60}}>
+            <div style={{width:72, flexShrink:0}}>
               <label style={lbl}>#</label>
-              <input value={num} onChange={e=>setNum(e.target.value)} style={IS} onBlur={save}/>
+              <input value={num} onChange={e=>setNum(e.target.value)} style={{...IS, fontSize:16}} onBlur={save}/>
             </div>
           </div>
 
@@ -3536,7 +3550,7 @@ function PlayerRow({ player, onUpdate, onRemove }) {
           </div>
 
           <label style={lbl}>Player Ratings (factors into auto-lineup priority)</label>
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:10}}>
+          <div style={{display:"grid",gridTemplateColumns:"minmax(0,1fr) minmax(0,1fr)",gap:8,marginBottom:10,maxWidth:"100%"}}>
             {SKILL_CATEGORIES.map(cat=>(
               <div key={cat}>
                 <div style={{fontSize:11,color:C.muted,marginBottom:3}}>{cat}</div>
