@@ -28,6 +28,11 @@ import {
   equityHalves,
   formatQuarterEquity,
   lineStopAtCircle,
+  playerHalfMask,
+  maxConsecutiveSits,
+  scheduleHalfRotation,
+  gameLogFromStrategy,
+  upsertGameLog,
 } from "./gameDay.js";
 
 test("appearance credit stacks on lineup quarters and banked minutes are not replaced", () => {
@@ -295,4 +300,86 @@ test("bringing the bench on keeps positions and does not touch the original line
   assert.deepEqual(next.starters.map(slot => slot.pos), ["GK", "CF", "CM"]);
   assert.deepEqual(next.bench.map(player => player.id).sort(), ["b", "c"]);
   assert.equal(lineup.starters[1].player.id, "b");
+});
+
+function halfRoster(count) {
+  return Array.from({ length: count }, (_, i) => ({
+    id: `p${i + 1}`,
+    name: `P${i + 1}`,
+    positions: ["GK", "CM", "CF"],
+    injured: false,
+    out: false,
+  }));
+}
+
+function sitRun(playerId, lineups, segments) {
+  const mask = [];
+  for (let q = 1; q <= 4; q++) {
+    mask.push(...playerHalfMask(playerId, lineups[q], segments?.[playerId]?.[q]));
+  }
+  return maxConsecutiveSits(mask);
+}
+
+test("sub mode spreads sit halves and still reaches 4 of 8", () => {
+  const players = halfRoster(9);
+  const slots = ["GK", "LD", "RD", "LM", "RM", "CF"];
+  const { lineups, segments } = scheduleHalfRotation(players, slots, {
+    minHalves: 4,
+    rate: player => 10 - Number(player.id.slice(1)),
+  });
+  players.forEach(player => {
+    const halves = equityHalves(player.id, { lineups, segments, credit: {}, quarters: [1, 2, 3, 4] });
+    assert.ok(halves >= 4, `${player.id} has ${halves} halves`);
+    assert.ok(sitRun(player.id, lineups, segments) <= 1, `${player.id} sat two halves in a row`);
+  });
+  const split = Object.values(segments).some(row => Object.keys(row).length > 0);
+  assert.equal(split, true);
+});
+
+test("sub mode keeps earlier quarters when replanning from Q3", () => {
+  const players = halfRoster(8);
+  const slots = ["GK", "LD", "RD", "LM", "RM", "CF"];
+  const locked = {
+    1: {
+      starters: players.slice(0, 6).map((player, i) => ({ pos: slots[i], player })),
+      bench: players.slice(6),
+    },
+  };
+  const { lineups } = scheduleHalfRotation(players, slots, {
+    minHalves: 4,
+    fromQuarter: 3,
+    lockedLineups: locked,
+    rate: () => 1,
+  });
+  assert.equal(lineups[1], locked[1]);
+  assert.equal(lineups[3].starters.length, 6);
+  assert.ok(lineups[4]);
+});
+
+test("a game log stores the strategy and a second save updates that day", () => {
+  const entry = gameLogFromStrategy({
+    id: "g1",
+    date: "2026-09-27",
+    opponent: "Rockets",
+    homeScore: 2,
+    oppScore: 1,
+    formation: "2-2-1",
+    formationLabel: "Balanced",
+    subMode: true,
+    format: "6v6",
+    league: "U8 / Passers",
+    lineups: { 1: { starters: [], bench: [] } },
+    savedAt: "2026-09-27T12:00:00.000Z",
+  });
+  assert.equal(entry.strategy.subMode, true);
+  assert.equal(entry.strategy.formation, "2-2-1");
+  const again = gameLogFromStrategy({ ...entry, id: "g2", formation: "3-2", subMode: false, homeScore: 9 });
+  const updated = upsertGameLog([entry], again);
+  assert.equal(updated.length, 1);
+  assert.equal(updated[0].id, "g1");
+  assert.equal(updated[0].homeScore, 2);
+  assert.equal(updated[0].strategy.formation, "3-2");
+  assert.equal(updated[0].strategy.subMode, false);
+  const other = upsertGameLog(updated, gameLogFromStrategy({ id: "g3", date: "2026-10-04", opponent: "Rockets", formation: "2-1-2" }));
+  assert.equal(other.length, 2);
 });

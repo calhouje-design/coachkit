@@ -14,25 +14,32 @@ export function minQuarters(minFraction, periods = TOTAL_PERIODS) {
  * Block planning when the roster cannot meet the quarter minimum.
  * demand = active players × min quarters; supply = spots on the field × periods.
  */
-export function feasibility({ activeCount, slotsPerPeriod, minQ, periods = TOTAL_PERIODS }) {
+export function feasibility({ activeCount, slotsPerPeriod, minQ, periods = TOTAL_PERIODS, subMode = false }) {
   const demand = activeCount * minQ;
   const supply = slotsPerPeriod * periods;
+  const halfDemand = activeCount * minQ * 2;
+  const halfSupply = supply * 2;
   let reason = "";
   if (activeCount <= 0) {
     reason = "Add at least one active player before planning.";
   } else if (slotsPerPeriod <= 0) {
     reason = "Pick a format so the field has spots to fill.";
   } else if (demand > supply) {
-    reason = `${activeCount} active players × ${minQ} quarters = ${demand} required appearances, but ${slotsPerPeriod} spots × ${periods} quarters = ${supply}. Sit players out or use a larger format. Fair play cannot be guaranteed.`;
+    reason = subMode
+      ? `${activeCount} active players × ${minQ * 2} halves = ${halfDemand}, but ${slotsPerPeriod} spots × ${periods * 2} halves = ${halfSupply}. Sit players out or use a larger format. Fair play cannot be guaranteed.`
+      : `${activeCount} active players × ${minQ} quarters = ${demand} required appearances, but ${slotsPerPeriod} spots × ${periods} quarters = ${supply}. Sit players out or use a larger format. Fair play cannot be guaranteed.`;
   }
   return {
     ok: reason === "",
     demand,
     supply,
+    halfDemand,
+    halfSupply,
     activeCount,
     slotsPerPeriod,
     minQ,
     periods,
+    subMode: !!subMode,
     reason,
   };
 }

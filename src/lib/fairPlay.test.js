@@ -40,6 +40,19 @@ test("feasibility blocks U6 when not everyone can play every quarter", () => {
   assert.equal(blocked.supply, 16);
 });
 
+test("sub mode gate uses the same roster limit and talks in halves", () => {
+  const full = feasibility({ activeCount: 13, slotsPerPeriod: 6, minQ: 2, periods: 4, subMode: false });
+  const sub = feasibility({ activeCount: 13, slotsPerPeriod: 6, minQ: 2, periods: 4, subMode: true });
+  assert.equal(full.ok, false);
+  assert.equal(sub.ok, false);
+  assert.equal(sub.halfDemand, 52);
+  assert.equal(sub.halfSupply, 48);
+  assert.match(sub.reason, /52/);
+  assert.match(sub.reason, /halves/);
+  const ok = feasibility({ activeCount: 9, slotsPerPeriod: 6, minQ: 2, periods: 4, subMode: true });
+  assert.equal(ok.ok, true);
+});
+
 test("feasibility blocks an empty active roster", () => {
   const blocked = feasibility({ activeCount: 0, slotsPerPeriod: 6, minQ: 2, periods: 4 });
   assert.equal(blocked.ok, false);

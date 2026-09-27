@@ -331,6 +331,203 @@ export function pairsForDisplay(autoPairs, manualPairs, lineup) {
   return [...manual, ...auto, ...extra];
 }
 
+/** Which halves of a quarter a player is on. End-of-quarter lineup plus the split mark. */
+export function playerHalfMask(playerId, lineup, segment) {
+  if (!lineup) return [false, false];
+  const on = (lineup.starters || []).some(slot => slot.player?.id === playerId);
+  if (on && segment === "entered") return [false, true];
+  if (!on && segment === "left") return [true, false];
+  if (!on && segment === "entered") return [false, true];
+  if (on) return [true, true];
+  return [false, false];
+}
+
+/** Longest run of halves spent on the bench, in quarter order. */
+export function maxConsecutiveSits(masks) {
+  let max = 0;
+  let run = 0;
+  (masks || []).forEach(on => {
+    if (on) run = 0;
+    else {
+      run += 1;
+      if (run > max) max = run;
+    }
+  });
+  return max;
+}
+
+function assignHalfSlots(startersPool, slotNames) {
+  const assigned = new Set();
+  const pool = [...startersPool];
+  return slotNames.map(slotPos => {
+    let pick = pool.find(p => !assigned.has(p.id) && (p.positions || []).includes(slotPos));
+    if (!pick) pick = pool.find(p => !assigned.has(p.id));
+    if (pick) assigned.add(pick.id);
+    return { pos: slotPos, player: pick || null };
+  });
+}
+
+/**
+ * Sub-mode plan. Each quarter is two halves. Players who sat the previous half
+ * come on next when they still owe time, so two bench halves in a row are
+ * avoided when the bench fits back on the field. Everyone still targets minHalves
+ * (4 of 8 at 50%). The stored lineup is who is on at the end of the quarter.
+ */
+export function scheduleHalfRotation(players, slots, {
+  minHalves = 4,
+  fromQuarter = 1,
+  lockedLineups = {},
+  lockedSegments = {},
+  totalQuarters = 4,
+  rate = () => 0,
+} = {}) {
+  const slotNames = slots?.length ? slots : ["GK", "LD", "RD", "LM", "RM", "CF"];
+  const active = (players || []).filter(p => !p.injured && !p.out);
+  const remainingQs = [];
+  for (let q = fromQuarter; q <= totalQuarters; q++) remainingQs.push(q);
+  const halfCap = remainingQs.length * 2;
+  const totalHalfSlots = slotNames.length * halfCap;
+  const lockedQs = [];
+  for (let q = 1; q < fromQuarter; q++) if (lockedLineups[q]) lockedQs.push(q);
+
+  const already = {};
+  active.forEach(p => {
+    already[p.id] = equityHalves(p.id, {
+      lineups: lockedLineups,
+      segments: lockedSegments,
+      credit: {},
+      quarters: lockedQs,
+    });
+  });
+
+  const quota = {};
+  active.forEach(p => {
+    quota[p.id] = Math.min(halfCap, Math.max(0, minHalves - (already[p.id] || 0)));
+  });
+  let free = Math.max(0, totalHalfSlots - Object.values(quota).reduce((sum, n) => sum + n, 0));
+  const rated = [...active].sort((a, b) => rate(b) - rate(a) || String(a.id).localeCompare(String(b.id)));
+  let guard = 0;
+  while (free > 0 && guard < 10000) {
+    let gave = false;
+    for (const p of rated) {
+      if (quota[p.id] < halfCap) {
+        quota[p.id] += 1;
+        free -= 1;
+        gave = true;
+        if (free === 0) break;
+      }
+    }
+    if (!gave) break;
+    guard += 1;
+  }
+
+  const remaining = { ...quota };
+  const byNeed = (a, b) => remaining[b.id] - remaining[a.id] || String(a.id).localeCompare(String(b.id));
+  const prevQ = fromQuarter - 1;
+  let satLast = new Set();
+  if (prevQ >= 1 && lockedLineups[prevQ]) {
+    satLast = new Set(active.filter(p => {
+      const mask = playerHalfMask(p.id, lockedLineups[prevQ], segmentAt(lockedSegments, p.id, prevQ));
+      return !mask[1];
+    }).map(p => p.id));
+  }
+
+  const onHalf = {};
+  remainingQs.forEach(q => { onHalf[q] = { 1: [], 2: [] }; });
+
+  remainingQs.forEach(q => {
+    [1, 2].forEach(half => {
+      const chosen = [];
+      const eligible = () => active.filter(p => remaining[p.id] > 0 && !chosen.includes(p.id));
+      eligible().filter(p => satLast.has(p.id)).sort(byNeed).forEach(p => {
+        if (chosen.length < slotNames.length) chosen.push(p.id);
+      });
+      eligible().sort(byNeed).forEach(p => {
+        if (chosen.length < slotNames.length) chosen.push(p.id);
+      });
+      chosen.forEach(id => { remaining[id] -= 1; });
+      onHalf[q][half] = chosen;
+      satLast = new Set(active.filter(p => !chosen.includes(p.id)).map(p => p.id));
+    });
+  });
+
+  const segments = {};
+  Object.entries(lockedSegments || {}).forEach(([playerId, row]) => {
+    const kept = {};
+    Object.entries(row || {}).forEach(([quarter, kind]) => {
+      if (Number(quarter) < fromQuarter) kept[quarter] = kind;
+    });
+    if (Object.keys(kept).length) segments[playerId] = kept;
+  });
+
+  const lineups = { ...lockedLineups };
+  remainingQs.forEach(q => {
+    const first = new Set(onHalf[q][1]);
+    const second = new Set(onHalf[q][2]);
+    const startersPool = active.filter(p => second.has(p.id));
+    const bench = active.filter(p => !second.has(p.id));
+    lineups[q] = { starters: assignHalfSlots(startersPool, slotNames), bench };
+    active.forEach(p => {
+      const early = first.has(p.id);
+      const late = second.has(p.id);
+      if (early && !late) segments[p.id] = { ...(segments[p.id] || {}), [q]: "left" };
+      else if (!early && late) segments[p.id] = { ...(segments[p.id] || {}), [q]: "entered" };
+    });
+  });
+
+  return { lineups, segments };
+}
+
+/** One Season game-log row. Strategy rides on the game the app already stores. */
+export function gameLogFromStrategy({
+  id,
+  date,
+  opponent,
+  homeScore,
+  oppScore,
+  notes,
+  formation,
+  formationLabel,
+  subMode,
+  format,
+  league,
+  lineups,
+  savedAt,
+} = {}) {
+  return {
+    id,
+    date: date || "",
+    opponent: (opponent || "").trim() || "Game day",
+    homeScore: Number(homeScore) || 0,
+    oppScore: Number(oppScore) || 0,
+    notes: notes || "",
+    strategy: {
+      formation: formation || "",
+      formationLabel: formationLabel || "",
+      subMode: !!subMode,
+      format: format || "",
+      league: league || "",
+      lineups: lineups || {},
+      savedAt: savedAt || "",
+    },
+  };
+}
+
+/** Update the same date and opponent, otherwise append. Scores already logged stay. */
+export function upsertGameLog(games, entry) {
+  const list = Array.isArray(games) ? [...games] : [];
+  const idx = list.findIndex(game => game && game.date === entry.date && game.opponent === entry.opponent);
+  if (idx < 0) return [...list, entry];
+  const prev = list[idx];
+  list[idx] = {
+    ...prev,
+    strategy: entry.strategy,
+    homeScore: prev.homeScore ?? entry.homeScore,
+    oppScore: prev.oppScore ?? entry.oppScore,
+  };
+  return list;
+}
+
 /** Apply planned pairs on this quarter only. Slot positions stay put. */
 export function applyBenchRotation(lineup, pairs) {
   if (!lineup?.starters) return lineup;
