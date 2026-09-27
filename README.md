@@ -58,7 +58,7 @@ On the field, drag a player onto another spot or the bench to swap. That uses po
 
 The play-time chart uses solid green for a full quarter and a split box for half a quarter. A sub in Q2, Q3, or Q4 marks that quarter the same way as Q1. Fair play adds those halves. Two of four quarters is four halves. The label uses the same sum as the boxes.
 
-The quarter control stays at the top of Game Day. Bench players sit beside the pitch. A dotted line stops on the circle of the field player they replace, and the name sits above the line. Sub, next to the bench, turns on sub mode. The play clock sits on the top-right of the pitch. Tap it to start or stop. At half the quarter it flashes and vibrates when the phone allows it. The mid-quarter card is below the field and closed until you open it.
+The quarter control stays at the top of Game Day. Bench players sit beside the pitch. Dotted lines cross the field and stop on the circle, with the player names above the lines. SUB runs those listed swaps. With nobody paired, it turns on two-tap planning. The play clock sits on the top-right of the pitch. Tap it to start or stop. At half the quarter it flashes and vibrates when the phone allows it. The mid-quarter card is below the field and closed until you open it.
 
 The quarter clock counts up against the league period length and feeds a minute gap on the bench. Fair play itself stays quarter counts. Injury or a late scratch pulls that player from the current quarter forward, keeps minutes already played, and does not rebuild the other players’ plan. Plan Full Game from Q1 clears the clock, the minute bank, and the queue.
 

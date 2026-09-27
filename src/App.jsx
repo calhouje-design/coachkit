@@ -1200,7 +1200,7 @@ function SoccerField({ lineup, onTap, selectedIdx, quarter, drag, hoverToken, ac
 
   return (
     <div style={{ position:"relative", width:"100%", margin:"0 auto", userSelect:"none" }}>
-      <svg viewBox="0 0 320 480" style={{ width:"100%", display:"block", borderRadius:10 }}>
+      <svg viewBox="0 0 320 480" style={{ width:"100%", display:"block", borderRadius:10, position:"relative", zIndex:0 }}>
         <rect x="5" y="5" width="310" height="470" rx="8" fill="#1e4d1a" stroke="#fff" strokeWidth="1.5"/>
         <rect x="5" y="5" width="310" height="470" rx="8" fill="url(#grass)"/>
         <defs>
@@ -2939,7 +2939,7 @@ function TabGame({ format, league, onLeagueChange, onFormatChange, players, setP
             {scrambleNote && (
               <div style={{fontSize:11,color:C.muted,textAlign:"center",marginBottom:6,lineHeight:1.4}}>{scrambleNote}</div>
             )}
-            <div ref={pitchWrapRef} style={{position:"relative", display:"flex", gap:6, alignItems:"stretch"}}>
+            <div ref={pitchWrapRef} style={{position:"relative", zIndex:1, display:"flex", gap:6, alignItems:"stretch"}}>
               {currentLineup && (
                 <div
                   data-drop="bench-zone"
@@ -2953,7 +2953,16 @@ function TabGame({ format, league, onLeagueChange, onFormatChange, players, setP
                   }}
                 >
                   <button
-                    onClick={() => { setPlanSub(v => !v); setSwapSel(null); setQueueNote(planSub ? null : "Sub mode. Tap who leaves, then who comes on. Drag still swaps now."); }}
+                    onClick={() => {
+                      if (subPairs.length > 0) {
+                        bringBenchOn();
+                        setPlanSub(false);
+                        return;
+                      }
+                      setPlanSub(v => !v);
+                      setSwapSel(null);
+                      setQueueNote(planSub ? null : "No pairs yet. Tap a bench player, then the field player they replace.");
+                    }}
                     style={{
                       minHeight:44, borderRadius:8, border:"none", cursor:"pointer", fontFamily:"inherit",
                       fontSize:13, fontWeight:900, letterSpacing:"0.04em",
@@ -3002,7 +3011,7 @@ function TabGame({ format, league, onLeagueChange, onFormatChange, players, setP
                   })}
                 </div>
               )}
-              <div style={{flex:"1 1 auto", minWidth:0, position:"relative", zIndex:5}}>
+              <div style={{flex:"1 1 auto", minWidth:0, position:"relative"}}>
                 <SoccerField
                   lineup={currentLineup}
                   onTap={onFieldTap}
@@ -3035,7 +3044,7 @@ function TabGame({ format, league, onLeagueChange, onFormatChange, players, setP
                 )}
               </div>
               {subLines.length > 0 && (
-                <svg style={{position:"absolute", inset:0, width:"100%", height:"100%", pointerEvents:"none", zIndex:2, overflow:"visible"}}>
+                <svg style={{position:"absolute", inset:0, width:"100%", height:"100%", pointerEvents:"none", zIndex:4, overflow:"visible"}}>
                   {subLines.map(line => (
                     <line key={line.key}
                       x1={line.x1} y1={line.y1} x2={line.x2} y2={line.y2}
@@ -3047,8 +3056,11 @@ function TabGame({ format, league, onLeagueChange, onFormatChange, players, setP
             </div>
             {currentLineup && (
               <div style={{fontSize:11, color:C.muted, lineHeight:1.4, marginTop:8, textAlign:"center"}}>
-                Tap a bench player, then the field player they replace. A green ring means release will swap.
+                SUB runs the listed swaps. Tap a bench player, then a field player, to move a line. A green ring means release will swap.
               </div>
+            )}
+            {queueNote && !subsOpen && (
+              <div style={{fontSize:12, color:C.gold, lineHeight:1.4, marginTop:6, textAlign:"center"}}>{queueNote}</div>
             )}
           </div>
           {midGameInjured.length > 0 && (
