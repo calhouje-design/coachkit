@@ -60,7 +60,9 @@ The play-time chart uses solid green for a full quarter and a split box for half
 
 The quarter control stays at the top of Game Day. Bench players sit beside the pitch. Dotted lines cross the field and stop on the circle, with the player names above the lines. SUB runs those listed swaps when sub mode is on. With nobody paired, it turns on two-tap planning. Full quarters turns half swaps off and plans whole quarters. Sub mode plans halves, spreads sit time, and still targets 4 of 8. The play clock sits on the top-right of the pitch. Tap it to start or stop. At half the quarter it flashes and vibrates when the phone allows it. The mid-quarter card is below the field and closed until you open it.
 
-Strategy sits beside the field. The arrows and the scrolling shapes change the formation for this quarter. Save strategy to game day writes that shape, the sub mode, and the lineups onto the season game log. That log already syncs with the Supabase `games` rows. No new table.
+Strategy sits beside the field. The arrows and the scrolling shapes change the formation for this quarter. Save strategy to game day writes that shape, the sub mode, the lineups, and both share sheets onto the season game log. That log already syncs with the Supabase `games` rows. No new table.
+
+Share lineup saves two images. Sheet 1 is four quarter fields, each with the pitch, the bench, and dotted lines to who the bench subs for. Sheet 2 is the green play-time bars (full, split, and bench). The saved game stores `strategy.sheets`: marker positions, sub pairs, and play-time cell kinds. Season redraws both images from that data. The PNG files are created when you save or open a sheet. They are not stored in the game log.
 
 The quarter clock counts up against the league period length and feeds a minute gap on the bench. Fair play itself stays quarter counts. Injury or a late scratch pulls that player from the current quarter forward, keeps minutes already played, and does not rebuild the other players’ plan. Plan Full Game from Q1 clears the clock, the minute bank, and the queue.
 

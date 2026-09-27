@@ -32,10 +32,14 @@ import {
   equityHalves,
   formatQuarterEquity,
   lineStopAtCircle,
+  fieldMarker,
+  shareFieldSheet,
+  sharePlayTimeSheet,
   scheduleHalfRotation,
   gameLogFromStrategy,
   upsertGameLog,
 } from "./lib/gameDay.js";
+import { downloadCanvas, paintFieldSheet, paintPlayTimeSheet } from "./lib/sharePaint.js";
 import { useTeamCloud } from "./lib/teamCloud.js";
 
 // -- localStorage persistence helper --
@@ -107,19 +111,6 @@ const POS_LABEL = {
   // legacy fallbacks
   DEF:"DEF", MID:"MID", FWD:"FWD", CAM:"CAM", CDM:"CDM",
   LW:"LW", RW:"RW", ST:"ST", Wing:"W",
-};
-
-// Field x/y positions for the SVG diagram
-const FIELD_BASE = {
-  GK:{x:50,y:88},
-  CB:{x:50,y:72}, CD:{x:50,y:72}, LD:{x:25,y:72}, RD:{x:75,y:72},
-  LB:{x:22,y:75}, RB:{x:78,y:75},
-  DEF:{x:50,y:72},
-  CDM:{x:50,y:58}, CM:{x:50,y:50}, LM:{x:22,y:50}, RM:{x:78,y:50},
-  MID:{x:50,y:50}, CAM:{x:50,y:38},
-  LW:{x:18,y:32}, RW:{x:82,y:32},
-  LF:{x:28,y:22}, RF:{x:72,y:22}, CF:{x:50,y:18},
-  FWD:{x:50,y:22}, ST:{x:50,y:18}, Wing:{x:20,y:30},
 };
 
 // -- SAY East Play-Time Rules (SAY Rule 12) --
@@ -1256,13 +1247,10 @@ function SoccerField({ lineup, onTap, selectedIdx, quarter, drag, hoverToken, ac
         if (!idxByPos[pos]) idxByPos[pos] = 0;
         const posIdx = idxByPos[pos];
         const total = totalByPos[pos];
-        const base = FIELD_BASE[pos] || {x:50,y:50};
-        const spread = total > 1 ? (posIdx - (total-1)/2) * (52/total) : 0;
-        const fx = base.x + spread * 0.7;
         idxByPos[pos]++;
-
-        const px = 5 + (fx/100)*310;
-        const py = 5 + (base.y/100)*470;
+        const point = fieldMarker(pos, posIdx, total);
+        const px = point.x;
+        const py = point.y;
         const isHovered = hoverToken === `field:${idx}`;
         const isSelected = selectedIdx === idx;
         const isSource = activeSource?.type === "field" && activeSource.idx === idx;
@@ -2293,6 +2281,15 @@ function TabGame({ format, league, onLeagueChange, onFormatChange, players, setP
   const saveStrategyToGameDay = () => {
     if (!setGames) return;
     const today = new Date().toISOString().slice(0, 10);
+    const sheetInput = {
+      players,
+      lineups: lineupsByQuarter,
+      pairPlan,
+      subMode,
+      segments: subSegments,
+      credit: appearanceCredit,
+      minQ,
+    };
     const entry = gameLogFromStrategy({
       id: uid(),
       date: today,
@@ -2306,9 +2303,13 @@ function TabGame({ format, league, onLeagueChange, onFormatChange, players, setP
       league,
       lineups: lineupsByQuarter,
       savedAt: new Date().toISOString(),
+      sheets: {
+        field: shareFieldSheet(sheetInput),
+        playTime: sharePlayTimeSheet(sheetInput),
+      },
     });
     setGames(prev => upsertGameLog(prev, entry));
-    setSaveNote(`Saved ${entry.strategy.formation || "this strategy"} (${entry.strategy.subMode ? "sub mode" : "full quarters"}) to the Season game log.`);
+    setSaveNote(`Saved ${entry.strategy.formation || "this strategy"} with the field sheet and the play-time sheet to the Season game log.`);
   };
 
   // Build rotation grid: rows = players, cols = Q1Q4
@@ -3262,6 +3263,11 @@ function TabGame({ format, league, onLeagueChange, onFormatChange, players, setP
         <ShareLineupModal
           players={players}
           lineupsByQuarter={lineupsByQuarter}
+          pairPlan={pairPlan}
+          subMode={subMode}
+          segments={subSegments}
+          credit={appearanceCredit}
+          minQ={minQ}
           quarter={quarter}
           homeScore={homeScore}
           awayScore={awayScore}
@@ -3274,169 +3280,83 @@ function TabGame({ format, league, onLeagueChange, onFormatChange, players, setP
   );
 }
 
-// 
-// SHARE LINEUP MODAL  canvas PNG for screenshotting
-// 
-function ShareLineupModal({ players, lineupsByQuarter, quarter, homeScore, awayScore, opponent, league, onClose }) {
-  const canvasRef = useRef(null);
+const sheetSaveBtn = {
+  flex: 1,
+  minHeight: 44,
+  padding: "10px 12px",
+  borderRadius: 7,
+  border: "none",
+  cursor: "pointer",
+  background: "linear-gradient(135deg,#e8a020,#b87818)",
+  color: "#0a0d0f",
+  fontWeight: 700,
+  fontSize: 13,
+  fontFamily: "inherit",
+};
 
-  const FBASE = {
-    GK:{x:50,y:88},LD:{x:22,y:75},CD:{x:50,y:72},RD:{x:78,y:75},
-    LM:{x:18,y:52},CM:{x:50,y:50},RM:{x:82,y:52},
-    LF:{x:28,y:22},CF:{x:50,y:18},RF:{x:72,y:22},
-  };
-
-  const roundRect = (ctx, x, y, w, h, r) => {
-    ctx.beginPath();
-    ctx.moveTo(x+r,y); ctx.lineTo(x+w-r,y); ctx.quadraticCurveTo(x+w,y,x+w,y+r);
-    ctx.lineTo(x+w,y+h-r); ctx.quadraticCurveTo(x+w,y+h,x+w-r,y+h);
-    ctx.lineTo(x+r,y+h); ctx.quadraticCurveTo(x,y+h,x,y+h-r);
-    ctx.lineTo(x,y+r); ctx.quadraticCurveTo(x,y,x+r,y);
-    ctx.closePath();
-  };
-
-  const drawField = (ctx, fx, fy, fw, fh, qNum) => {
-    const fg = ctx.createLinearGradient(fx,fy,fx,fy+fh);
-    fg.addColorStop(0,"#1e4d1a"); fg.addColorStop(1,"#163d13");
-    ctx.fillStyle=fg; roundRect(ctx,fx,fy,fw,fh,8); ctx.fill();
-    ctx.strokeStyle="rgba(255,255,255,0.3)"; ctx.lineWidth=1.2;
-    roundRect(ctx,fx,fy,fw,fh,8); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(fx+8,fy+fh/2); ctx.lineTo(fx+fw-8,fy+fh/2); ctx.stroke();
-    ctx.beginPath(); ctx.arc(fx+fw/2,fy+fh/2,28,0,Math.PI*2); ctx.stroke();
-    ctx.strokeRect(fx+fw*0.28,fy+4,fw*0.44,42);
-    ctx.strokeRect(fx+fw*0.28,fy+fh-46,fw*0.44,42);
-    // Quarter pill (per-quarter color gradient, prominent)
-    const QCOLORS = {
-      1: ["#f4c442","#b87818"], // gold
-      2: ["#5dadec","#2471a3"], // blue
-      3: ["#c88ce0","#7d3c98"], // purple
-      4: ["#ec7063","#a93226"], // coral/red
-    };
-    const qc = QCOLORS[qNum] || QCOLORS[1];
-    const qGrad = ctx.createLinearGradient(fx+8, fy+8, fx+8, fy+30);
-    qGrad.addColorStop(0, qc[0]); qGrad.addColorStop(1, qc[1]);
-    ctx.fillStyle=qGrad; roundRect(ctx,fx+8,fy+8,42,22,5); ctx.fill();
-    ctx.strokeStyle="rgba(0,0,0,0.6)"; ctx.lineWidth=1; roundRect(ctx,fx+8,fy+8,42,22,5); ctx.stroke();
-    ctx.fillStyle="#0a0d0f"; ctx.font="900 14px Arial, sans-serif"; ctx.textAlign="center";
-    ctx.fillText("Q"+qNum,fx+29,fy+24);
-    const lineup = lineupsByQuarter[qNum];
-    if (lineup && lineup.starters) {
-      lineup.starters.forEach(function(slot) {
-        const fb = FBASE[slot.pos]||{x:50,y:50};
-        const px = fx+(fb.x/100)*fw;
-        const py = fy+(fb.y/100)*fh;
-        const grad = ctx.createRadialGradient(px,py,1,px,py,15);
-        grad.addColorStop(0,"#f5c86a"); grad.addColorStop(1,"#b87818");
-        ctx.fillStyle=grad; ctx.beginPath(); ctx.arc(px,py,15,0,Math.PI*2); ctx.fill();
-        ctx.strokeStyle="rgba(255,255,255,0.85)"; ctx.lineWidth=1.2; ctx.stroke();
-        const num=slot.player?slot.player.number:"?";
-        ctx.fillStyle="#0a0d0f"; ctx.font="900 12px Arial, sans-serif"; ctx.textAlign="center"; ctx.textBaseline="middle";
-        ctx.fillText(num,px,py);
-        ctx.textBaseline="alphabetic";
-        const fname=slot.player?slot.player.name.split(" ")[0].slice(0,7):"";
-        ctx.fillStyle="#fff"; ctx.font="bold 9px Arial, sans-serif"; ctx.fillText(fname,px,py+25);
-        ctx.fillStyle="#ffe066"; ctx.font="900 9px Arial, sans-serif"; ctx.fillText(slot.pos,px,py-19);
-      });
-    } else {
-      ctx.fillStyle="rgba(255,255,255,0.25)"; ctx.font="bold 12px Arial, sans-serif"; ctx.textAlign="center";
-      ctx.fillText("Not planned",fx+fw/2,fy+fh/2+3);
-    }
-  };
-
+function SheetCanvases({ field, playTime, league, opponent, homeScore, awayScore }) {
+  const fieldRef = useRef(null);
+  const playRef = useRef(null);
   useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-    // Render at high DPR for crisp output (sharp on screen, sharp PNG download)
-    const DPR = Math.max(2, (typeof window !== "undefined" && window.devicePixelRatio) || 1);
-    const W = 600, H = 920;
-    canvas.width  = Math.round(W * DPR);
-    canvas.height = Math.round(H * DPR);
-    canvas.style.width  = "100%";
-    canvas.style.height = "auto";
-    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
-    ctx.imageSmoothingEnabled = true;
-    ctx.imageSmoothingQuality = "high";
-    ctx.textBaseline = "alphabetic";
+    if (fieldRef.current) paintFieldSheet(fieldRef.current, { field, league, opponent, homeScore, awayScore });
+    if (playRef.current) paintPlayTimeSheet(playRef.current, { playTime, league });
+  }, [field, playTime, league, opponent, homeScore, awayScore]);
+  return (
+    <div>
+      <div style={{fontSize:12,fontWeight:800,color:"#e8a020",marginBottom:6}}>Sheet 1 · Field, bench, and sub lines</div>
+      <div style={{borderRadius:8,overflow:"hidden",marginBottom:8,border:"1px solid rgba(255,255,255,0.08)",background:"#0c1409"}}>
+        <canvas ref={fieldRef} style={{width:"100%",height:"auto",display:"block"}} />
+      </div>
+      <button type="button" onClick={() => downloadCanvas(fieldRef.current, "CoachKit_Field_Q1-Q4.png")} style={{...sheetSaveBtn, width:"100%", marginBottom:16}}>
+        Save field image
+      </button>
+      <div style={{fontSize:12,fontWeight:800,color:"#2ecc71",marginBottom:6}}>Sheet 2 · Play time</div>
+      <div style={{borderRadius:8,overflow:"hidden",marginBottom:8,border:"1px solid rgba(255,255,255,0.08)",background:"#0c1409"}}>
+        <canvas ref={playRef} style={{width:"100%",height:"auto",display:"block"}} />
+      </div>
+      <button type="button" onClick={() => downloadCanvas(playRef.current, "CoachKit_PlayTime.png")} style={{...sheetSaveBtn, width:"100%"}}>
+        Save play time image
+      </button>
+    </div>
+  );
+}
 
-    ctx.fillStyle="#0c1409"; ctx.fillRect(0,0,W,H);
-    ctx.fillStyle="#1a2518"; ctx.fillRect(0,0,W,70);
-    ctx.fillStyle="#e8a020"; ctx.beginPath(); ctx.arc(36,35,18,0,Math.PI*2); ctx.fill();
-    ctx.fillStyle="#0a0d0f"; ctx.font="900 14px Arial, sans-serif"; ctx.textAlign="center"; ctx.fillText("CK",36,40);
-    ctx.fillStyle="#e8e4dc"; ctx.font="bold 18px Arial, sans-serif"; ctx.textAlign="left"; ctx.fillText("CoachKit",64,29);
-    ctx.fillStyle="#a8a39e"; ctx.font="11px Arial, sans-serif"; ctx.fillText("SAY East Youth Soccer",64,46);
-    ctx.fillStyle="#e8a020"; ctx.font="bold 13px Arial, sans-serif"; ctx.textAlign="right"; ctx.fillText(league,W-14,29);
-    ctx.fillStyle="#a8a39e"; ctx.font="11px Arial, sans-serif"; ctx.fillText(new Date().toLocaleDateString(),W-14,46);
-    ctx.fillStyle="rgba(232,160,32,0.1)"; roundRect(ctx,12,78,W-24,52,7); ctx.fill();
-    ctx.strokeStyle="rgba(232,160,32,0.35)"; ctx.lineWidth=1; roundRect(ctx,12,78,W-24,52,7); ctx.stroke();
-    ctx.textAlign="center";
-    ctx.fillStyle="#a8a39e"; ctx.font="bold 11px Arial, sans-serif"; ctx.fillText("US",W/2-70,94);
-    ctx.fillStyle=opponent?"#e8e4dc":"#a8a39e"; ctx.fillText((opponent||"THEM").toUpperCase(),W/2+70,94);
-    ctx.fillStyle="#e8a020"; ctx.font="900 30px Arial, sans-serif"; ctx.fillText(homeScore,W/2-70,121);
-    ctx.fillStyle="#666"; ctx.font="bold 20px Arial, sans-serif"; ctx.fillText(":",W/2,116);
-    ctx.fillStyle=homeScore<awayScore?"#e74c3c":"#e8e4dc"; ctx.font="900 30px Arial, sans-serif"; ctx.fillText(awayScore,W/2+70,121);
-    var pad=10, fw=(W-pad*3)/2, fh=330;
-    [[1,0,0],[2,1,0],[3,0,1],[4,1,1]].forEach(function(qc) {
-      var q=qc[0], col=qc[1], row=qc[2];
-      drawField(ctx, pad+col*(fw+pad), 136+row*(fh+pad), fw, fh, q);
-    });
-    var benchY=136+2*(fh+pad)+6;
-    ctx.fillStyle="#141a12"; roundRect(ctx,12,benchY,W-24,76,5); ctx.fill();
-    ctx.strokeStyle="rgba(255,255,255,0.08)"; roundRect(ctx,12,benchY,W-24,76,5); ctx.stroke();
-    ctx.fillStyle="#e8a020"; ctx.font="bold 11px Arial, sans-serif"; ctx.textAlign="left";
-    ctx.fillText("BENCH",20,benchY+16);
-    var bench=(lineupsByQuarter[1]&&lineupsByQuarter[1].bench)||[];
-    bench.forEach(function(p,i) {
-      var bx=20+(i%6)*((W-40)/6);
-      var by=benchY+24+Math.floor(i/6)*22;
-      ctx.fillStyle="rgba(255,255,255,0.06)"; roundRect(ctx,bx,by,(W-40)/6-3,18,3); ctx.fill();
-      ctx.fillStyle="#e8e4dc"; ctx.font="bold 10px Arial, sans-serif"; ctx.textAlign="left";
-      ctx.fillText("#"+p.number+" "+p.name.split(" ")[0],bx+5,by+12);
-    });
-    ctx.fillStyle="#666"; ctx.font="bold 10px Arial, sans-serif"; ctx.textAlign="center";
-    ctx.fillText("CoachKit - "+league+" - "+new Date().toLocaleDateString(),W/2,H-9);
-  }, [lineupsByQuarter, homeScore, awayScore, opponent, league]);
-
-  const handleDownload = function() {
-    var a = document.createElement("a");
-    a.download = "CoachKit_AllQuarters_Lineup.png";
-    a.href = canvasRef.current.toDataURL("image/png");
-    a.click();
-  };
-
+function ShareLineupModal({ players, lineupsByQuarter, pairPlan, subMode, segments, credit, minQ, homeScore, awayScore, opponent, league, onClose }) {
+  const field = useMemo(
+    () => shareFieldSheet({ lineups: lineupsByQuarter, pairPlan, subMode }),
+    [lineupsByQuarter, pairPlan, subMode],
+  );
+  const playTime = useMemo(
+    () => sharePlayTimeSheet({ players, lineups: lineupsByQuarter, segments, credit, minQ }),
+    [players, lineupsByQuarter, segments, credit, minQ],
+  );
   return (
     <div style={{position:"fixed",inset:0,zIndex:9999,background:"rgba(0,0,0,0.88)",
       display:"flex",alignItems:"center",justifyContent:"center",padding:16}}
       onClick={onClose}>
-      <div style={{background:"#141a12",borderRadius:16,width:"100%",maxWidth:520,
+      <div style={{background:"#141a12",borderRadius:16,width:"100%",maxWidth:560,
         border:"1px solid rgba(255,255,255,0.08)",overflow:"hidden",maxHeight:"92vh",display:"flex",flexDirection:"column"}}
-        onClick={function(e){e.stopPropagation();}}>
+        onClick={e => e.stopPropagation()}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",
-          padding:"14px 18px",borderBottom:"1px solid rgba(255,255,255,0.08)",flexShrink:0}}>
-          <div style={{fontSize:15,fontWeight:800,color:"#e8a020"}}>Share Lineup - All 4 Quarters</div>
+          padding:"14px 18px",borderBottom:"1px solid rgba(255,255,255,0.08)",flexShrink:0,gap:8}}>
+          <div style={{fontSize:15,fontWeight:800,color:"#e8a020"}}>Share lineup</div>
           <button onClick={onClose} style={{
             background:"rgba(255,255,255,0.1)",border:"1px solid rgba(255,255,255,0.2)",
             borderRadius:6,cursor:"pointer",color:"#e8e4dc",fontSize:13,fontWeight:700,padding:"4px 12px",fontFamily:"inherit",
           }}>Close</button>
         </div>
         <div style={{padding:"14px 16px",overflow:"auto"}}>
-          <div style={{fontSize:11,color:"#7a7570",marginBottom:10,lineHeight:1.5}}>
-            All 4 quarters on one image. Tap Save Image to download and share.
+          <div style={{fontSize:11,color:"#7a7570",marginBottom:12,lineHeight:1.5}}>
+            Sheet 1 is the field for all four quarters, with the bench and dotted lines to who they sub for. Sheet 2 is the green play-time bars. Save strategy to game day keeps both in the Season log.
           </div>
-          <div style={{borderRadius:8,overflow:"hidden",marginBottom:12,border:"1px solid rgba(255,255,255,0.08)",background:"#0c1409"}}>
-            <canvas ref={canvasRef} style={{width:"100%",height:"auto",display:"block"}}/>
-          </div>
-          <div style={{display:"flex",gap:8}}>
-            <button onClick={handleDownload} style={{
-              flex:1,padding:"10px",borderRadius:7,border:"none",cursor:"pointer",
-              background:"linear-gradient(135deg,#e8a020,#b87818)",color:"#0a0d0f",
-              fontWeight:700,fontSize:13,fontFamily:"inherit",
-            }}>Save Image</button>
-            <button onClick={onClose} style={{
-              padding:"10px 18px",borderRadius:7,border:"1px solid rgba(255,255,255,0.08)",
-              cursor:"pointer",background:"transparent",color:"#7a7570",fontSize:13,fontFamily:"inherit",
-            }}>Close</button>
-          </div>
+          <SheetCanvases
+            field={field}
+            playTime={playTime}
+            league={league}
+            opponent={opponent}
+            homeScore={homeScore}
+            awayScore={awayScore}
+          />
         </div>
       </div>
     </div>
@@ -4765,11 +4685,13 @@ function TabSeason({ players, playerStats, setPlayerStats, games, setGames, prac
           {[...games].sort((a,b)=>b.date.localeCompare(a.date)).map(g=>{
             const result = g.homeScore>g.oppScore?"W":g.homeScore<g.oppScore?"L":"D";
             const resultColor = result==="W"?C.ok:result==="L"?"#e74c3c":C.gold;
+            const sheets = g.strategy?.sheets;
             return (
               <div key={g.id} style={{
-                display:"flex",alignItems:"center",gap:12,padding:"10px 14px",
+                display:"flex",flexDirection:"column",alignItems:"stretch",gap:8,padding:"10px 14px",
                 background:C.surface,borderRadius:9,marginBottom:6,border:`1px solid ${C.border}`,
               }}>
+                <div style={{display:"flex",alignItems:"flex-start",gap:12}}>
                 <div style={{
                   width:32,height:32,borderRadius:7,flexShrink:0,
                   background:`${resultColor}22`,border:`1px solid ${resultColor}44`,
@@ -4784,7 +4706,10 @@ function TabSeason({ players, playerStats, setPlayerStats, games, setGames, prac
                       {g.strategy.formation || "Strategy"}{g.strategy.formationLabel ? ` · ${g.strategy.formationLabel}` : ""} · {g.strategy.subMode ? "Sub mode" : "Full quarters"}{g.strategy.format ? ` · ${g.strategy.format}` : ""}
                     </div>
                   )}
-                  {g.strategy?.lineups && (
+                  {sheets?.field && sheets?.playTime && (
+                    <div style={{fontSize:11, color:C.gold, fontWeight:700, marginTop:3}}>Sheets saved</div>
+                  )}
+                  {!sheets && g.strategy?.lineups && (
                     <div style={{fontSize:11, color:C.muted, lineHeight:1.45, marginTop:4}}>
                       {[1, 2, 3, 4].filter(q => g.strategy.lineups[q]).map(q => {
                         const names = (g.strategy.lineups[q].starters || []).map(slot => slot.player?.name?.split(" ")[0]).filter(Boolean);
@@ -4798,6 +4723,22 @@ function TabSeason({ players, playerStats, setPlayerStats, games, setGames, prac
                   background:"none",border:"none",cursor:"pointer",color:"rgba(255,255,255,0.2)",
                   fontSize:16,lineHeight:1,padding:"4px 6px",
                 }}></button>
+                </div>
+                {sheets?.field && sheets?.playTime && (
+                  <details>
+                    <summary style={{cursor:"pointer",fontSize:12,fontWeight:700,color:C.text}}>Field sheet and play time</summary>
+                    <div style={{marginTop:10}}>
+                      <SheetCanvases
+                        field={sheets.field}
+                        playTime={sheets.playTime}
+                        league={g.strategy.league || ""}
+                        opponent={g.opponent}
+                        homeScore={g.homeScore}
+                        awayScore={g.oppScore}
+                      />
+                    </div>
+                  </details>
+                )}
               </div>
             );
           })}

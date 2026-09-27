@@ -241,6 +241,115 @@ export function formatQuarterEquity(halves) {
   return String(whole);
 }
 
+/** Same pitch spots as the Game Day field. Percentages of the 320×480 view. */
+export const FIELD_BASE = {
+  GK: { x: 50, y: 88 },
+  CB: { x: 50, y: 72 }, CD: { x: 50, y: 72 }, LD: { x: 25, y: 72 }, RD: { x: 75, y: 72 },
+  LB: { x: 22, y: 75 }, RB: { x: 78, y: 75 },
+  DEF: { x: 50, y: 72 },
+  CDM: { x: 50, y: 58 }, CM: { x: 50, y: 50 }, LM: { x: 22, y: 50 }, RM: { x: 78, y: 50 },
+  MID: { x: 50, y: 50 }, CAM: { x: 50, y: 38 },
+  LW: { x: 18, y: 32 }, RW: { x: 82, y: 32 },
+  LF: { x: 28, y: 22 }, RF: { x: 72, y: 22 }, CF: { x: 50, y: 18 },
+  FWD: { x: 50, y: 22 }, ST: { x: 50, y: 18 }, Wing: { x: 20, y: 30 },
+};
+
+/** Marker center inside the 320×480 field, including the side-step when a position repeats. */
+export function fieldMarker(pos, indexAmongSame = 0, totalSame = 1) {
+  const base = FIELD_BASE[pos] || { x: 50, y: 50 };
+  const total = totalSame || 1;
+  const spread = total > 1 ? (indexAmongSame - (total - 1) / 2) * (52 / total) : 0;
+  const fx = base.x + spread * 0.7;
+  return {
+    x: 5 + (fx / 100) * 310,
+    y: 5 + (base.y / 100) * 470,
+  };
+}
+
+/**
+ * Sheet 1. Four quarters, each with the pitch markers, the bench, and the
+ * dotted sub pairs. Full-quarter mode stores the bench and leaves pairs empty.
+ */
+export function shareFieldSheet({ lineups, pairPlan, subMode = true, quarters = [1, 2, 3, 4] } = {}) {
+  const panels = quarters.map(q => {
+    const lineup = lineups?.[q] || lineups?.[String(q)] || null;
+    const counts = {};
+    (lineup?.starters || []).forEach(slot => {
+      counts[slot.pos] = (counts[slot.pos] || 0) + 1;
+    });
+    const seen = {};
+    const starters = (lineup?.starters || []).map((slot, idx) => {
+      const pos = slot.pos;
+      const indexAmongSame = seen[pos] || 0;
+      seen[pos] = indexAmongSame + 1;
+      const point = fieldMarker(pos, indexAmongSame, counts[pos] || 1);
+      return {
+        idx,
+        pos: pos || "",
+        id: slot.player?.id || null,
+        name: slot.player?.name || "",
+        number: slot.player?.number || "",
+        x: Math.round(point.x * 10) / 10,
+        y: Math.round(point.y * 10) / 10,
+      };
+    });
+    const bench = (lineup?.bench || []).filter(Boolean).map(player => ({
+      id: player.id,
+      name: player.name || "",
+      number: player.number || "",
+    }));
+    let pairs = [];
+    if (subMode && lineup) {
+      const next = lineups?.[q + 1] || lineups?.[String(q + 1)] || null;
+      const auto = planBenchRotation(lineup, { minutesById: {}, nextLineup: next });
+      const manual = pairPlan?.[q] || pairPlan?.[String(q)] || [];
+      pairs = pairsForDisplay(auto, manual, lineup).map(pair => ({
+        inId: pair.inId,
+        outId: pair.outId,
+      }));
+    }
+    return { quarter: q, starters, bench, pairs };
+  });
+  return { subMode: !!subMode, quarters: panels };
+}
+
+/**
+ * Sheet 2. One row per active player, with the same full / split / bench cells
+ * as the Play Time chart.
+ */
+export function sharePlayTimeSheet({ players, lineups, segments, credit, minQ = 2 } = {}) {
+  const minHalves = (Number(minQ) || 0) * 2;
+  const rows = (players || [])
+    .filter(player => player && !player.injured && !player.out)
+    .slice()
+    .sort((a, b) => String(a.name || "").localeCompare(String(b.name || "")))
+    .map(player => {
+      const cells = [1, 2, 3, 4].map(q => {
+        const lineup = lineups?.[q] || lineups?.[String(q)];
+        if (!lineup) return { quarter: q, kind: "unplanned", pos: "" };
+        const on = (lineup.starters || []).some(slot => slot.player?.id === player.id);
+        const slot = (lineup.starters || []).find(item => item.player?.id === player.id);
+        return {
+          quarter: q,
+          kind: playCellKind({ onField: on, segment: segmentAt(segments, player.id, q) }),
+          pos: slot?.pos || "",
+        };
+      });
+      const halves = equityHalves(player.id, { lineups, segments, credit, quarters: [1, 2, 3, 4] });
+      return {
+        id: player.id,
+        name: player.name || "",
+        number: player.number || "",
+        cells,
+        halves,
+        label: `${formatQuarterEquity(halves)}/${minQ}Q`,
+        ratio: minHalves > 0 ? Math.min(1, halves / minHalves) : 1,
+        met: minHalves <= 0 || halves >= minHalves,
+      };
+    });
+  return { minQ, minHalves, rows };
+}
+
 /** Point on the circle closest to (x1, y1), so a connector stops on the rim. */
 export function lineStopAtCircle(x1, y1, cx, cy, radius) {
   const dx = x1 - cx;
@@ -493,6 +602,7 @@ export function gameLogFromStrategy({
   league,
   lineups,
   savedAt,
+  sheets,
 } = {}) {
   return {
     id,
@@ -509,6 +619,7 @@ export function gameLogFromStrategy({
       league: league || "",
       lineups: lineups || {},
       savedAt: savedAt || "",
+      sheets: sheets || null,
     },
   };
 }

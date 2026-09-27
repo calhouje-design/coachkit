@@ -28,6 +28,9 @@ import {
   equityHalves,
   formatQuarterEquity,
   lineStopAtCircle,
+  fieldMarker,
+  shareFieldSheet,
+  sharePlayTimeSheet,
   playerHalfMask,
   maxConsecutiveSits,
   scheduleHalfRotation,
@@ -373,6 +376,7 @@ test("a game log stores the strategy and a second save updates that day", () => 
   });
   assert.equal(entry.strategy.subMode, true);
   assert.equal(entry.strategy.formation, "2-2-1");
+  assert.equal(entry.strategy.sheets, null);
   const again = gameLogFromStrategy({ ...entry, id: "g2", formation: "3-2", subMode: false, homeScore: 9 });
   const updated = upsertGameLog([entry], again);
   assert.equal(updated.length, 1);
@@ -382,4 +386,63 @@ test("a game log stores the strategy and a second save updates that day", () => 
   assert.equal(updated[0].strategy.subMode, false);
   const other = upsertGameLog(updated, gameLogFromStrategy({ id: "g3", date: "2026-10-04", opponent: "Rockets", formation: "2-1-2" }));
   assert.equal(other.length, 2);
+});
+
+test("field markers match the pitch and a repeated spot steps sideways", () => {
+  const gk = fieldMarker("GK", 0, 1);
+  assert.equal(gk.x, 160);
+  assert.ok(Math.abs(gk.y - 418.6) < 0.01);
+  const left = fieldMarker("CM", 0, 2);
+  const right = fieldMarker("CM", 1, 2);
+  assert.ok(left.x < right.x);
+});
+
+test("share sheets keep the bench, the sub lines, and the green-bar cells", () => {
+  const slots = ["GK", "LD", "RD", "LM", "RM", "CF"];
+  const names = ["Ann", "Bea", "Cal", "Dee", "Eve", "Fay", "Gia"];
+  const players = names.map((name, i) => ({
+    id: name[0].toLowerCase(),
+    name,
+    number: String(i + 1),
+    injured: false,
+    out: false,
+  }));
+  const on = players.slice(0, 6);
+  const bench = [players[6]];
+  const q2On = [players[6], ...on.slice(1)];
+  const lineups = {
+    1: { starters: on.map((player, i) => ({ pos: slots[i], player })), bench },
+    2: { starters: q2On.map((player, i) => ({ pos: slots[i], player })), bench: [players[0]] },
+  };
+  const segments = { g: { 2: "entered" }, a: { 2: "left" } };
+  const field = shareFieldSheet({ lineups, pairPlan: {}, subMode: true });
+  assert.equal(field.quarters.length, 4);
+  assert.equal(field.quarters[0].bench[0].id, "g");
+  assert.equal(field.quarters[0].pairs.length, 1);
+  assert.equal(field.quarters[0].pairs[0].inId, "g");
+  assert.ok(field.quarters[0].starters.every(slot => slot.x > 0 && slot.y > 0));
+  const quiet = shareFieldSheet({ lineups, subMode: false });
+  assert.equal(quiet.quarters[0].pairs.length, 0);
+  assert.equal(quiet.quarters[0].bench.length, 1);
+
+  const play = sharePlayTimeSheet({ players, lineups, segments, credit: {}, minQ: 2 });
+  const gia = play.rows.find(row => row.id === "g");
+  assert.equal(gia.cells[0].kind, "bench");
+  assert.equal(gia.cells[1].kind, "partial-on");
+  const ann = play.rows.find(row => row.id === "a");
+  assert.equal(ann.cells[0].kind, "full");
+  assert.equal(ann.cells[1].kind, "partial-off");
+  assert.match(ann.label, /Q$/);
+
+  const saved = gameLogFromStrategy({
+    id: "g9",
+    date: "2026-09-27",
+    opponent: "Rockets",
+    formation: "2-2-1",
+    subMode: true,
+    lineups,
+    sheets: { field, playTime: play },
+  });
+  assert.equal(saved.strategy.sheets.field.quarters.length, 4);
+  assert.equal(saved.strategy.sheets.playTime.rows.length, 7);
 });
