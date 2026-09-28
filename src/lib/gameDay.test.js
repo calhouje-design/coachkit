@@ -36,6 +36,9 @@ import {
   scheduleHalfRotation,
   gameLogFromStrategy,
   upsertGameLog,
+  playerQuarterPresence,
+  regenerateForAbsence,
+  goalkeeperId,
 } from "./gameDay.js";
 
 test("appearance credit stacks on lineup quarters and banked minutes are not replaced", () => {
@@ -465,4 +468,87 @@ test("share sheets keep the bench, the sub lines, and the green-bar cells", () =
   });
   assert.equal(saved.strategy.sheets.field.quarters.length, 4);
   assert.equal(saved.strategy.sheets.playTime.rows.length, 7);
+});
+
+test("injury in Q1 regenerates the lineup and leaves Q2 blank until they return in Q3", () => {
+  const players = halfRoster(8);
+  const slots = ["GK", "LD", "RD", "LM", "RM", "CF"];
+  const before = scheduleHalfRotation(players, slots, { minHalves: 4, rate: () => 1 });
+  const absentId = "p8";
+  const gk = goalkeeperId(before.lineups[1]);
+  assert.notEqual(gk, absentId);
+  assert.notEqual(playerQuarterPresence(before.lineups[2], absentId), "blank");
+  const injured = regenerateForAbsence({
+    players,
+    slots,
+    lineups: before.lineups,
+    segments: before.segments,
+    absentId,
+    fromQuarter: 1,
+    returnQuarter: null,
+    minHalves: 4,
+    subMode: true,
+    rate: () => 1,
+  });
+  [1, 2, 3, 4].forEach(q => {
+    assert.equal(playerQuarterPresence(injured.lineups[q], absentId), "blank", `Q${q} still lists ${absentId}`);
+    injured.lineups[q].starters.forEach(slot => {
+      assert.ok(slot.player, `Q${q} ${slot.pos} was left empty`);
+      assert.notEqual(slot.player.id, absentId);
+    });
+  });
+  assert.equal(goalkeeperId(injured.lineups[1]), gk, "injury regen kept the quarter's goalkeeper");
+  const back = regenerateForAbsence({
+    players,
+    slots,
+    lineups: injured.lineups,
+    segments: injured.segments,
+    absentId,
+    fromQuarter: 1,
+    returnQuarter: 3,
+    minHalves: 4,
+    subMode: true,
+    rate: () => 1,
+  });
+  assert.equal(playerQuarterPresence(back.lineups[1], absentId), "blank");
+  assert.equal(playerQuarterPresence(back.lineups[2], absentId), "blank");
+  assert.notEqual(playerQuarterPresence(back.lineups[3], absentId), "blank");
+  back.lineups[2].starters.forEach(slot => assert.ok(slot.player, `Q2 ${slot.pos} dropped out of the reflow`));
+  assert.equal(goalkeeperId(back.lineups[1]), gk);
+});
+
+test("full-quarter injury refills the open slot and stays blank until the return quarter", () => {
+  const keep = { id: "keep", name: "Keep", injured: false, out: false, positions: ["GK"] };
+  const gone = { id: "gone", name: "Gone", injured: false, out: false, positions: ["CF"] };
+  const sub = { id: "sub", name: "Sub", injured: false, out: false, positions: ["CF"] };
+  const quarter = {
+    starters: [{ pos: "GK", player: keep }, { pos: "CF", player: gone }],
+    bench: [sub],
+  };
+  const lineups = { 1: quarter, 2: quarter, 3: quarter, 4: quarter };
+  const injured = regenerateForAbsence({
+    players: [keep, gone, sub],
+    slots: ["GK", "CF"],
+    lineups,
+    absentId: "gone",
+    fromQuarter: 1,
+    returnQuarter: null,
+    subMode: false,
+  });
+  assert.equal(playerQuarterPresence(injured.lineups[2], "gone"), "blank");
+  assert.equal(injured.lineups[2].starters[0].player.id, "keep");
+  assert.equal(injured.lineups[2].starters[1].player.id, "sub");
+  const back = regenerateForAbsence({
+    players: [keep, gone, sub],
+    slots: ["GK", "CF"],
+    lineups: injured.lineups,
+    absentId: "gone",
+    fromQuarter: 1,
+    returnQuarter: 3,
+    subMode: false,
+  });
+  assert.equal(playerQuarterPresence(back.lineups[2], "gone"), "blank");
+  assert.equal(playerQuarterPresence(back.lineups[1], "gone"), "blank");
+  assert.notEqual(playerQuarterPresence(back.lineups[3], "gone"), "blank");
+  assert.equal(back.lineups[3].starters[0].player.id, "keep");
 });

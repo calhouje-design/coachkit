@@ -117,22 +117,7 @@ function paintQuarterPanel(ctx, x, y, w, h, panel) {
     cardH,
   }));
 
-  ctx.save();
-  ctx.setLineDash([3, 3]);
-  ctx.strokeStyle = "#2ecc71";
-  ctx.lineWidth = 1.6;
-  cards.forEach(({ player, cardY, cardH: height }) => {
-    const target = starterById[pairByIn[player.id]?.outId];
-    if (!target) return;
-    const x1 = x + benchW - 1;
-    const y1 = cardY + height / 2;
-    const stop = lineStopAtCircle(x1, y1, sx(target.x), sy(target.y), rim);
-    ctx.beginPath();
-    ctx.moveTo(x1, y1);
-    ctx.lineTo(stop.x, stop.y);
-    ctx.stroke();
-  });
-  ctx.restore();
+  const dotAt = (cardY) => ({ x: x + benchW - 12, y: cardY + 22 });
 
   ctx.fillStyle = "#141a12";
   ctx.fillRect(x, y, benchW, h);
@@ -156,12 +141,35 @@ function paintQuarterPanel(ctx, x, y, w, h, panel) {
     ctx.textAlign = "left";
     ctx.fillText(String(player.number ?? ""), x + 8, cardY + 13);
     ctx.font = "bold 9px Arial, sans-serif";
-    ctx.fillText(firstName(player.name).slice(0, 8), x + 8, cardY + 25);
+    ctx.fillText(firstName(player.name).slice(0, target ? 6 : 8), x + 8, cardY + 25);
     if (target) {
       ctx.fillStyle = "#2ecc71";
       ctx.font = "bold 8px Arial, sans-serif";
       ctx.fillText(`for ${firstName(target.name).slice(0, 7)}`, x + 8, cardY + height - 5);
     }
+  });
+  ctx.save();
+  ctx.setLineDash([3, 3]);
+  ctx.strokeStyle = "#2ecc71";
+  ctx.lineWidth = 1.6;
+  cards.forEach(({ player, cardY }) => {
+    const target = starterById[pairByIn[player.id]?.outId];
+    if (!target) return;
+    const dot = dotAt(cardY);
+    const stop = lineStopAtCircle(dot.x, dot.y, sx(target.x), sy(target.y), rim);
+    ctx.beginPath();
+    ctx.moveTo(dot.x, dot.y);
+    ctx.lineTo(stop.x, stop.y);
+    ctx.stroke();
+  });
+  ctx.restore();
+  cards.forEach(({ player, cardY }) => {
+    if (!starterById[pairByIn[player.id]?.outId]) return;
+    const dot = dotAt(cardY);
+    ctx.beginPath();
+    ctx.fillStyle = "#2ecc71";
+    ctx.arc(dot.x, dot.y, 3, 0, Math.PI * 2);
+    ctx.fill();
   });
 
   const colors = Q_COLORS[panel.quarter] || Q_COLORS[1];

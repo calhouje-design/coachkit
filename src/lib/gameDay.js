@@ -136,6 +136,14 @@ export function pullFromPlan(lineups, playerId, fromQuarter, totalQuarters = 4) 
   return next;
 }
 
+/** On the field, on the bench, or missing from this quarter entirely. */
+export function playerQuarterPresence(lineup, playerId) {
+  if (!lineup) return "unplanned";
+  if ((lineup.starters || []).some(slot => slot.player?.id === playerId)) return "on";
+  if ((lineup.bench || []).some(player => player?.id === playerId)) return "bench";
+  return "blank";
+}
+
 export function addLateArrival(lineup, player) {
   if (!lineup || !player) return lineup;
   if ((lineup.starters || []).some(slot => slot.player?.id === player.id)) return lineup;
@@ -635,6 +643,123 @@ export function scheduleHalfRotation(players, slots, {
   });
 
   return { lineups, segments };
+}
+
+function pinNamedGoalkeeper(lineup, gkId, roster) {
+  if (!lineup?.starters || !gkId) return lineup;
+  const gkIdx = lineup.starters.findIndex(slot => isGkPosition(slot.pos));
+  if (gkIdx < 0 || lineup.starters[gkIdx].player?.id === gkId) return lineup;
+  const gkPlayer = (roster || []).find(player => player?.id === gkId);
+  if (!gkPlayer || gkPlayer.injured || gkPlayer.out) return lineup;
+  const starters = lineup.starters.map(slot => ({ ...slot }));
+  const displaced = starters[gkIdx].player || null;
+  let bench = [...(lineup.bench || [])].filter(player => player?.id !== gkId);
+  const otherIdx = starters.findIndex(slot => slot.player?.id === gkId);
+  if (otherIdx >= 0) starters[otherIdx] = { ...starters[otherIdx], player: displaced };
+  else if (displaced) bench = [...bench, displaced];
+  starters[gkIdx] = { ...starters[gkIdx], player: gkPlayer };
+  return { starters, bench };
+}
+
+/**
+ * Rebuild the sheet when someone is injured or out.
+ * Quarters from `fromQuarter` until the quarter before `returnQuarter` drop that
+ * player (blank — not left on the bench) and the remaining players refill the field.
+ * A return quarter replans from then on and leaves the unavailable quarters as they are.
+ * Sub mode uses the half-quarter planner. Full quarters refill the open slot.
+ * The goalkeeper stays in goal for the injury quarter unless they are the one hurt.
+ */
+export function regenerateForAbsence({
+  players,
+  slots,
+  lineups = {},
+  segments = {},
+  absentId,
+  fromQuarter = 1,
+  returnQuarter = null,
+  minHalves = 4,
+  subMode = true,
+  rate = () => 0,
+  totalQuarters = 4,
+} = {}) {
+  const start = Math.max(1, Number(fromQuarter) || 1);
+  const back = returnQuarter == null ? null : Number(returnQuarter);
+  const absentEnd = back == null ? totalQuarters : Math.min(totalQuarters, back - 1);
+  const roster = players || [];
+  const without = roster.map(player => (
+    player?.id === absentId ? { ...player, injured: true, out: false } : player
+  ));
+  const withBack = roster.map(player => (
+    player?.id === absentId ? { ...player, injured: false, out: false, midGameInjury: false } : player
+  ));
+
+  if (!subMode) {
+    const next = { ...(lineups || {}) };
+    for (let q = start; q <= absentEnd; q++) {
+      if (next[q]) next[q] = pullFromQuarter(next[q], absentId);
+    }
+    const nextSegments = clearSubSegmentsFrom(segments, start);
+    if (back != null && back <= totalQuarters) {
+      const returning = withBack.find(player => player?.id === absentId);
+      for (let q = back; q <= totalQuarters; q++) {
+        if (!next[q] || !returning) continue;
+        if (playerQuarterPresence(next[q], absentId) !== "blank") continue;
+        const emptyIdx = (next[q].starters || []).findIndex(slot => !slot.player && !isGkPosition(slot.pos));
+        if (emptyIdx >= 0) {
+          const starters = next[q].starters.map((slot, index) => (
+            index === emptyIdx ? { ...slot, player: returning } : slot
+          ));
+          next[q] = { starters, bench: (next[q].bench || []).filter(player => player?.id !== absentId) };
+        } else {
+          next[q] = addLateArrival(next[q], returning);
+        }
+      }
+    }
+    return { lineups: next, segments: nextSegments };
+  }
+
+  const lockedBefore = {};
+  for (let q = 1; q < start; q++) {
+    if (lineups[q]) lockedBefore[q] = lineups[q];
+  }
+  const absentPlan = scheduleHalfRotation(without, slots, {
+    minHalves,
+    fromQuarter: start,
+    lockedLineups: lockedBefore,
+    lockedSegments: clearSubSegmentsFrom(segments, start),
+    totalQuarters: Math.max(start, absentEnd),
+    rate,
+  });
+  const shaped = { ...absentPlan.lineups };
+  for (let q = start; q <= absentEnd; q++) {
+    if (shaped[q]) shaped[q] = pullFromQuarter(shaped[q], absentId);
+  }
+  const prevGk = goalkeeperId(lineups?.[start]);
+  if (prevGk && prevGk !== absentId && shaped[start]) {
+    shaped[start] = pinNamedGoalkeeper(shaped[start], prevGk, roster);
+    shaped[start] = pullFromQuarter(shaped[start], absentId);
+  }
+  if (back == null || back > totalQuarters) {
+    return { lineups: shaped, segments: absentPlan.segments };
+  }
+
+  const lockedUntilReturn = {};
+  for (let q = 1; q < back; q++) {
+    if (shaped[q]) lockedUntilReturn[q] = shaped[q];
+  }
+  const returnPlan = scheduleHalfRotation(withBack, slots, {
+    minHalves,
+    fromQuarter: back,
+    lockedLineups: lockedUntilReturn,
+    lockedSegments: absentPlan.segments,
+    totalQuarters,
+    rate,
+  });
+  const returned = { ...returnPlan.lineups };
+  for (let q = start; q <= absentEnd; q++) {
+    if (returned[q]) returned[q] = pullFromQuarter(returned[q], absentId);
+  }
+  return { lineups: returned, segments: returnPlan.segments };
 }
 
 /** One Season game-log row. Strategy rides on the game the app already stores. */
