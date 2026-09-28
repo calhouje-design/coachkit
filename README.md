@@ -28,17 +28,17 @@ VITE_SUPABASE_ANON_KEY=
 
 Use the Supabase **anon** key. Do not put the service-role key in Vite.
 
-Preview and production on Vercel need the same `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` names. This repo's agent token cannot read the `calhouje-designs-projects` Vercel team (API 403). If a preview deploy is missing the Supabase vars, copy them from Production onto Preview in the Vercel dashboard.
+Preview and production on Vercel need the same `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` names. Those names are set on both targets. The host in `VITE_SUPABASE_URL` has to resolve before any cloud save works.
 
 ## Supabase SQL (paste once)
 
-Run [`supabase/migrations/20260926180000_round_one_teams.sql`](supabase/migrations/20260926180000_round_one_teams.sql) in the Supabase SQL editor. It creates teams, coaches, players, lineups, custom drills, games, and practice tables, with row level security so only members of a team can read or write that team's rows.
+Follow [`supabase/APPLY.md`](supabase/APPLY.md). Paste the two migration files, in order, into the Supabase SQL editor. There is no database password or service role in this repo, so the scripts cannot be applied from here.
 
-The agent could not apply this SQL remotely (no database password or service role). Jared or CoS pastes the file once. Free tier only.
+[`supabase/migrations/20260926180000_round_one_teams.sql`](supabase/migrations/20260926180000_round_one_teams.sql) creates teams, coaches, players, lineups, custom drills, games, and practice tables, with row level security so only members of a team can read or write that team's rows. Then [`supabase/migrations/20260928120000_team_durable.sql`](supabase/migrations/20260928120000_team_durable.sql) adds settings, the in-progress game, and the schedule.
 
 ### Clerk ↔ Supabase
 
-1. In Supabase: Authentication → Sign In / Up → Third-party auth → add Clerk. Use the Clerk frontend API URL for this app.
+1. In Supabase: Authentication → Sign In / Up → Third-party auth → add Clerk. Production currently uses `https://growing-tetra-53.clerk.accounts.dev`.
 2. The app sends the Clerk session token on every Supabase request (`accessToken`). `auth.jwt()->>'sub'` must be the Clerk user id (`user_…`).
 3. Optional email invites: in the Clerk dashboard, customize the session token and add `email` = `{{user.primary_email_address}}`. Without that claim, email rows stay pending. Adding a coach by Clerk user id works either way.
 
