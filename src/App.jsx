@@ -46,14 +46,16 @@ import {
 } from "./lib/gameDay.js";
 import { downloadCanvas, paintFieldSheet, paintPlayTimeSheet } from "./lib/sharePaint.js";
 import { useTeamCloud } from "./lib/teamCloud.js";
+import { bindField, normalizeGameDay, snapshotFromStorage } from "./lib/teamSnapshot.js";
 
 // -- localStorage persistence helper --
 function usePersistedState(key, defaultValue) {
   const [state, setState] = useState(() => {
     try {
       const stored = localStorage.getItem(key);
-      return stored ? JSON.parse(stored) : defaultValue;
-    } catch { return defaultValue; }
+      if (stored != null) return JSON.parse(stored);
+    } catch { /* use the default */ }
+    return typeof defaultValue === "function" ? defaultValue() : defaultValue;
   });
   useEffect(() => {
     try { localStorage.setItem(key, JSON.stringify(state)); }
@@ -1623,13 +1625,13 @@ function GameSettings({
 //
 // TAB: GAME DAY
 //
-function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer, lineupsByQuarter, setLineupsByQuarter, storagePrefix = "ck_guest_", setGames, subMode = true, autoRegen = true, quarterMinutes = null }) {
+function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer, lineupsByQuarter, setLineupsByQuarter, storagePrefix = "ck_guest_", setGames, subMode = true, autoRegen = true, quarterMinutes = null, gameDay, setGameDay }) {
   const [quarter,       setQuarterRaw]    = useState(1);
   const [injuryAlerts,  setInjuryAlerts]  = useState([]);
   const [justRegenned,  setJustRegenned]  = useState(false);
   const [showRotation,  setShowRotation]  = useState(false);
   const [showFormations,setShowFormations]= useState(false);
-  const [activeFormation,setActiveFormation]=usePersistedState(storagePrefix+"formation", "2-2-1");
+  const [activeFormation,setActiveFormation]=[normalizeGameDay(gameDay).formation, bindField(setGameDay, "formation", normalizeGameDay)];
   const [saveNote, setSaveNote] = useState("");
   const [editingPlayerId, setEditingPlayerId] = useState(null);
   const [rosterSort,    setRosterSort]    = useState("name"); // name | rating | position
@@ -1669,15 +1671,17 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
     setNewName(""); setNewNum("");
   };
 
-  // Live score stays on this device. Shared season logs are separate.
-  const [homeScore, setHomeScore] = usePersistedState(storagePrefix+"homeScore", 0);
-  const [awayScore, setAwayScore] = usePersistedState(storagePrefix+"awayScore", 0);
-  const [opponent,  setOpponent]  = usePersistedState(storagePrefix+"opponent", "");
-  const [minuteBank, setMinuteBank] = usePersistedState(storagePrefix+"minuteBank", {});
-  const [appearanceCredit, setAppearanceCredit] = usePersistedState(storagePrefix+"appearanceCredit", {});
-  const [subSegments, setSubSegments] = usePersistedState(storagePrefix+"subSegments", {});
-  const [pairPlan, setPairPlan] = usePersistedState(storagePrefix+"pairPlan", {});
-  const [subQueue, setSubQueue] = usePersistedState(storagePrefix+"subQueue", []);
+  // Score, subs, and formation sync with the team. The quarter clock stays on this device
+  // because it ticks every second. Saved season logs are a separate record.
+  const live = normalizeGameDay(gameDay);
+  const [homeScore, setHomeScore] = [live.homeScore, bindField(setGameDay, "homeScore", normalizeGameDay)];
+  const [awayScore, setAwayScore] = [live.awayScore, bindField(setGameDay, "awayScore", normalizeGameDay)];
+  const [opponent,  setOpponent]  = [live.opponent, bindField(setGameDay, "opponent", normalizeGameDay)];
+  const [minuteBank, setMinuteBank] = [live.minuteBank, bindField(setGameDay, "minuteBank", normalizeGameDay)];
+  const [appearanceCredit, setAppearanceCredit] = [live.appearanceCredit, bindField(setGameDay, "appearanceCredit", normalizeGameDay)];
+  const [subSegments, setSubSegments] = [live.subSegments, bindField(setGameDay, "subSegments", normalizeGameDay)];
+  const [pairPlan, setPairPlan] = [live.pairPlan, bindField(setGameDay, "pairPlan", normalizeGameDay)];
+  const [subQueue, setSubQueue] = [live.subQueue, bindField(setGameDay, "subQueue", normalizeGameDay)];
   const [chartFocusId, setChartFocusId] = useState(null);
   const [clockSec, setClockSec] = usePersistedState(storagePrefix+"clockSec", 0);
   const [editOpp,   setEditOpp]   = useState(false);
@@ -1749,7 +1753,12 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
 
   const writeBank = (bank) => {
     bankRef.current = bank || {};
-    try { localStorage.setItem(storagePrefix + "minuteBank", JSON.stringify(bankRef.current)); } catch { /* storage full */ }
+    try {
+      const raw = localStorage.getItem(storagePrefix + "gameDay");
+      const current = raw ? JSON.parse(raw) : {};
+      localStorage.setItem(storagePrefix + "gameDay", JSON.stringify({ ...normalizeGameDay(current), minuteBank: bankRef.current }));
+      localStorage.setItem(storagePrefix + "minuteBank", JSON.stringify(bankRef.current));
+    } catch { /* storage full */ }
   };
 
   const bankLeave = (playerId) => {
@@ -4459,6 +4468,18 @@ function CoachKitLoaded() {
   const [games,              setGames]              = usePersistedState(pfx+"games",         []);
   const [practiceAttendance, setPracticeAttendance] = usePersistedState(pfx+"practiceAtt",  {});
   const [practiceDates,      setPracticeDates]      = usePersistedState(pfx+"practiceDates",[]);
+  const [schedule,           setSchedule]           = usePersistedState(pfx+"schedule", []);
+  const [gameDay,            setGameDay]            = usePersistedState(pfx+"gameDay", () => {
+    const get = (key, fallback) => {
+      try {
+        const raw = localStorage.getItem(pfx + key);
+        return raw ? JSON.parse(raw) : fallback;
+      } catch {
+        return fallback;
+      }
+    };
+    return snapshotFromStorage(get).gameDay;
+  });
 
   const allDrills = [...DRILLS, ...customDrills];
 
@@ -4474,7 +4495,14 @@ function CoachKitLoaded() {
     if (Array.isArray(snap.games)) setGames(snap.games);
     if (Array.isArray(snap.practiceDates)) setPracticeDates(snap.practiceDates);
     if (snap.practiceAttendance && typeof snap.practiceAttendance === "object") setPracticeAttendance(snap.practiceAttendance);
-  }, [setTeamName, setLeague, setFormat, setPlayers, setLineupsByQuarter, setCustomDrills, setPlayerStats, setGames, setPracticeDates, setPracticeAttendance]);
+    if (snap.settings && typeof snap.settings === "object") {
+      if (typeof snap.settings.subMode === "boolean") setSubMode(snap.settings.subMode);
+      if (typeof snap.settings.autoRegen === "boolean") setAutoRegen(snap.settings.autoRegen);
+      if ("quarterMinutes" in snap.settings) setQuarterMinutes(snap.settings.quarterMinutes);
+    }
+    if (snap.gameDay && typeof snap.gameDay === "object") setGameDay(normalizeGameDay(snap.gameDay));
+    if (Array.isArray(snap.schedule)) setSchedule(snap.schedule);
+  }, [setTeamName, setLeague, setFormat, setPlayers, setLineupsByQuarter, setCustomDrills, setPlayerStats, setGames, setPracticeDates, setPracticeAttendance, setSubMode, setAutoRegen, setQuarterMinutes, setGameDay, setSchedule]);
 
   const snapshot = useMemo(() => ({
     teamName,
@@ -4487,7 +4515,10 @@ function CoachKitLoaded() {
     games,
     practiceDates,
     practiceAttendance,
-  }), [teamName, league, format, players, lineupsByQuarter, customDrills, playerStats, games, practiceDates, practiceAttendance]);
+    settings: { subMode, autoRegen, quarterMinutes },
+    gameDay,
+    schedule,
+  }), [teamName, league, format, players, lineupsByQuarter, customDrills, playerStats, games, practiceDates, practiceAttendance, subMode, autoRegen, quarterMinutes, gameDay, schedule]);
 
   const cloud = useTeamCloud({
     userId: user?.id || "",
@@ -4622,7 +4653,7 @@ function CoachKitLoaded() {
             {cloud.error}
           </div>
         )}
-        {tab==="game"     && <TabGame     format={format} league={league} players={players} setPlayers={setPlayers} addPlayer={addPlayer} removePlayer={removePlayer} lineupsByQuarter={lineupsByQuarter} setLineupsByQuarter={setLineupsByQuarter} storagePrefix={pfx} setGames={setGames} subMode={subMode} autoRegen={autoRegen} quarterMinutes={quarterMinutes}/>}
+        {tab==="game"     && <TabGame     format={format} league={league} players={players} setPlayers={setPlayers} addPlayer={addPlayer} removePlayer={removePlayer} lineupsByQuarter={lineupsByQuarter} setLineupsByQuarter={setLineupsByQuarter} storagePrefix={pfx} setGames={setGames} subMode={subMode} autoRegen={autoRegen} quarterMinutes={quarterMinutes} gameDay={gameDay} setGameDay={setGameDay}/>}
         <GameSettings
           open={settingsOpen}
           onClose={() => setSettingsOpen(false)}
@@ -4640,7 +4671,7 @@ function CoachKitLoaded() {
           fairPlayLabel={`Fair-play target: ${minQuarters((PLAY_TIME_RULES[league] || {}).minFraction || 0, 4)} of 4 quarters (${minQuarters((PLAY_TIME_RULES[league] || {}).minFraction || 0, 4) * 2} halves).`}
         />
         {tab==="season"   && <TabSeason   players={players} playerStats={playerStats} setPlayerStats={setPlayerStats} games={games} setGames={setGames} practiceDates={practiceDates} setPracticeDates={setPracticeDates} practiceAttendance={practiceAttendance} setPracticeAttendance={setPracticeAttendance}/>}
-        {tab==="team"     && <TabTeam     players={players} updatePlayer={updatePlayer} league={league} games={games} cloud={cloud} clerkUserId={user?.id || ""}/>}
+        {tab==="team"     && <TabTeam     players={players} updatePlayer={updatePlayer} league={league} games={games} cloud={cloud} clerkUserId={user?.id || ""} schedule={schedule} setSchedule={setSchedule}/>}
         {tab==="rules"    && <TabRules    league={league} setLeague={setLeague} setFormat={setFormat}/>}
         {tab==="drills"   && <TabDrills   drills={allDrills} league={league} addCustomDrill={addCustomDrill} removeCustomDrill={removeCustomDrill}/>}
         {tab==="practice" && <TabPractice drills={allDrills} league={league}/>}
@@ -5031,16 +5062,11 @@ function CoachesCard({ cloud, clerkUserId }) {
   );
 }
 
-function TabTeam({ players, updatePlayer, league, games, cloud, clerkUserId }) {
+function TabTeam({ players, updatePlayer, league, games, cloud, clerkUserId, schedule, setSchedule }) {
   const [view, setView] = useState("contacts"); // contacts | schedule | dev
   const [showPrintModal, setShowPrintModal] = useState(false);
   const [editPlayer, setEditPlayer] = useState(null);
   const [newScheduleItem, setNewScheduleItem] = useState({date:"",type:"game",opponent:"",location:"",notes:""});
-  const [schedule, setSchedule] = useState([
-    {id:"s1",date:"2026-03-22",type:"game",opponent:"FC Milford",location:"East Side Park, Field 2",notes:"Bring extra water"},
-    {id:"s2",date:"2026-03-25",type:"practice",opponent:"",location:"SAY East Complex",notes:"Focus on positioning"},
-    {id:"s3",date:"2026-03-29",type:"game",opponent:"Blue Wave SC",location:"Lunken Fields",notes:"Away game  carpool"},
-  ]);
   const [showAddEvent, setShowAddEvent] = useState(false);
 
   const saveEvent = () => {
@@ -5148,7 +5174,10 @@ function TabTeam({ players, updatePlayer, league, games, cloud, clerkUserId }) {
               </div>
             </Card>
           )}
-          {[...schedule].sort((a,b)=>a.date.localeCompare(b.date)).map(ev=>{
+          {(schedule || []).length === 0 && !showAddEvent && (
+            <div style={{textAlign:"center",color:C.muted,padding:28,lineHeight:1.5}}>No events yet. Add a game or practice and it stays with this team.</div>
+          )}
+          {[...(schedule || [])].sort((a,b)=>String(a.date||"").localeCompare(String(b.date||""))).map(ev=>{
             const typeIcon = ev.type==="game"?"":ev.type==="practice"?"":"";
             const typeColor = ev.type==="game"?C.gold:ev.type==="practice"?C.ok:C.muted;
             const isPast = ev.date < new Date().toISOString().slice(0,10);

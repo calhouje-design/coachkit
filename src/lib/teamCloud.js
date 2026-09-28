@@ -1,5 +1,15 @@
 import { useEffect, useRef, useState } from "react";
 import { getSupabase, isCloudConfigured, setAccessTokenGetter } from "./supabaseClient.js";
+import {
+  emptySnapshot,
+  normalizeSnapshot,
+  resolveCloudSnapshot,
+  snapshotFromStorage,
+} from "./teamSnapshot.js";
+
+export { emptySnapshot, normalizeSnapshot };
+
+export const DURABLE_SQL_NOTE = "Roster and season logs are in the cloud. Settings, the team schedule, and the in-progress game still need the team_durable table. Paste supabase/migrations/20260928120000_team_durable.sql in the Supabase SQL editor, after the Round One script.";
 
 const SAMPLE_NAMES = [
   "John Smith",
@@ -18,6 +28,9 @@ function friendlyError(error) {
   if (/jwt|unauthorized|401|pgrst301|invalid claim|no suitable key/i.test(msg)) {
     return "Cloud sync needs Supabase to trust Clerk sign-in (third-party auth). Your roster is still saved on this device. Setup steps are in the README.";
   }
+  if (/failed to fetch|network|enotfound|nxdomain|name or service not known|load failed/i.test(msg)) {
+    return "Cloud sync could not reach Supabase. Your roster is still saved on this device. Check VITE_SUPABASE_URL.";
+  }
   return msg;
 }
 
@@ -26,25 +39,6 @@ function stableStringify(value) {
   if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
   const keys = Object.keys(value).sort();
   return `{${keys.map(k => `${JSON.stringify(k)}:${stableStringify(value[k])}`).join(",")}}`;
-}
-
-function sortBy(arr, key) {
-  return [...(arr || [])].sort((a, b) => String(a?.[key] || "").localeCompare(String(b?.[key] || "")));
-}
-
-export function emptySnapshot() {
-  return {
-    teamName: "",
-    league: "",
-    format: "",
-    players: [],
-    lineups: {},
-    customDrills: [],
-    playerStats: {},
-    games: [],
-    practiceDates: [],
-    practiceAttendance: {},
-  };
 }
 
 function readPrefix(prefix) {
@@ -56,18 +50,12 @@ function readPrefix(prefix) {
       return fallback;
     }
   };
-  return {
-    teamName: get("teamName", "") || "",
-    league: get("league", "") || "",
-    format: get("format", "") || "",
-    players: get("players", []) || [],
-    lineups: get("lineups", {}) || {},
-    customDrills: get("customDrills", []) || [],
-    playerStats: get("playerStats", {}) || {},
-    games: get("games", []) || [],
-    practiceDates: get("practiceDates", []) || [],
-    practiceAttendance: get("practiceAtt", {}) || {},
-  };
+  return snapshotFromStorage(get);
+}
+
+function isMissingDurable(error) {
+  const msg = `${error?.message || ""} ${error?.code || ""} ${error?.details || ""}`;
+  return /team_durable|PGRST205|42P01|schema cache/i.test(msg);
 }
 
 function isUntouchedSample(snap) {
@@ -83,23 +71,6 @@ function isUntouchedSample(snap) {
     if ((stats?.goals || 0) || (stats?.assists || 0) || (stats?.gamesPlayed || 0)) return false;
   }
   return true;
-}
-
-function normalizeSnapshot(snap) {
-  const base = { ...emptySnapshot(), ...(snap || {}) };
-  return {
-    ...base,
-    teamName: base.teamName || "",
-    league: base.league || "",
-    format: base.format || "",
-    players: sortBy(base.players, "id"),
-    lineups: base.lineups || {},
-    customDrills: sortBy(base.customDrills, "id"),
-    playerStats: base.playerStats || {},
-    games: sortBy(base.games, "id"),
-    practiceDates: sortBy(base.practiceDates, "id"),
-    practiceAttendance: base.practiceAttendance || {},
-  };
 }
 
 function remoteHasUserData(remote) {
@@ -241,10 +212,24 @@ export async function pushTeam(supabase, teamId, snapshot) {
       updated_at: now,
     }))
   );
+  return pushDurable(supabase, teamId, snap, now);
+}
+
+async function pushDurable(supabase, teamId, snap, now) {
+  const result = await supabase.from("team_durable").upsert({
+    team_id: teamId,
+    settings: snap.settings || {},
+    game_day: snap.gameDay || {},
+    schedule: snap.schedule || [],
+    updated_at: now,
+  });
+  if (result.error && isMissingDurable(result.error)) return { missing: true };
+  await assertOk(result, "team_durable");
+  return { missing: false };
 }
 
 async function pullTeam(supabase, teamId) {
-  const [teamRes, playersRes, lineupRes, drillsRes, gamesRes, statsRes, pracRes, attRes] = await Promise.all([
+  const [teamRes, playersRes, lineupRes, drillsRes, gamesRes, statsRes, pracRes, attRes, durableRes] = await Promise.all([
     supabase.from("teams").select("id, name, league, format, owner_clerk_user_id, local_imported_at, created_at").eq("id", teamId).single(),
     supabase.from("players").select("player_id, data").eq("team_id", teamId),
     supabase.from("lineup_plans").select("lineups").eq("team_id", teamId).maybeSingle(),
@@ -253,6 +238,7 @@ async function pullTeam(supabase, teamId) {
     supabase.from("player_stats").select("player_id, data").eq("team_id", teamId),
     supabase.from("practice_sessions").select("practice_id, data").eq("team_id", teamId),
     supabase.from("practice_attendance").select("practice_id, attendance").eq("team_id", teamId),
+    supabase.from("team_durable").select("settings, game_day, schedule").eq("team_id", teamId).maybeSingle(),
   ]);
   await assertOk(teamRes, "teams");
   await assertOk(playersRes, "players");
@@ -262,6 +248,8 @@ async function pullTeam(supabase, teamId) {
   await assertOk(statsRes, "player_stats");
   await assertOk(pracRes, "practice_sessions");
   await assertOk(attRes, "practice_attendance");
+  const durableMissing = Boolean(durableRes.error && isMissingDurable(durableRes.error));
+  if (durableRes.error && !durableMissing) await assertOk(durableRes, "team_durable");
   return {
     team: teamRes.data,
     players: (playersRes.data || []).map(row => row.data),
@@ -271,23 +259,16 @@ async function pullTeam(supabase, teamId) {
     playerStats: Object.fromEntries((statsRes.data || []).map(row => [row.player_id, row.data])),
     practiceDates: (pracRes.data || []).map(row => row.data),
     practiceAttendance: Object.fromEntries((attRes.data || []).map(row => [row.practice_id, row.attendance || {}])),
+    durableMissing,
+    durablePresent: Boolean(durableRes.data) && !durableMissing,
+    settings: durableRes.data?.settings || {},
+    gameDay: durableRes.data?.game_day || {},
+    schedule: durableRes.data?.schedule || [],
   };
 }
 
 function toSnapshot(remote, fallback) {
-  const snap = normalizeSnapshot({
-    teamName: remote.team?.name || "",
-    league: remote.team?.league || fallback?.league || "",
-    format: remote.team?.format || fallback?.format || "",
-    players: remote.players,
-    lineups: remote.lineups,
-    customDrills: remote.customDrills,
-    playerStats: remote.playerStats,
-    games: remote.games,
-    practiceDates: remote.practiceDates,
-    practiceAttendance: remote.practiceAttendance,
-  });
-  return snap;
+  return resolveCloudSnapshot(remote, fallback);
 }
 
 async function listMemberships(supabase, userId) {
@@ -457,18 +438,43 @@ export function useTeamCloud({ userId, email, getToken, snapshot, applySnapshot 
         const alreadyImported = Boolean(remote.team?.local_imported_at || localStorage.getItem(migratedKey));
         const membership = memberships.find(m => m.team_id === teamId) || memberships[0];
 
+        const noteMissing = (result) => {
+          if (result?.missing || remote.durableMissing) setError(DURABLE_SQL_NOTE);
+        };
         if (!alreadyImported && !remoteHasUserData(remote)) {
           const payload = collectImportSnapshot(userId, snapRef.current);
-          await pushTeam(supabase, teamId, payload);
+          const pushed = await pushTeam(supabase, teamId, payload);
           await markImported(supabase, teamId, userId);
+          noteMissing(pushed);
           if (stableStringify(payload) !== stableStringify(normalizeSnapshot(snapRef.current))) {
-            adoptRemote({ ...remote, team: { ...remote.team, ...{ name: payload.teamName, league: payload.league, format: payload.format } }, ...payload }, payload);
+            adoptRemote({
+              ...remote,
+              durablePresent: !pushed?.missing && !remote.durableMissing,
+              settings: payload.settings,
+              gameDay: payload.gameDay,
+              schedule: payload.schedule,
+              team: { ...remote.team, name: payload.teamName, league: payload.league, format: payload.format },
+              ...payload,
+            }, payload);
           } else {
             lastJson.current = stableStringify(normalizeSnapshot(payload));
             ready.current = true;
           }
+        } else if (!remote.durableMissing && !remote.durablePresent) {
+          const payload = toSnapshot(remote, snapRef.current);
+          const pushed = await pushTeam(supabase, teamId, payload);
+          noteMissing(pushed);
+          adoptRemote({
+            ...remote,
+            durablePresent: !pushed?.missing,
+            settings: payload.settings,
+            gameDay: payload.gameDay,
+            schedule: payload.schedule,
+          }, payload);
+          if (!localStorage.getItem(migratedKey)) localStorage.setItem(migratedKey, "cloud");
         } else {
           adoptRemote(remote, snapRef.current);
+          noteMissing(null);
           if (!localStorage.getItem(migratedKey)) localStorage.setItem(migratedKey, "cloud");
         }
 
@@ -516,9 +522,9 @@ export function useTeamCloud({ userId, email, getToken, snapshot, applySnapshot 
     pushTimer.current = setTimeout(async () => {
       pushTimer.current = null;
       try {
-        await pushTeam(getSupabase(), team.id, snapshot);
+        const pushed = await pushTeam(getSupabase(), team.id, snapshot);
         lastJson.current = stableStringify(normalizeSnapshot(snapshot));
-        setError("");
+        setError(pushed?.missing ? DURABLE_SQL_NOTE : "");
         setStatus("synced");
       } catch (err) {
         setStatus("error");

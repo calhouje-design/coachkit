@@ -48,11 +48,17 @@ Until third-party auth is connected, the app keeps working and shows a cloud-syn
 
 On the first signed-in load, if that team has no cloud rows yet and this browser has local data, the app imports once and marks the team imported. After that, cloud wins. `localStorage` remains a cache. If the signed-in keys are still the sample roster and older `ck_guest_*` keys have real data, the guest data is what gets imported.
 
-Each coach gets a default team the first time they sign in with an empty membership list. The Team tab can add another coach by Clerk user id (`user_…`) or leave an email invite. Everyone on the team shares the roster, lineups, drills, season log, and practice attendance. The owner row cannot be removed in the app. If a person belongs to more than one team, the header switches teams and prefers the team that already has players.
+Each coach gets a default team the first time they sign in with an empty membership list. The Team tab can add another coach by Clerk user id (`user_…`) or leave an email invite. Everyone on the team shares the roster (including parent contacts and dev notes), lineups, drills, season log, saved strategies, and practice attendance. The owner row cannot be removed in the app. If a person belongs to more than one team, the header switches teams and prefers the team that already has players.
 
-Live Game Day score, the quarter clock, the minute bank, appearance credit, partial-sub marks, and the mid-quarter sub queue are saved on this device only. They are not in the shared cloud record. A saved game day is different: it is a season game log, including the strategy snapshot, and it syncs with the rest of the team data.
+Run [`supabase/migrations/20260928120000_team_durable.sql`](supabase/migrations/20260928120000_team_durable.sql) after the Round One script. That table stores:
 
-The contacts, schedule, and coach notes screen is the **Contacts** tab. Roster edits stay on Game Day.
+- Settings: sub mode, auto-regenerate, and quarter length
+- The in-progress game: formation, score, opponent, minute bank, appearance credit, partial-sub marks, and the sub queue
+- The team schedule from the Contacts tab
+
+Until that script has been run, those three stay in `localStorage` and the app shows a cloud-sync note. The roster sync keeps working. The quarter clock stays on this device on purpose, because it moves every second. Fair play is calculated from the lineup. It is not its own row. A saved game day is the season game log, including both share sheets, in `games`.
+
+The contacts, schedule, and coach notes screen is the **Contacts** tab. Parent names and phones live on the player record. Roster edits stay on Game Day. The practice generator is a session tool: attendance is saved, a generated plan is not.
 
 ## Fair play
 
