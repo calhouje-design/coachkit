@@ -46,6 +46,8 @@ import {
 } from "./lib/gameDay.js";
 import { downloadCanvas, paintFieldSheet, paintPlayTimeSheet } from "./lib/sharePaint.js";
 import { useTeamCloud } from "./lib/teamCloud.js";
+import { coachkitDrillSeed } from "./data/coachkitDrillSeed.js";
+import DrillSheet, { PrintableDrillList } from "./components/DrillSheet.jsx";
 
 // -- localStorage persistence helper --
 function usePersistedState(key, defaultValue) {
@@ -3830,6 +3832,7 @@ function TabDrills({ drills, league, addCustomDrill, removeCustomDrill }) {
   const [expanded,    setExpanded]    = useState(null);
   const [modalDrill,  setModalDrill]  = useState(null);
   const [showAdd,     setShowAdd]     = useState(false);
+  const [sheetDrill,  setSheetDrill]  = useState(null);
   const [newDrill,    setNewDrill]    = useState({name:"",category:"Passing",skills:[],ageMin:"U6",ageMax:"Adult",difficulty:"Beginner",duration:10,instructions:"",coaching:"",progressions:[],equipment:[]});
   const [progInput,   setProgInput]   = useState("");
   const [equipInput,  setEquipInput]  = useState("");
@@ -3853,8 +3856,13 @@ function TabDrills({ drills, league, addCustomDrill, removeCustomDrill }) {
   const addProg = () => { if (progInput.trim()) { setNewDrill(d=>({...d,progressions:[...d.progressions,progInput.trim()]})); setProgInput(""); } };
   const addEquip = () => { if (equipInput.trim()) { setNewDrill(d=>({...d,equipment:[...d.equipment,equipInput.trim()]})); setEquipInput(""); } };
 
+  if (sheetDrill) {
+    return <DrillSheet drill={sheetDrill} onBack={() => setSheetDrill(null)} />;
+  }
+
   return (
     <div>
+      <PrintableDrillList drills={coachkitDrillSeed} onOpen={setSheetDrill} />
       {/* Filters */}
       <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:12,alignItems:"center"}}>
         <input value={search} onChange={e=>setSearch(e.target.value)} placeholder=" Search drills" style={{...IS,width:"auto",flex:"1 1 140px"}}/>
@@ -4616,7 +4624,7 @@ function CoachKitLoaded() {
       </div>
 
       {/* BODY */}
-      <div style={{maxWidth:960,margin:"0 auto",padding:"20px 16px",opacity:cloud.status==="loading"?0.55:1,pointerEvents:cloud.status==="loading"?"none":"auto"}}>
+      <div className="ck-app-body" style={{maxWidth:960,margin:"0 auto",padding:"20px 16px",opacity:cloud.status==="loading"?0.55:1,pointerEvents:cloud.status==="loading"?"none":"auto"}}>
         {cloud.error && (
           <div style={{marginBottom:12,padding:"10px 12px",borderRadius:8,background:"rgba(211,84,0,0.12)",border:"1px solid rgba(211,84,0,0.35)",fontSize:12,color:C.gold,lineHeight:1.45}}>
             {cloud.error}
