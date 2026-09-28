@@ -1,30 +1,91 @@
-/** Pure geometry for printable drill diagrams. Coordinates in the seed are 0–100. */
+/** Pure geometry for printable drill diagrams. Seed coordinates are normalized 0–1. */
 
 export const DIAGRAM_VIEW = { w: 320, h: 220 };
 
-export const SHEET_CHROME = "U8 Passers · 10 players · Head Coach Lazear; Assistant Coach Jared Calhoun";
-
-const LOCKED_FIELDS = [
+export const LETTER_SHEET_FIELDS = [
   "number",
-  "name",
-  "block",
-  "time_block",
+  "title",
+  "category",
+  "ageBand",
+  "difficulty",
+  "durationMin",
+  "diagram",
+  "diagramCredit",
   "purpose",
   "setup",
-  "diagram",
-  "diagram_credit",
-  "how_to_run",
-  "coaching_points",
+  "coachingPoints",
+  "playersLabel",
+  "focus",
   "progressions",
-  "common_mistakes",
   "legend",
 ];
+
+export const DETAILS_ONLY_FIELDS = [
+  "howToRun",
+  "commonMistakes",
+  "regressions",
+  "fewerPlayers",
+  "equipment",
+  "block",
+  "timeBlock",
+];
+
+export function coachingLine(teamDefaults = {}) {
+  const team = teamDefaults.team || "U8 Passers";
+  const roster = `${teamDefaults.rosterSize || 10} players`;
+  const coaches = teamDefaults.coachesLine || "Head Coach: Lazear; Assistant Coach: Jared Calhoun";
+  return `${team} · ${roster} · ${coaches}`;
+}
+
+export function formatDiagramCredit(credit) {
+  if (!credit) return "";
+  if (typeof credit === "string") return credit;
+  const head = [credit.title, credit.note].filter(Boolean).join(" — ");
+  return credit.url ? `${head} — ${credit.url}` : head;
+}
+
+export function letterSheet(drill) {
+  return {
+    number: drill?.number,
+    title: drill?.title || "",
+    category: drill?.category || "",
+    ageBand: drill?.ageBand || "",
+    difficulty: drill?.difficulty || "",
+    durationMin: drill?.durationMin,
+    purpose: drill?.purpose || "",
+    setup: drill?.setup || [],
+    coachingPoints: drill?.coachingPoints || [],
+    playersLabel: drill?.playersLabel || "",
+    focus: drill?.focus || "",
+    progressions: Array.isArray(drill?.progressions) ? drill.progressions : [],
+    legend: drill?.legend || [],
+    diagramCredit: formatDiagramCredit(drill?.diagramCredit),
+  };
+}
+
+export function detailsSheet(drill) {
+  const equipment = Array.isArray(drill?.equipment) ? drill.equipment : [];
+  return {
+    howToRun: drill?.howToRun || [],
+    commonMistakes: drill?.commonMistakes || [],
+    regressions: drill?.regressions || [],
+    fewerPlayers: drill?.fewerPlayers || "",
+    equipment,
+    block: drill?.block || "",
+    timeBlock: drill?.timeBlock || "",
+  };
+}
 
 export function diagramPoint(entity, view = DIAGRAM_VIEW) {
   const x = Number(entity?.x);
   const y = Number(entity?.y);
   if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
-  return { x: (x / 100) * view.w, y: (y / 100) * view.h };
+  return { x: x * view.w, y: y * view.h };
+}
+
+export function markerById(diagram, id) {
+  const markers = [...(diagram?.players || []), ...(diagram?.cones || [])];
+  return markers.find(marker => marker && marker.id === id) || null;
 }
 
 export function playerById(diagram, id) {
@@ -85,8 +146,8 @@ export function strokePoints(diagram, stroke, view = DIAGRAM_VIEW) {
       .map(pair => diagramPoint({ x: pair?.[0], y: pair?.[1] }, view))
       .filter(Boolean);
   }
-  const from = diagramPoint(playerById(diagram, stroke?.from), view);
-  const to = diagramPoint(playerById(diagram, stroke?.to), view);
+  const from = diagramPoint(markerById(diagram, stroke?.from), view);
+  const to = diagramPoint(markerById(diagram, stroke?.to), view);
   if (!from) return [];
   if (stroke?.type === "dribble" && (!to || stroke.from === stroke.to)) return squiggleAround(from);
   if (!to) return [];
@@ -100,8 +161,8 @@ export function pathFromPoints(points) {
 }
 
 export function distanceAnchor(diagram, distance, view = DIAGRAM_VIEW) {
-  const from = diagramPoint(playerById(diagram, distance?.from), view);
-  const to = diagramPoint(playerById(diagram, distance?.to), view);
+  const from = diagramPoint(markerById(diagram, distance?.from), view);
+  const to = diagramPoint(markerById(diagram, distance?.to), view);
   if (!from || !to) return null;
   const mx = (from.x + to.x) / 2;
   const my = (from.y + to.y) / 2;
@@ -116,11 +177,11 @@ export function distanceAnchor(diagram, distance, view = DIAGRAM_VIEW) {
   };
 }
 
-export function ballAnchor(diagram, view = DIAGRAM_VIEW) {
-  const player = playerById(diagram, diagram?.ballAt);
-  const point = diagramPoint(player, view);
-  if (!point) return null;
-  return { x: point.x + 12, y: point.y + 14 };
+export function ballAnchors(diagram, view = DIAGRAM_VIEW) {
+  return (diagram?.players || []).filter(player => player?.hasBall).map(player => {
+    const point = diagramPoint(player, view);
+    return point ? { id: player.id, x: point.x + 12, y: point.y + 14 } : null;
+  }).filter(Boolean);
 }
 
 export function buildDiagramModel(diagram, options = {}) {
@@ -154,21 +215,12 @@ export function buildDiagramModel(diagram, options = {}) {
     cones,
     strokes,
     distances,
-    ball: ballAnchor(diagram, view),
+    balls: ballAnchors(diagram, view),
   };
-}
-
-export function progressionGroups(progressions) {
-  const source = progressions || {};
-  const asList = value => (Array.isArray(value) ? value.filter(Boolean) : value ? [value] : []);
-  return [
-    { key: "easier", title: "Easier", items: asList(source.easier) },
-    { key: "harder", title: "Harder", items: asList(source.harder) },
-    { key: "fewer_players", title: "Fewer players", items: asList(source.fewer_players) },
-  ];
 }
 
 export function drillHasLockedSchema(drill) {
   if (!drill || typeof drill !== "object") return false;
-  return LOCKED_FIELDS.every(field => Object.prototype.hasOwnProperty.call(drill, field));
+  const fields = [...LETTER_SHEET_FIELDS, ...DETAILS_ONLY_FIELDS.filter(field => field !== "equipment")];
+  return fields.every(field => Object.prototype.hasOwnProperty.call(drill, field));
 }
