@@ -6,10 +6,12 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "node --test src/lib/fairPlay.test.js src/lib/gameDay.test.js src/lib/teamSnapshot.test.js"
   },
   "dependencies": {
     "@clerk/clerk-react": "^5.0.0",
+    "@supabase/supabase-js": "^2.117.2",
     "react": "^18.2.0",
     "react-dom": "^18.2.0"
   },

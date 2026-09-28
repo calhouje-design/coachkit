@@ -1,15 +1,61 @@
-import { useState, useRef, useCallback, useEffect } from "react";
-import { useUser } from "@clerk/clerk-react";
+import { useState, useRef, useCallback, useEffect, useLayoutEffect, useMemo } from "react";
+import { useUser, useSession } from "@clerk/clerk-react";
 import AuthGate from "./components/AuthGate.jsx";
 import UserMenu from "./components/UserMenu.jsx";
+import {
+  minQuarters,
+  feasibility,
+  scrambleQuarterPositions,
+  redrawQuarterMembership,
+} from "./lib/fairPlay.js";
+import {
+  addMinutes,
+  earnedMinutes,
+  minuteGap,
+  rankWhosNext,
+  addPendingSwap,
+  cancelOneSwap,
+  parseDrop,
+  resolveDragDrop,
+  pullFromPlan,
+  addLateArrival,
+  setAppearanceCreditFor,
+  noteSubSegment,
+  segmentAt,
+  markQuarterSub,
+  clearSubSegmentsFrom,
+  playCellKind,
+  planBenchRotation,
+  applyBenchRotation,
+  retargetPair,
+  pairsForDisplay,
+  equityHalves,
+  formatQuarterEquity,
+  lineStopAtCircle,
+  isGkPosition,
+  goalkeeperId,
+  GK_FULL_QUARTER_REASON,
+  fieldMarker,
+  shareFieldSheet,
+  sharePlayTimeSheet,
+  scheduleHalfRotation,
+  gameLogFromStrategy,
+  upsertGameLog,
+  playerQuarterPresence,
+  regenerateForAbsence,
+} from "./lib/gameDay.js";
+import { downloadCanvas, paintFieldSheet, paintPlayTimeSheet } from "./lib/sharePaint.js";
+import { useTeamCloud } from "./lib/teamCloud.js";
+import { bindField, normalizeGameDay, snapshotFromStorage } from "./lib/teamSnapshot.js";
 
 // -- localStorage persistence helper --
 function usePersistedState(key, defaultValue) {
   const [state, setState] = useState(() => {
     try {
       const stored = localStorage.getItem(key);
-      return stored ? JSON.parse(stored) : defaultValue;
-    } catch { return defaultValue; }
+      if (stored != null) return JSON.parse(stored);
+    } catch { /* use the default */ }
+    return typeof defaultValue === "function" ? defaultValue() : defaultValue;
   });
   useEffect(() => {
     try { localStorage.setItem(key, JSON.stringify(state)); }
@@ -72,19 +118,6 @@ const POS_LABEL = {
   // legacy fallbacks
   DEF:"DEF", MID:"MID", FWD:"FWD", CAM:"CAM", CDM:"CDM",
   LW:"LW", RW:"RW", ST:"ST", Wing:"W",
-};
-
-// Field x/y positions for the SVG diagram
-const FIELD_BASE = {
-  GK:{x:50,y:88},
-  CB:{x:50,y:72}, CD:{x:50,y:72}, LD:{x:25,y:72}, RD:{x:75,y:72},
-  LB:{x:22,y:75}, RB:{x:78,y:75},
-  DEF:{x:50,y:72},
-  CDM:{x:50,y:58}, CM:{x:50,y:50}, LM:{x:22,y:50}, RM:{x:78,y:50},
-  MID:{x:50,y:50}, CAM:{x:50,y:38},
-  LW:{x:18,y:32}, RW:{x:82,y:32},
-  LF:{x:28,y:22}, RF:{x:72,y:22}, CF:{x:50,y:18},
-  FWD:{x:50,y:22}, ST:{x:50,y:18}, Wing:{x:20,y:30},
 };
 
 // -- SAY East Play-Time Rules (SAY Rule 12) --
@@ -758,23 +791,11 @@ function generatePractice(league, focus, skills, duration, allDrills) {
 // 
 function uid() { return Math.random().toString(36).slice(2,9); }
 
-function computePlayTime(players, lineupsByQuarter, totalQuarters) {
-  const counts = {};
-  players.forEach(p => { counts[p.id] = 0; });
-  for (let q = 1; q <= totalQuarters; q++) {
-    const lineup = lineupsByQuarter[q];
-    if (!lineup) continue;
-    lineup.starters.forEach(slot => {
-      if (slot.player) counts[slot.player.id] = (counts[slot.player.id] || 0) + 1;
-    });
-  }
-  return counts;
-}
-
 /**
  * WHOLE-GAME SCHEDULER
- * Plans all 4 quarters at once so every eligible player is guaranteed
- * their minimum play-time quota before higher-rated players get extra time.
+ * Plans all 4 quarters at once so every eligible player is targeted for
+ * their minimum quarter count before higher-rated players get extra time.
+ * Callers must run `feasibility` first. This does not block an impossible roster.
  *
  * Algorithm:
  * 1. Each quarter needs `slotsPerQuarter` players on the field.
@@ -784,9 +805,10 @@ function computePlayTime(players, lineupsByQuarter, totalQuarters) {
  * 5. Within each quarter, players are sorted to best-fit positions.
  * 6. Players who sat last quarter get priority for the next one (rotation).
  */
-function scheduleWholeGame(players, format, league, lockedLineups = {}, fromQuarter = 1) {
+function scheduleWholeGame(players, format, league, lockedLineups = {}, fromQuarter = 1, segments = {}, credit = {}, slotOverride = null) {
   const TOTAL_Q  = 4;
-  const slots    = POSITIONS_BY_FORMAT[format] || POSITIONS_BY_FORMAT["7v7"];
+  const fallback = POSITIONS_BY_FORMAT[format] || POSITIONS_BY_FORMAT["7v7"];
+  const slots    = slotOverride?.length ? slotOverride : fallback;
   const slotsPerQ = slots.length;
   const rule     = PLAY_TIME_RULES[league] || { minFraction: 0.5 };
   const minQ     = Math.ceil(rule.minFraction * TOTAL_Q); // e.g. 2 of 4 quarters
@@ -803,17 +825,19 @@ function scheduleWholeGame(players, format, league, lockedLineups = {}, fromQuar
   };
   const active = shuffle(players.filter(p => !p.injured && !p.out));
 
-  // Count play time already locked in from previous quarters
-  const alreadyPlayed = {};
-  active.forEach(p => { alreadyPlayed[p.id] = 0; });
-  for (let q = 1; q < fromQuarter; q++) {
-    const l = lockedLineups[q];
-    if (!l) continue;
-    l.starters.forEach(s => {
-      if (s.player && alreadyPlayed[s.player.id] !== undefined)
-        alreadyPlayed[s.player.id]++;
+  // Locked quarters count in halves so a mid-quarter split still owes time.
+  const minHalves = minQ * 2;
+  const lockedQuarters = [];
+  for (let q = 1; q < fromQuarter; q++) if (lockedLineups[q]) lockedQuarters.push(q);
+  const alreadyHalves = {};
+  active.forEach(p => {
+    alreadyHalves[p.id] = equityHalves(p.id, {
+      lineups: lockedLineups,
+      segments,
+      credit,
+      quarters: lockedQuarters,
     });
-  }
+  });
 
   // Quarters remaining to schedule
   const remainingQs = [];
@@ -827,7 +851,8 @@ function scheduleWholeGame(players, format, league, lockedLineups = {}, fromQuar
   // minQ total  but subtract what they've already played
   const quota = {};
   active.forEach(p => {
-    const remaining = Math.max(0, minQ - alreadyPlayed[p.id]);
+    const remainingHalves = Math.max(0, minHalves - (alreadyHalves[p.id] || 0));
+    const remaining = Math.ceil(remainingHalves / 2);
     quota[p.id] = Math.min(remaining, R); // can't exceed remaining quarters
   });
 
@@ -989,11 +1014,9 @@ function scheduleWholeGame(players, format, league, lockedLineups = {}, fromQuar
   return result;
 }
 
-// Single-quarter wrapper (used for manual regen of one quarter only)
-function autoLineupWithRanking(players, format, quarter, lineupsByQuarter, totalQuarters, league) {
-  const all = scheduleWholeGame(players, format, league, lineupsByQuarter, quarter);
-  return all[quarter];
-}
+// Single-quarter changes live in src/lib/fairPlay.js (scrambleQuarterPositions,
+// redrawQuarterMembership). Do not call scheduleWholeGame to "redo one quarter"
+// — that rebuilds the current quarter through Q4.
 
 function getOverallRating(player) {
   if (!player.ratings) return 0;
@@ -1037,15 +1060,25 @@ const SS = { ...IS, cursor: "pointer", background: "#141a12", color: C.text };
 // Inline style for <option> elements so dropdown popup text is readable
 const OPT = { background: "#141a12", color: "#e8e4dc" };
 
-function Btn({ children, onClick, sm, danger, warn, primary, ghost, disabled, full, style:sx }) {
-  const bg = danger ? C.danger : warn ? C.warn : primary ? `linear-gradient(135deg,${C.gold},${C.goldDark})` : ghost ? "transparent" : "rgba(255,255,255,0.1)";
+function Btn({ children, onClick, sm, danger, warn, primary, secondary, ghost, disabled, full, style:sx }) {
+  const bg = danger ? C.danger
+    : warn ? C.warn
+    : primary ? `linear-gradient(135deg,${C.gold},${C.goldDark})`
+    : secondary ? "rgba(255,255,255,0.03)"
+    : ghost ? "transparent"
+    : "rgba(255,255,255,0.1)";
   const col = primary ? "#0a0d0f" : C.text;
+  const border = secondary
+    ? "1px solid rgba(255,255,255,0.22)"
+    : ghost ? `1px solid ${C.border}` : "none";
   return (
     <button onClick={onClick} disabled={disabled} style={{
-      padding: sm ? "5px 11px" : "9px 18px",
-      borderRadius: 7, border: ghost ? `1px solid ${C.border}` : "none",
+      padding: sm ? "8px 12px" : "11px 16px",
+      minHeight: sm ? 36 : 44,
+      borderRadius: 8, border,
       cursor: disabled ? "not-allowed" : "pointer",
-      fontWeight: 600, fontSize: sm ? 11 : 13,
+      fontWeight: primary ? 800 : 600,
+      fontSize: sm ? 12 : 13,
       fontFamily: "inherit",
       background: bg, color: col,
       opacity: disabled ? 0.45 : 1,
@@ -1073,7 +1106,7 @@ function Card({ children, style: sx }) {
 function StarRating({ value, onChange, max=5, size=16 }) {
   const starPath = "M10 1.5l2.59 5.96L19 8.13l-5 4.36L15.5 19 10 15.77 4.5 19 6 12.49 1 8.13l6.41-.67z";
   return (
-    <div style={{ display:"flex", gap: 2, alignItems:"center" }}>
+    <div style={{ display:"flex", gap: 1, alignItems:"center", flexWrap:"wrap", flexShrink: 1, minWidth: 0 }}>
       {Array.from({length:max},(_,i) => {
         const filled = i < value;
         const next = value === i+1 ? 0 : i+1;   // click same rank to clear
@@ -1100,9 +1133,57 @@ function StarRating({ value, onChange, max=5, size=16 }) {
 // 
 // SOCCER FIELD with DRAG & DROP
 // 
-function SoccerField({ lineup, onSwap, format, quarter }) {
-  const [dragging, setDragging] = useState(null);
-  const [hoverIdx, setHoverIdx] = useState(null);
+function dropTokenAt(x, y) {
+  const el = document.elementFromPoint(x, y);
+  return el?.closest?.("[data-drop]")?.getAttribute("data-drop") || null;
+}
+
+/** Pointer drag that works on touch. Tap is any press that stays under 10px. */
+function usePitchDrag(onResolve) {
+  const resolveRef = useRef(onResolve);
+  resolveRef.current = onResolve;
+  const dragRef = useRef(null);
+  const [ghost, setGhost] = useState(null);
+  const [hover, setHover] = useState(null);
+  const [activeSource, setActiveSource] = useState(null);
+
+  const pointerDown = (e, source, label) => {
+    if (e.pointerType === "mouse" && e.button !== 0) return;
+    dragRef.current = {
+      source, label, pointerId: e.pointerId,
+      x: e.clientX, y: e.clientY, moved: false,
+    };
+    try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* already released */ }
+    try { e.preventDefault(); } catch { /* passive listener */ }
+  };
+
+  const pointerMove = (e) => {
+    const drag = dragRef.current;
+    if (!drag || e.pointerId !== drag.pointerId) return;
+    if (!drag.moved && Math.hypot(e.clientX - drag.x, e.clientY - drag.y) < 10) return;
+    drag.moved = true;
+    setGhost({ x: e.clientX, y: e.clientY, label: drag.label });
+    setHover(dropTokenAt(e.clientX, e.clientY));
+    setActiveSource(drag.source);
+  };
+
+  const pointerUp = (e) => {
+    const drag = dragRef.current;
+    if (!drag || e.pointerId !== drag.pointerId) return "ignore";
+    dragRef.current = null;
+    const moved = drag.moved;
+    setGhost(null);
+    setHover(null);
+    setActiveSource(null);
+    if (!moved) return "tap";
+    resolveRef.current(resolveDragDrop(drag.source, parseDrop(dropTokenAt(e.clientX, e.clientY))));
+    return "drag";
+  };
+
+  return { pointerDown, pointerMove, pointerUp, ghost, hover, activeSource };
+}
+
+function SoccerField({ lineup, onTap, selectedIdx, quarter, drag, hoverToken, activeSource }) {
 
   if (!lineup) return (
     <div style={{
@@ -1120,8 +1201,8 @@ function SoccerField({ lineup, onSwap, format, quarter }) {
   const idxByPos = {};
 
   return (
-    <div style={{ position:"relative", width:"100%", maxWidth:320, margin:"0 auto", userSelect:"none" }}>
-      <svg viewBox="0 0 320 480" style={{ width:"100%", display:"block", borderRadius:10 }}>
+    <div style={{ position:"relative", width:"100%", margin:"0 auto", userSelect:"none" }}>
+      <svg viewBox="0 0 320 480" style={{ width:"100%", display:"block", borderRadius:10, position:"relative", zIndex:0 }}>
         <rect x="5" y="5" width="310" height="470" rx="8" fill="#1e4d1a" stroke="#fff" strokeWidth="1.5"/>
         <rect x="5" y="5" width="310" height="470" rx="8" fill="url(#grass)"/>
         <defs>
@@ -1173,45 +1254,51 @@ function SoccerField({ lineup, onSwap, format, quarter }) {
         if (!idxByPos[pos]) idxByPos[pos] = 0;
         const posIdx = idxByPos[pos];
         const total = totalByPos[pos];
-        const base = FIELD_BASE[pos] || {x:50,y:50};
-        const spread = total > 1 ? (posIdx - (total-1)/2) * (52/total) : 0;
-        const fx = base.x + spread * 0.7;
         idxByPos[pos]++;
-
-        const px = 5 + (fx/100)*310;
-        const py = 5 + (base.y/100)*470;
-        const isDraggingThis = dragging === idx;
-        const isHovered = hoverIdx === idx;
-        const rating = slot.player ? getOverallRating(slot.player) : 0;
+        const point = fieldMarker(pos, posIdx, total);
+        const px = point.x;
+        const py = point.y;
+        const isHovered = hoverToken === `field:${idx}`;
+        const isSelected = selectedIdx === idx;
+        const isSource = activeSource?.type === "field" && activeSource.idx === idx;
 
         return (
           <div key={idx}
-            draggable={!!slot.player}
-            onDragStart={() => setDragging(idx)}
-            onDragEnd={() => { setDragging(null); setHoverIdx(null); }}
-            onDragOver={e => { e.preventDefault(); setHoverIdx(idx); }}
-            onDrop={e => { e.preventDefault(); if (dragging !== null && dragging !== idx) { onSwap(dragging, idx); } setDragging(null); setHoverIdx(null); }}
+            data-drop={`field:${idx}`}
+            onPointerDown={e => {
+              if (!slot.player) return;
+              drag?.pointerDown(e, { type: "field", idx }, `#${slot.player.number}`);
+            }}
+            onPointerMove={drag?.pointerMove}
+            onPointerUp={e => {
+              if (drag?.pointerUp(e) === "tap") onTap?.(idx);
+            }}
+            onPointerCancel={e => { drag?.pointerUp(e); }}
             style={{
               position:"absolute",
-              left:`calc(${(px/320)*100}% - 22px)`,
-              top:`calc(${(py/480)*100}% - 26px)`,
-              textAlign:"center", width:44,
+              left:`calc(${(px/320)*100}% - 28px)`,
+              top:`calc(${(py/480)*100}% - 30px)`,
+              textAlign:"center", width:56,
               cursor: slot.player ? "grab" : "default",
-              opacity: isDraggingThis ? 0.4 : 1,
-              zIndex: isDraggingThis ? 10 : 1,
-              transition: "opacity 0.15s",
+              zIndex: isSelected || isHovered || isSource ? 12 : 6,
+              touchAction: "none",
+              opacity: isSource ? 0.55 : 1,
             }}>
-            <div style={{
-              width: 38, height: 38, borderRadius:"50%", margin:"0 auto",
-              background: isHovered && dragging !== null && dragging !== idx
-                ? `linear-gradient(135deg,#fff,${C.gold})`
-                : slot.player
-                  ? `linear-gradient(135deg,${C.gold},${C.goldDark})`
-                  : "rgba(255,255,255,0.1)",
-              border: isHovered && dragging !== null ? `2px solid #fff` : "2px solid rgba(255,255,255,0.8)",
+            <div
+              data-sub-to={slot.player?.id || undefined}
+              style={{
+              width: 46, height: 46, borderRadius:"50%", margin:"0 auto", position:"relative", zIndex:2,
+              background: slot.player
+                ? `linear-gradient(135deg,${C.gold},${C.goldDark})`
+                : "rgba(255,255,255,0.1)",
+              border: isHovered || isSource ? "3px solid #2ecc71" : isSelected ? "3px solid #fff" : "2px solid rgba(255,255,255,0.8)",
               display:"flex", alignItems:"center", justifyContent:"center",
-              flexDirection:"column", boxShadow: slot.player ? "0 2px 10px rgba(0,0,0,0.6)" : "none",
-              transition: "all 0.15s",
+              flexDirection:"column",
+              boxShadow: isHovered
+                ? "0 0 0 5px rgba(46,204,113,0.55)"
+                : isSource
+                  ? "0 0 0 4px rgba(46,204,113,0.4)"
+                  : isSelected ? `0 0 0 3px ${C.gold}` : slot.player ? "0 2px 10px rgba(0,0,0,0.6)" : "none",
             }}>
               {slot.player ? (
                 <>
@@ -1221,12 +1308,14 @@ function SoccerField({ lineup, onSwap, format, quarter }) {
               ) : <span style={{color:"rgba(255,255,255,0.4)",fontSize:10}}></span>}
             </div>
             {slot.player && (
-              <div style={{marginTop:2, height:11, position:"relative"}}>
+              <div style={{marginTop:2, height:11, position:"relative", zIndex:3}}>
                 <div style={{
-                  position:"absolute", left:"50%", top:0,
+                  position:"absolute", left:"50%", top:0, zIndex:3,
                   transform:"translateX(-50%)",
-                  fontSize:8, color:"#fff", fontWeight:700,
-                  textShadow:"0 1px 3px rgba(0,0,0,0.9), 0 0 4px rgba(0,0,0,0.6)",
+                  fontSize:9, color:"#fff", fontWeight:800,
+                  background:"rgba(10,13,15,0.78)",
+                  borderRadius:4, padding:"1px 4px",
+                  textShadow:"0 1px 2px rgba(0,0,0,0.9)",
                   letterSpacing:"0.02em", whiteSpace:"nowrap", lineHeight:1.2,
                   pointerEvents:"none",
                 }} title={slot.player.name}>
@@ -1268,7 +1357,7 @@ function InjuryAlert({ player, quarter, onDismiss }) {
           <div style={{fontWeight:800,fontSize:14,color:"#fff",marginBottom:2}}>Mid-Game Injury</div>
           <div style={{fontSize:12,color:"rgba(255,255,255,0.85)"}}>
             <b>#{player.number} {player.name}</b> marked injured in Q{quarter}.<br/>
-            Remaining quarters will auto-regenerate.
+            Minutes already played stay counted. Later quarters only lose this player.
           </div>
         </div>
         <button onClick={()=>{setVisible(false);onDismiss();}} style={{
@@ -1360,31 +1449,39 @@ function PlayerEditPanel({ player, onUpdate, onDelete, onClose }) {
   const overall = getOverallRating(player);
   const positions = player.positions || [];
 
+  const revealEdit = (event) => {
+    const card = event.target.closest("[data-player-card]");
+    window.setTimeout(() => {
+      (card || event.target)?.scrollIntoView({ block: "start", inline: "nearest" });
+    }, 300);
+  };
+
   return (
-    <div style={{
+    <div data-player-edit style={{
       marginTop: 6, padding: "10px 10px 10px",
       background: "rgba(0,0,0,0.25)",
       borderRadius: 6, border: `1px solid ${C.border}`,
+      maxWidth: "100%", minWidth: 0, boxSizing: "border-box", overflowX: "clip",
     }}>
-      <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
+      <div style={{ display: "flex", gap: 6, marginBottom: 8, minWidth: 0 }}>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontSize: 9, color: C.muted, fontWeight: 700, marginBottom: 2, textTransform: "uppercase", letterSpacing: "0.05em" }}>Name</div>
-          <input value={name} onChange={e => setName(e.target.value)} onBlur={saveBasics}
-            style={{ ...IS, fontSize: 11, padding: "5px 8px", width: "100%" }} />
+          <input value={name} onChange={e => setName(e.target.value)} onBlur={saveBasics} onFocus={revealEdit}
+            style={{ ...IS, fontSize: 16, padding: "8px 10px", width: "100%", maxWidth: "100%" }} />
         </div>
-        <div style={{ width: 50, flexShrink: 0 }}>
+        <div style={{ width: 64, flexShrink: 0 }}>
           <div style={{ fontSize: 9, color: C.muted, fontWeight: 700, marginBottom: 2, textTransform: "uppercase", letterSpacing: "0.05em" }}>#</div>
-          <input value={num} onChange={e => setNum(e.target.value)} onBlur={saveBasics}
-            style={{ ...IS, fontSize: 11, padding: "5px 8px", width: "100%" }} />
+          <input value={num} onChange={e => setNum(e.target.value)} onBlur={saveBasics} onFocus={revealEdit}
+            style={{ ...IS, fontSize: 16, padding: "8px 8px", width: "100%", maxWidth: "100%" }} />
         </div>
       </div>
 
       <div style={{ fontSize: 9, color: C.muted, fontWeight: 700, marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.05em" }}>Positions</div>
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 3, marginBottom: 10 }}>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 10, maxWidth: "100%" }}>
         {ALL_POSITIONS.map(p => (
           <button key={p} onClick={() => togglePosition(p)} style={{
-            padding: "3px 7px", borderRadius: 3, border: "none", cursor: "pointer",
-            fontSize: 9, fontWeight: 700, fontFamily: "inherit",
+            padding: "6px 8px", borderRadius: 4, border: "none", cursor: "pointer",
+            fontSize: 12, fontWeight: 700, fontFamily: "inherit", lineHeight: 1,
             background: positions.includes(p) ? C.gold : "rgba(255,255,255,0.08)",
             color: positions.includes(p) ? "#0a0d0f" : C.muted,
           }}>{p}</button>
@@ -1392,11 +1489,11 @@ function PlayerEditPanel({ player, onUpdate, onDelete, onClose }) {
       </div>
 
       <div style={{ fontSize: 9, color: C.muted, fontWeight: 700, marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.05em" }}>Skill Ratings</div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "4px 10px", marginBottom: 10 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) minmax(0,1fr)", gap: "6px 8px", marginBottom: 10, maxWidth: "100%" }}>
         {SKILL_CATEGORIES.map(cat => (
-          <div key={cat} style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <div style={{ fontSize: 10, color: C.text }}>{cat}</div>
-            <StarRating value={(player.ratings || {})[cat] || 0} onChange={v => setRating(cat, v)} />
+          <div key={cat} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 4, minWidth: 0 }}>
+            <div style={{ fontSize: 11, color: C.text, minWidth: 0 }}>{cat}</div>
+            <StarRating size={14} value={(player.ratings || {})[cat] || 0} onChange={v => setRating(cat, v)} />
           </div>
         ))}
       </div>
@@ -1427,21 +1524,131 @@ function PlayerEditPanel({ player, onUpdate, onDelete, onClose }) {
 }
 
 //
+// SETTINGS  set-and-forget for Game Day. League and format stay here.
+//
+function GameSettings({
+  open, onClose, subMode, onSubMode, league, onLeagueChange, format, onFormatChange,
+  autoRegen, onAutoRegen, quarterMinutes, onQuarterMinutes, leagueMinutes, fairPlayLabel,
+}) {
+  if (!open) return null;
+  const choice = (on, label, active, color) => (
+    <button type="button" onClick={() => onSubMode(on)} aria-pressed={active} style={{
+      flex: 1, minHeight: 48, borderRadius: 10, cursor: "pointer", fontFamily: "inherit", fontWeight: 800,
+      border: active ? `2px solid ${color}` : `1px solid ${C.border}`,
+      background: active ? `${color}22` : "transparent",
+      color: active ? color : C.muted, fontSize: 13,
+    }}>{label}</button>
+  );
+  return (
+    <div role="dialog" aria-label="Settings" onClick={onClose} style={{
+      position: "fixed", inset: 0, zIndex: 200, background: "rgba(0,0,0,0.62)",
+      display: "flex", justifyContent: "flex-end",
+    }}>
+      <div onClick={e => e.stopPropagation()} style={{
+        width: "min(420px, 100%)", height: "100%", overflow: "auto",
+        background: C.bg, borderLeft: `1px solid ${C.border}`, padding: "16px 16px 32px",
+        boxSizing: "border-box",
+      }}>
+        <div style={{display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14}}>
+          <div style={{fontSize: 16, fontWeight: 800}}>Settings</div>
+          <button type="button" onClick={onClose} style={{
+            minHeight: 36, padding: "6px 12px", borderRadius: 8, cursor: "pointer", fontFamily: "inherit",
+            border: `1px solid ${C.border}`, background: "transparent", color: C.text, fontWeight: 700,
+          }}>Done</button>
+        </div>
+        <div style={{fontSize: 11, color: C.muted, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase", marginBottom: 8}}>Play mode</div>
+        <div style={{display: "flex", gap: 8, marginBottom: 8}}>
+          {choice(true, "Half quarters", subMode, "#2ecc71")}
+          {choice(false, "Full quarters", !subMode, C.gold)}
+        </div>
+        <div style={{fontSize: 12, color: C.muted, lineHeight: 1.45, marginBottom: 16}}>
+          {subMode
+            ? "Half-quarter subs. Planning spreads sit time and still targets the fair-play line."
+            : "Full quarters. Half swaps and the sub queue stay off. Drag still moves a player."}
+        </div>
+        <div style={{display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 16}}>
+          <div>
+            <label style={{...lbl, marginBottom: 4}}>League</label>
+            <select value={league} onChange={e => onLeagueChange && onLeagueChange(e.target.value)}
+              style={{...SS, width: "100%", fontSize: 16, padding: "8px 10px"}}>
+              {LEAGUES.map(l => <option key={l} value={l} style={OPT}>{leagueShortLabel(l)}</option>)}
+            </select>
+          </div>
+          <div>
+            <label style={{...lbl, marginBottom: 4, display: "flex", alignItems: "center", gap: 4}}>
+              <span>Format</span>
+              {format !== leagueDefaultFormat(league) && (
+                <span style={{fontSize: 8, color: C.gold, fontWeight: 700}}>OVERRIDE</span>
+              )}
+            </label>
+            <select value={format} onChange={e => onFormatChange && onFormatChange(e.target.value)}
+              style={{...SS, width: "100%", fontSize: 16, padding: "8px 10px"}}>
+              {FORMATS.map(f => <option key={f} value={f} style={OPT}>{f}{f === leagueDefaultFormat(league) ? "  default" : ""}</option>)}
+            </select>
+          </div>
+        </div>
+        <div style={{fontSize: 12, color: C.text, lineHeight: 1.45, marginBottom: 14}}>{fairPlayLabel}</div>
+        <label style={{display: "flex", alignItems: "center", gap: 10, marginBottom: 16, fontSize: 13, color: C.text}}>
+          <input type="checkbox" checked={!!autoRegen} onChange={e => onAutoRegen(e.target.checked)} style={{width: 18, height: 18}} />
+          Auto-regenerate the lineup when a player is marked injured
+        </label>
+        <div style={{marginBottom: 16}}>
+          <label style={{...lbl, marginBottom: 4}}>Quarter length (minutes)</label>
+          <input
+            type="number"
+            min="1"
+            max="60"
+            inputMode="numeric"
+            value={quarterMinutes ?? ""}
+            placeholder={String(leagueMinutes)}
+            onChange={e => {
+              const raw = e.target.value;
+              if (raw === "") onQuarterMinutes(null);
+              else onQuarterMinutes(Math.max(1, Math.min(60, Number(raw) || leagueMinutes)));
+            }}
+            style={{...IS, fontSize: 16, padding: "8px 10px"}}
+          />
+          <div style={{fontSize: 11, color: C.muted, marginTop: 4, lineHeight: 1.4}}>
+            League default is {leagueMinutes} minutes. Clear the box to use that again.
+          </div>
+        </div>
+        <div style={{fontSize: 12, color: C.muted, lineHeight: 1.45, marginBottom: 16}}>
+          Save game day writes this strategy, the field sheet, and the play-time sheet onto the Season game log.
+        </div>
+        <div style={{fontSize: 11, color: C.muted, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase", marginBottom: 8}}>Weather</div>
+        <WeatherButton />
+      </div>
+    </div>
+  );
+}
+
+//
 // TAB: GAME DAY
 //
-function TabGame({ format, league, onLeagueChange, onFormatChange, players, setPlayers, addPlayer, removePlayer, lineupsByQuarter, setLineupsByQuarter }) {
-  const [quarter,       setQuarter]       = useState(1);
+function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer, lineupsByQuarter, setLineupsByQuarter, storagePrefix = "ck_guest_", setGames, subMode = true, autoRegen = true, quarterMinutes = null, gameDay, setGameDay }) {
+  const [quarter,       setQuarterRaw]    = useState(1);
   const [injuryAlerts,  setInjuryAlerts]  = useState([]);
   const [justRegenned,  setJustRegenned]  = useState(false);
   const [showRotation,  setShowRotation]  = useState(false);
   const [showFormations,setShowFormations]= useState(false);
-  const [activeFormation,setActiveFormation]=useState("2-2-1");
+  const [activeFormation,setActiveFormation]=[normalizeGameDay(gameDay).formation, bindField(setGameDay, "formation", normalizeGameDay)];
+  const [saveNote, setSaveNote] = useState("");
   const [editingPlayerId, setEditingPlayerId] = useState(null);
   const [rosterSort,    setRosterSort]    = useState("name"); // name | rating | position
   const [showAddPlayer, setShowAddPlayer] = useState(false);
   const [newName,       setNewName]       = useState("");
   const [newNum,        setNewNum]        = useState("");
-  const swipeTouchStart = useRef(null);
+  const [swapSel, setSwapSel] = useState(null);
+  const [fairWarn, setFairWarn] = useState(null);
+  const [scrambleNote, setScrambleNote] = useState(null);
+  const [planSub, setPlanSub] = useState(false);
+  const [subsOpen, setSubsOpen] = useState(false);
+  const [halfFlash, setHalfFlash] = useState(false);
+  const [queueNote, setQueueNote] = useState(null);
+  const [running, setRunning] = useState(false);
+  const [stintStart, setStintStart] = useState({});
+  const applyDragRef = useRef(() => {});
+  const drag = usePitchDrag(result => applyDragRef.current(result));
 
   // When format changes, reset to a valid strategy for the new player count
   useEffect(() => {
@@ -1464,11 +1671,36 @@ function TabGame({ format, league, onLeagueChange, onFormatChange, players, setP
     setNewName(""); setNewNum("");
   };
 
-  // -- SCORE TRACKER ----
-  const [homeScore, setHomeScore] = useState(0);
-  const [awayScore, setAwayScore] = useState(0);
-  const [opponent,  setOpponent]  = useState("");
+  // Score, subs, and formation sync with the team. The quarter clock stays on this device
+  // because it ticks every second. Saved season logs are a separate record.
+  const live = normalizeGameDay(gameDay);
+  const [homeScore, setHomeScore] = [live.homeScore, bindField(setGameDay, "homeScore", normalizeGameDay)];
+  const [awayScore, setAwayScore] = [live.awayScore, bindField(setGameDay, "awayScore", normalizeGameDay)];
+  const [opponent,  setOpponent]  = [live.opponent, bindField(setGameDay, "opponent", normalizeGameDay)];
+  const [minuteBank, setMinuteBank] = [live.minuteBank, bindField(setGameDay, "minuteBank", normalizeGameDay)];
+  const [appearanceCredit, setAppearanceCredit] = [live.appearanceCredit, bindField(setGameDay, "appearanceCredit", normalizeGameDay)];
+  const [subSegments, setSubSegments] = [live.subSegments, bindField(setGameDay, "subSegments", normalizeGameDay)];
+  const [pairPlan, setPairPlan] = [live.pairPlan, bindField(setGameDay, "pairPlan", normalizeGameDay)];
+  const [subQueue, setSubQueue] = [live.subQueue, bindField(setGameDay, "subQueue", normalizeGameDay)];
+  const [chartFocusId, setChartFocusId] = useState(null);
+  const [clockSec, setClockSec] = usePersistedState(storagePrefix+"clockSec", 0);
   const [editOpp,   setEditOpp]   = useState(false);
+  const clockRef = useRef(0);
+  const stintRef = useRef({});
+  const bankRef = useRef({});
+  const quarterRef = useRef(quarter);
+  const lineupsRef = useRef(lineupsByQuarter);
+  useEffect(() => { clockRef.current = clockSec; }, [clockSec]);
+  useEffect(() => { stintRef.current = stintStart; }, [stintStart]);
+  useEffect(() => { bankRef.current = minuteBank || {}; }, [minuteBank]);
+  useEffect(() => { quarterRef.current = quarter; }, [quarter]);
+  useEffect(() => { lineupsRef.current = lineupsByQuarter; }, [lineupsByQuarter]);
+  const halfFired = useRef(false);
+  useEffect(() => {
+    if (!running) return undefined;
+    const id = setInterval(() => setClockSec(sec => sec + 1), 1000);
+    return () => clearInterval(id);
+  }, [running, setClockSec]);
 
   // -- SHARE LINEUP --
   const [showShare, setShowShare] = useState(false);
@@ -1476,110 +1708,805 @@ function TabGame({ format, league, onLeagueChange, onFormatChange, players, setP
 
   const totalQuarters = 4;
   const rule   = PLAY_TIME_RULES[league] || { minFraction: 0, note: "" };
-  const minQ   = Math.ceil(rule.minFraction * totalQuarters);
+  const minQ   = minQuarters(rule.minFraction, totalQuarters);
 
-  const playCounts     = computePlayTime(players, lineupsByQuarter, totalQuarters);
   const currentLineup  = lineupsByQuarter[quarter] || null;
   const active         = players.filter(p => !p.injured && !p.out);
   const needed         = (POSITIONS_BY_FORMAT[format] || []).length;
   const midGameInjured = players.filter(p => p.midGameInjury);
   const allPlanned     = [1,2,3,4].every(q => !!lineupsByQuarter[q]);
+  const gate           = feasibility({ activeCount: active.length, slotsPerPeriod: needed, minQ, periods: totalQuarters, subMode });
 
-  // Check if anyone is below min quota (across planned quarters)
-  const violations = active.filter(p => {
-    const played = playCounts[p.id] || 0;
-    return allPlanned && played < minQ && !p.midGameInjury;
-  });
+  const periodMin = Number(quarterMinutes) > 0 ? Number(quarterMinutes) : ((LEAGUE_RULES[league] || {}).periodMin || 10);
+  useEffect(() => {
+    const half = periodMin * 30;
+    if (half <= 0) return undefined;
+    if (clockSec < half) {
+      halfFired.current = false;
+      setHalfFlash(false);
+      return undefined;
+    }
+    if (!running) {
+      halfFired.current = true;
+      return undefined;
+    }
+    if (halfFired.current) return undefined;
+    halfFired.current = true;
+    setHalfFlash(true);
+    try {
+      if (typeof navigator !== "undefined" && typeof navigator.vibrate === "function") {
+        navigator.vibrate([200, 100, 200, 100, 200]);
+      }
+    } catch { /* this browser does not vibrate */ }
+    const id = setTimeout(() => setHalfFlash(false), 2000);
+    return () => clearTimeout(id);
+  }, [running, periodMin, clockSec >= periodMin * 30]);
+  const minHalves = minQ * 2;
+  const halvesFor = (id, lineups = lineupsByQuarter, credit = appearanceCredit, segments = subSegments) =>
+    equityHalves(id, { lineups, segments, credit, quarters: [1, 2, 3, 4] });
+
+  const violations = allPlanned && minQ > 0
+    ? players.filter(p => !p.injured && !p.out && !p.midGameInjury && halvesFor(p.id) < minHalves)
+    : [];
+
+  useEffect(() => { setSwapSel(null); }, [quarter]);
+
+  const writeBank = (bank) => {
+    bankRef.current = bank || {};
+    try {
+      const raw = localStorage.getItem(storagePrefix + "gameDay");
+      const current = raw ? JSON.parse(raw) : {};
+      localStorage.setItem(storagePrefix + "gameDay", JSON.stringify({ ...normalizeGameDay(current), minuteBank: bankRef.current }));
+      localStorage.setItem(storagePrefix + "minuteBank", JSON.stringify(bankRef.current));
+    } catch { /* storage full */ }
+  };
+
+  const bankLeave = (playerId) => {
+    if (!playerId) return;
+    const elapsed = clockRef.current || 0;
+    const start = stintRef.current[playerId];
+    const from = start == null ? elapsed : start;
+    const mins = Math.max(0, (elapsed - from) / 60);
+    const nextStints = { ...stintRef.current };
+    delete nextStints[playerId];
+    stintRef.current = nextStints;
+    setStintStart(nextStints);
+    if (mins > 0) {
+      const nextBank = addMinutes(bankRef.current, playerId, mins);
+      writeBank(nextBank);
+      setMinuteBank(nextBank);
+    }
+  };
+
+  const beginStint = (playerId) => {
+    if (!playerId) return;
+    const next = { ...stintRef.current, [playerId]: clockRef.current || 0 };
+    stintRef.current = next;
+    setStintStart(next);
+  };
+
+  const commitOnFieldMinutes = () => {
+    const lineup = lineupsRef.current?.[quarterRef.current];
+    const ids = (lineup?.starters || []).map(slot => slot.player?.id).filter(Boolean);
+    ids.forEach(bankLeave);
+  };
+
+  const setQuarter = (value) => {
+    const next = typeof value === "function" ? value(quarterRef.current) : value;
+    if (next === quarterRef.current) return;
+    commitOnFieldMinutes();
+    setRunning(false);
+    clockRef.current = 0;
+    setClockSec(0);
+    stintRef.current = {};
+    setStintStart({});
+    setQuarterRaw(next);
+    setSwapSel(null);
+  };
+
+  const commitRef = useRef(() => {});
+  commitRef.current = commitOnFieldMinutes;
+  useEffect(() => {
+    const onLeave = () => {
+      commitRef.current();
+      const lineup = lineupsRef.current?.[quarterRef.current];
+      const next = {};
+      (lineup?.starters || []).forEach(slot => {
+        if (slot.player?.id) next[slot.player.id] = clockRef.current || 0;
+      });
+      stintRef.current = next;
+      setStintStart(next);
+    };
+    window.addEventListener("pagehide", onLeave);
+    return () => window.removeEventListener("pagehide", onLeave);
+  }, []);
+
+  const notePlanResult = (nextLineups, roster = players, credit = appearanceCredit, segments = subSegments) => {
+    setLineupsByQuarter(nextLineups);
+    setFairWarn(null);
+    setScrambleNote(null);
+    setSwapSel(null);
+    const viol = roster.filter(p => !p.injured && !p.out && !p.midGameInjury && minQ > 0 && halvesFor(p.id, nextLineups, credit, segments) < minHalves);
+    const complete = [1,2,3,4].every(q => nextLineups?.[q]);
+    if (viol.length === 0 && complete) {
+      setJustRegenned(true);
+      setTimeout(() => setJustRegenned(false), 2500);
+    } else {
+      setJustRegenned(false);
+    }
+  };
+
+  const warnIfShort = (nextLineups, roster = players, credit = appearanceCredit, segments = subSegments) => {
+    const unplanned = [1,2,3,4].filter(q => !nextLineups?.[q]).length;
+    const short = roster.filter(p => {
+      if (p.injured || p.out || p.midGameInjury || minQ <= 0) return false;
+      const halves = halvesFor(p.id, nextLineups, credit, segments);
+      return halves + unplanned * 2 < minHalves;
+    });
+    if (short.length) {
+      const names = short.map(p => {
+        const halves = halvesFor(p.id, nextLineups, credit, segments);
+        return `${p.name.split(" ")[0]} ${formatQuarterEquity(halves)}/${minQ}`;
+      }).join(", ");
+      setFairWarn(`${names} would finish under ${minQ} of ${totalQuarters} quarters. A split counts as half. Other quarters were not changed.`);
+    } else {
+      setFairWarn(null);
+    }
+  };
+
+  const resetLiveTracking = () => {
+    writeBank({});
+    setMinuteBank({});
+    setAppearanceCredit({});
+    setSubSegments({});
+    setPairPlan({});
+    setSubQueue([]);
+    setRunning(false);
+    clockRef.current = 0;
+    setClockSec(0);
+    stintRef.current = {};
+    setStintStart({});
+    setPlanSub(false);
+    setQueueNote(null);
+  };
 
   // -- Plan entire game from scratch (or from a quarter onwards) --
   const planWholeGame = (fromQ = 1) => {
-    // Full replanning from Q1 = completely fresh slate, no locked quarters
-    // Partial replanning (fromQ > 1) = keep earlier quarters, redo the rest
+    if (!gate.ok) {
+      setJustRegenned(false);
+      setScrambleNote(null);
+      return;
+    }
+    if (fromQ === 1) resetLiveTracking();
+    else if (fromQ === quarter) commitOnFieldMinutes();
     const locked = {};
     if (fromQ > 1) {
       for (let q = 1; q < fromQ; q++) {
         if (lineupsByQuarter[q]) locked[q] = lineupsByQuarter[q];
       }
     }
-    const result = scheduleWholeGame(players, format, league, locked, fromQ);
-    setLineupsByQuarter(result);
-    setJustRegenned(true);
-    setTimeout(() => setJustRegenned(false), 2500);
-  };
-
-  // -- Regen remaining quarters (respects locked earlier quarters) --
-  const regenRemaining = (fromQuarter, updatedPlayers, baseLineups) => {
-    const locked = {};
-    for (let q = 1; q < fromQuarter; q++) {
-      if (baseLineups[q]) locked[q] = baseLineups[q];
+    const nextSegments = fromQ === 1 ? {} : clearSubSegmentsFrom(subSegments, fromQ);
+    if (fromQ > 1) setSubSegments(nextSegments);
+    const formatSlots = POSITIONS_BY_FORMAT[format] || POSITIONS_BY_FORMAT["7v7"];
+    const chosenShape = (FORMATION_TEMPLATES[format] || []).find(t => t.name === activeFormation);
+    const planSlots = chosenShape?.slots?.length === formatSlots.length ? chosenShape.slots : formatSlots;
+    const creditForPlan = fromQ === 1 ? {} : appearanceCredit;
+    if (subMode) {
+      const planned = scheduleHalfRotation(players, planSlots, {
+        minHalves,
+        fromQuarter: fromQ,
+        lockedLineups: locked,
+        lockedSegments: nextSegments,
+        rate: getOverallRating,
+      });
+      setSubSegments(planned.segments);
+      notePlanResult(planned.lineups, players, creditForPlan, planned.segments);
+      if (fromQ !== 1 && fromQ === quarter && running) {
+        const next = {};
+        (planned.lineups[quarter]?.starters || []).forEach(slot => {
+          if (slot.player?.id) next[slot.player.id] = clockRef.current || 0;
+        });
+        stintRef.current = next;
+        setStintStart(next);
+      }
+      return;
     }
-    const result = scheduleWholeGame(updatedPlayers, format, league, locked, fromQuarter);
-    // Merge locked earlier quarters with the newly-planned remaining ones
-    setLineupsByQuarter({ ...locked, ...result });
-    setJustRegenned(true);
-    setTimeout(() => setJustRegenned(false), 2500);
+    const result = scheduleWholeGame(
+      players, format, league, locked, fromQ,
+      nextSegments,
+      creditForPlan,
+      planSlots,
+    );
+    notePlanResult(result, players, creditForPlan, nextSegments);
+    if (fromQ !== 1 && fromQ === quarter && running) {
+      const next = {};
+      (result[quarter]?.starters || []).forEach(slot => {
+        if (slot.player?.id) next[slot.player.id] = clockRef.current || 0;
+      });
+      stintRef.current = next;
+      setStintStart(next);
+    }
   };
 
-  // -- Injury: pull player from current Q, regen rest --
-  const markMidGameInjury = (playerId) => {
+  const dropQueued = (playerId) => {
+    setSubQueue(prev => (prev || []).filter(row => row.outId !== playerId && row.inId !== playerId));
+  };
+
+  const planSlotsFor = () => {
+    const formatSlots = POSITIONS_BY_FORMAT[format] || POSITIONS_BY_FORMAT["7v7"];
+    const chosenShape = (FORMATION_TEMPLATES[format] || []).find(t => t.name === activeFormation);
+    return chosenShape?.slots?.length === formatSlots.length ? chosenShape.slots : formatSlots;
+  };
+
+  const syncStints = (lineup) => {
+    if (!running) return;
+    const next = {};
+    (lineup?.starters || []).forEach(slot => {
+      if (slot.player?.id) next[slot.player.id] = clockRef.current || 0;
+    });
+    stintRef.current = next;
+    setStintStart(next);
+  };
+
+  // Injury and late scratches rebuild the sheet. Unavailable quarters stay blank.
+  const markUnavailable = (playerId, mode) => {
     const player = players.find(p => p.id === playerId);
     if (!player) return;
-
-    const updatedPlayers = players.map(p =>
-      p.id === playerId
-        ? { ...p, injured: true, midGameInjury: true, injuredInQuarter: quarter }
-        : p
-    );
-    setPlayers(updatedPlayers);
-    setInjuryAlerts(prev => [...prev, { player, quarter, id: Date.now() }]);
-
-    // Pull from current quarter immediately  sub in first bench player
     const currentL = lineupsByQuarter[quarter];
-    let baseLineups = { ...lineupsByQuarter };
-    if (currentL) {
-      const benchAvail = (currentL.bench || []).filter(p => p.id !== playerId);
-      const sub = benchAvail[0] || null;
-      const newStarters = currentL.starters.map(slot => {
-        if (slot.player?.id !== playerId) return slot;
-        return sub ? { ...slot, player: sub } : { ...slot, player: null };
+    const wasOn = !!currentL?.starters?.some(slot => slot.player?.id === playerId);
+    const live = running || (clockRef.current || 0) > 0;
+    if (wasOn) bankLeave(playerId);
+    const updatedPlayers = players.map(p => {
+      if (p.id !== playerId) return p;
+      if (mode === "out") return { ...p, out: true, injured: false, midGameInjury: false, injuredInQuarter: quarter, returnQuarter: null };
+      return { ...p, injured: true, out: false, midGameInjury: true, injuredInQuarter: quarter, returnQuarter: null };
+    });
+    setPlayers(updatedPlayers);
+    dropQueued(playerId);
+    if (mode === "injury") setInjuryAlerts(prev => [...prev, { player, quarter, id: Date.now() }]);
+    const hasSheet = Object.keys(lineupsByQuarter).length > 0;
+    if (!hasSheet) return;
+    let credit = appearanceCredit;
+    if (wasOn) credit = setAppearanceCreditFor(credit, playerId, quarter, true);
+    if (autoRegen) {
+      const planned = regenerateForAbsence({
+        players: updatedPlayers,
+        slots: planSlotsFor(),
+        lineups: lineupsByQuarter,
+        segments: subSegments,
+        absentId: playerId,
+        fromQuarter: quarter,
+        returnQuarter: null,
+        minHalves,
+        subMode,
+        rate: getOverallRating,
       });
-      const newBench = benchAvail.slice(sub ? 1 : 0);
-      baseLineups[quarter] = { starters: newStarters, bench: newBench };
+      let segments = planned.segments;
+      if (wasOn && live) segments = noteSubSegment(segments, playerId, quarter, "left");
+      setAppearanceCredit(credit);
+      setSubSegments(segments);
+      notePlanResult(planned.lineups, updatedPlayers, credit, segments);
+      syncStints(planned.lineups[quarter]);
+      return;
     }
-
-    // Regen Q+1 onwards without this player
-    const locked = {};
-    for (let q = 1; q <= quarter; q++) {
-      if (baseLineups[q]) locked[q] = baseLineups[q];
+    if (!currentL) return;
+    if (wasOn) {
+      setAppearanceCredit(credit);
+      if (live) setSubSegments(prev => noteSubSegment(prev, playerId, quarter, "left"));
     }
-    const result = scheduleWholeGame(updatedPlayers, format, league, locked, quarter + 1);
-    setLineupsByQuarter({ ...baseLineups, ...result });
-    setJustRegenned(true);
-    setTimeout(() => setJustRegenned(false), 2500);
+    const before = new Set((currentL.starters || []).map(slot => slot.player?.id).filter(Boolean));
+    const next = pullFromPlan(lineupsByQuarter, playerId, quarter, totalQuarters);
+    const incoming = (next[quarter]?.starters || []).map(slot => slot.player?.id).find(id => id && !before.has(id));
+    if (incoming) {
+      beginStint(incoming);
+      if (live) {
+        credit = setAppearanceCreditFor(credit, incoming, quarter, false);
+        setAppearanceCredit(credit);
+        setSubSegments(prev => noteSubSegment(prev, incoming, quarter, "entered"));
+      }
+    }
+    setLineupsByQuarter(next);
+    setSwapSel(null);
+    setFairWarn(null);
   };
 
-  const clearMidGameInjury = (playerId) => {
+  const restorePlayer = (playerId) => {
+    const existing = players.find(p => p.id === playerId);
+    const fromQuarter = existing?.injuredInQuarter || existing?.returnQuarter || quarter;
     const updatedPlayers = players.map(p =>
       p.id === playerId
-        ? { ...p, injured: false, midGameInjury: false, injuredInQuarter: null }
+        ? { ...p, injured: false, midGameInjury: false, injuredInQuarter: fromQuarter, out: false, returnQuarter: quarter }
         : p
     );
     setPlayers(updatedPlayers);
-    regenRemaining(quarter, updatedPlayers, lineupsByQuarter);
+    const player = updatedPlayers.find(p => p.id === playerId);
+    if (autoRegen && Object.keys(lineupsByQuarter).length > 0 && player) {
+      const planned = regenerateForAbsence({
+        players: updatedPlayers,
+        slots: planSlotsFor(),
+        lineups: lineupsByQuarter,
+        segments: subSegments,
+        absentId: playerId,
+        fromQuarter,
+        returnQuarter: quarter,
+        minHalves,
+        subMode,
+        rate: getOverallRating,
+      });
+      setSubSegments(planned.segments);
+      notePlanResult(planned.lineups, updatedPlayers, appearanceCredit, planned.segments);
+      syncStints(planned.lineups[quarter]);
+      return;
+    }
+    setLineupsByQuarter(prev => {
+      if (!prev?.[quarter] || !player) return prev;
+      return { ...prev, [quarter]: addLateArrival(prev[quarter], player) };
+    });
+  };
+
+  const gkLocked = () => subMode || running || (clockRef.current || 0) > 0;
+  const refuseGoalkeeper = () => {
+    setQueueNote(GK_FULL_QUARTER_REASON);
+    setSwapSel(null);
+    return true;
   };
 
   const handleSwap = (idxA, idxB) => {
     if (!currentLineup) return;
-    const newStarters = [...currentLineup.starters];
-    const temp = newStarters[idxA];
-    newStarters[idxA] = newStarters[idxB];
-    newStarters[idxB] = temp;
+    const newStarters = currentLineup.starters.map(slot => ({ ...slot }));
+    if (gkLocked() && (isGkPosition(newStarters[idxA]?.pos) || isGkPosition(newStarters[idxB]?.pos))) {
+      refuseGoalkeeper();
+      return;
+    }
+    const playerA = newStarters[idxA]?.player || null;
+    newStarters[idxA] = { ...newStarters[idxA], player: newStarters[idxB]?.player || null };
+    newStarters[idxB] = { ...newStarters[idxB], player: playerA };
     setLineupsByQuarter(prev => ({ ...prev, [quarter]: { ...currentLineup, starters: newStarters } }));
+    setSwapSel(null);
+    setFairWarn(null);
+  };
+
+  const swapBenchAndField = (fieldIdx, benchPlayerId, options = {}) => {
+    const lineup = options.lineup || currentLineup;
+    const qKey = options.quarter || quarter;
+    const doBank = options.bank !== false && qKey === quarter;
+    if (!lineup) return false;
+    const bench = [...(lineup.bench || [])];
+    const bIdx = bench.findIndex(p => p.id === benchPlayerId);
+    if (bIdx < 0 || fieldIdx == null || !lineup.starters[fieldIdx]) return false;
+    if (isGkPosition(lineup.starters[fieldIdx].pos) && (options.midQuarter || gkLocked())) {
+      refuseGoalkeeper();
+      return false;
+    }
+    const starters = lineup.starters.map(slot => ({ ...slot }));
+    const incoming = bench[bIdx];
+    const outgoing = starters[fieldIdx].player || null;
+    if (outgoing?.id === incoming.id) { setSwapSel(null); return false; }
+    const fullQuarterGk = isGkPosition(starters[fieldIdx].pos);
+    starters[fieldIdx] = { ...starters[fieldIdx], player: incoming };
+    if (outgoing) bench[bIdx] = outgoing;
+    else bench.splice(bIdx, 1);
+    let credit = appearanceCredit;
+    let nextSegments = subSegments;
+    if (!fullQuarterGk) {
+      if (outgoing) credit = setAppearanceCreditFor(credit, outgoing.id, qKey, true);
+      if (incoming) credit = setAppearanceCreditFor(credit, incoming.id, qKey, false);
+      nextSegments = markQuarterSub(subSegments, qKey, outgoing?.id, incoming?.id);
+    }
+    setAppearanceCredit(credit);
+    setSubSegments(nextSegments);
+    if (doBank) {
+      if (outgoing) bankLeave(outgoing.id);
+      beginStint(incoming.id);
+    }
+    const nextLineup = { starters, bench };
+    const nextAll = { ...lineupsByQuarter, [qKey]: nextLineup };
+    setLineupsByQuarter(nextAll);
+    setSwapSel(null);
+    warnIfShort(nextAll, players, credit, nextSegments);
+    return true;
+  };
+
+  const queueSwap = (outId, inId) => {
+    if (outId && outId === goalkeeperId(currentLineup)) {
+      refuseGoalkeeper();
+      return;
+    }
+    const added = addPendingSwap(subQueue, {
+      id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
+      quarter,
+      outId,
+      inId,
+    });
+    if (!added.ok) { setQueueNote(added.reason); return; }
+    setSubQueue(added.queue);
+    setQueueNote(null);
+    setSwapSel(null);
+  };
+
+  const executeSwap = (row) => {
+    if (!subMode) {
+      setQueueNote("Full quarters. Turn on sub mode to run a half swap.");
+      return;
+    }
+    const lineup = lineupsByQuarter[row.quarter];
+    if (!lineup) { setQueueNote("That quarter has no lineup."); return; }
+    const fieldIdx = lineup.starters.findIndex(slot => slot.player?.id === row.outId);
+    if (fieldIdx < 0) { setQueueNote("That player is no longer on the field for that quarter."); return; }
+    if (isGkPosition(lineup.starters[fieldIdx]?.pos)) { refuseGoalkeeper(); return; }
+    if (!(lineup.bench || []).some(p => p.id === row.inId)) { setQueueNote("The sub is not on the bench for that quarter."); return; }
+    const ok = swapBenchAndField(fieldIdx, row.inId, {
+      lineup,
+      quarter: row.quarter,
+      bank: row.quarter === quarter,
+    });
+    if (!ok) return;
+    setSubQueue(prev => cancelOneSwap(prev, row.id));
+    setQueueNote(null);
+  };
+
+  const onFieldTap = (idx) => {
+    if (!currentLineup) return;
+    if (!subMode && planSub) setPlanSub(false);
+    if (subMode && planSub) {
+      const player = currentLineup.starters[idx]?.player;
+      if (!player) return;
+      if (isGkPosition(currentLineup.starters[idx]?.pos)) { refuseGoalkeeper(); return; }
+      if (swapSel?.type === "field" && swapSel.idx === idx) { setSwapSel(null); setQueueNote(null); return; }
+      setSwapSel({ type: "field", idx, playerId: player.id });
+      setQueueNote("Tap the bench player who comes on.");
+      return;
+    }
+    if (subMode && swapSel?.type === "bench") {
+      const outPlayer = currentLineup.starters[idx]?.player;
+      if (!outPlayer) return;
+      if (isGkPosition(currentLineup.starters[idx]?.pos)) { refuseGoalkeeper(); return; }
+      setPairPlan(prev => ({
+        ...(prev || {}),
+        [quarter]: retargetPair(prev?.[quarter], swapSel.playerId, outPlayer.id, currentLineup),
+      }));
+      setSwapSel(null);
+      setQueueNote(`${playerName(swapSel.playerId)} on for ${outPlayer.name}. The dotted line moved. Drag when you want them to switch now.`);
+      return;
+    }
+    if (swapSel?.type === "field") {
+      if (swapSel.idx === idx) { setSwapSel(null); return; }
+      handleSwap(swapSel.idx, idx);
+      return;
+    }
+    setSwapSel({ type: "field", idx });
+  };
+
+  const onBenchTap = (playerId) => {
+    if (!subMode) {
+      if (swapSel?.type === "field") {
+        swapBenchAndField(swapSel.idx, playerId);
+        return;
+      }
+      setQueueNote("Full quarters. Drag a player to swap. Turn on sub mode for half swaps.");
+      return;
+    }
+    if (planSub) {
+      if (swapSel?.type !== "field") {
+        setQueueNote("Tap who leaves the field first.");
+        return;
+      }
+      const outId = currentLineup?.starters?.[swapSel.idx]?.player?.id;
+      if (!outId) { setQueueNote("Tap who leaves the field first."); return; }
+      queueSwap(outId, playerId);
+      return;
+    }
+    if (swapSel?.type === "field") {
+      swapBenchAndField(swapSel.idx, playerId);
+      return;
+    }
+    if (swapSel?.type === "bench" && swapSel.playerId === playerId) {
+      setSwapSel(null);
+      return;
+    }
+    setSwapSel({ type: "bench", playerId });
+  };
+
+  const clearSlotToBench = (fieldIdx) => {
+    if (!currentLineup) return;
+    if (isGkPosition(currentLineup.starters[fieldIdx]?.pos) && gkLocked()) { refuseGoalkeeper(); return; }
+    const outgoing = currentLineup.starters[fieldIdx]?.player;
+    if (!outgoing) return;
+    bankLeave(outgoing.id);
+    const starters = currentLineup.starters.map((slot, i) => i === fieldIdx ? { ...slot, player: null } : slot);
+    const bench = [...(currentLineup.bench || []), outgoing];
+    const nextAll = { ...lineupsByQuarter, [quarter]: { starters, bench } };
+    setLineupsByQuarter(nextAll);
+    setSwapSel(null);
+    warnIfShort(nextAll);
+  };
+
+  const applyDrag = (result) => {
+    if (!result || result.action === "none" || !currentLineup) return;
+    if (result.action === "swap-field") { handleSwap(result.a, result.b); return; }
+    if (result.action === "swap-bench") { swapBenchAndField(result.fieldIdx, result.playerId); return; }
+    if (result.action === "bench-zone") {
+      const minutes = {};
+      (currentLineup.bench || []).forEach(player => {
+        minutes[player.id] = earnedMinutes(player.id, {
+          bank: bankRef.current,
+          onField: false,
+          clockSec: clockRef.current,
+          stintStartSec: stintRef.current,
+        });
+      });
+      const nextUp = rankWhosNext(currentLineup.bench || [], minutes)[0];
+      if (nextUp) swapBenchAndField(result.fieldIdx, nextUp.id);
+      else clearSlotToBench(result.fieldIdx);
+    }
+  };
+  applyDragRef.current = applyDrag;
+
+  const scramblePositions = () => {
+    if (!currentLineup) return;
+    const next = scrambleQuarterPositions(currentLineup);
+    setLineupsByQuarter(prev => ({ ...prev, [quarter]: next }));
+    setSwapSel(null);
+    setFairWarn(null);
+    setScrambleNote(`Q${quarter} positions reshuffled. Same players stayed on the field. The goalkeeper stayed in goal.`);
+  };
+
+  const scrambleMembership = () => {
+    if (!currentLineup) return;
+    commitOnFieldMinutes();
+    const result = redrawQuarterMembership(players, lineupsByQuarter, quarter, minQ, totalQuarters, {
+      segments: subSegments,
+      credit: appearanceCredit,
+      lockGoalkeeper: gkLocked(),
+    });
+    setSwapSel(null);
+    if (!result.ok) {
+      if (running) {
+        const next = {};
+        (currentLineup.starters || []).forEach(slot => {
+          if (slot.player?.id) next[slot.player.id] = clockRef.current || 0;
+        });
+        stintRef.current = next;
+        setStintStart(next);
+      }
+      setScrambleNote(result.reason);
+      return;
+    }
+    const nextAll = { ...lineupsByQuarter, [quarter]: result.lineup };
+    setLineupsByQuarter(nextAll);
+    setScrambleNote(`Q${quarter} redrawn. The other quarters were left alone.`);
+    warnIfShort(nextAll);
+    if (running) {
+      const next = {};
+      (result.lineup?.starters || []).forEach(slot => {
+        if (slot.player?.id) next[slot.player.id] = clockRef.current || 0;
+      });
+      stintRef.current = next;
+      setStintStart(next);
+    }
   };
 
   const onFieldIds = new Set(
     (currentLineup?.starters || []).filter(s => s.player).map(s => s.player.id)
   );
+  const minutesById = {};
+  players.forEach(p => {
+    minutesById[p.id] = earnedMinutes(p.id, {
+      bank: minuteBank,
+      onField: onFieldIds.has(p.id),
+      clockSec,
+      stintStartSec: stintStart,
+    });
+  });
+  const anyMinutes = clockSec > 0 || running || Object.values(minuteBank || {}).some(n => n > 0);
+  const whosNext = rankWhosNext(currentLineup?.bench || [], minutesById);
+  const pendingSwaps = (subQueue || []).filter(row => row.status === "pending");
+  const longestOnField = () => {
+    const on = (currentLineup?.starters || []).map(slot => slot.player).filter(Boolean);
+    if (!on.length) return null;
+    return [...on].sort((a, b) => (minutesById[b.id] || 0) - (minutesById[a.id] || 0) || String(a.name || "").localeCompare(String(b.name || "")))[0];
+  };
+  const playerName = (id) => players.find(p => p.id === id)?.name || "Player";
+  const plannedNext = quarter < totalQuarters ? lineupsByQuarter[quarter + 1] : null;
+  const benchPairs = currentLineup
+    ? planBenchRotation(currentLineup, { minutesById, nextLineup: plannedNext })
+    : [];
+  const subPairs = pairsForDisplay(benchPairs, pairPlan?.[quarter], currentLineup);
+  const shownPairs = subMode ? subPairs : [];
+  const pairKey = shownPairs.map(pair => `${pair.inId}>${pair.outId}`).join("|");
+  const lineupKey = [
+    (currentLineup?.starters || []).map(slot => `${slot.pos}:${slot.player?.id || ""}`).join(","),
+    (currentLineup?.bench || []).map(player => player?.id || "").join(","),
+  ].join("#");
+  const pitchWrapRef = useRef(null);
+  const [subLines, setSubLines] = useState([]);
+  const [headerOffset, setHeaderOffset] = useState(120);
+  useEffect(() => {
+    const el = document.getElementById("ck-app-header");
+    if (!el) return undefined;
+    const measure = () => setHeaderOffset(el.getBoundingClientRect().height || 0);
+    measure();
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
+  }, []);
+  useLayoutEffect(() => {
+    const root = pitchWrapRef.current;
+    if (!root) {
+      setSubLines(prev => (prev.length ? [] : prev));
+      return undefined;
+    }
+    const measure = () => {
+      const box = root.getBoundingClientRect();
+      const esc = (value) => (window.CSS && CSS.escape ? CSS.escape(String(value)) : String(value));
+      const next = shownPairs.map(pair => {
+        const from = root.querySelector(`[data-sub-from="${esc(pair.inId)}"]`);
+        const to = root.querySelector(`[data-sub-to="${esc(pair.outId)}"]`);
+        if (!from || !to) return null;
+        const a = from.getBoundingClientRect();
+        const b = to.getBoundingClientRect();
+        const x1 = a.left + a.width / 2 - box.left;
+        const y1 = a.top + a.height / 2 - box.top;
+        const cx = b.left + b.width / 2 - box.left;
+        const cy = b.top + b.height / 2 - box.top;
+        const end = lineStopAtCircle(x1, y1, cx, cy, Math.min(b.width, b.height) / 2);
+        return {
+          key: `${pair.inId}-${pair.outId}`,
+          x1: Math.round(x1),
+          y1: Math.round(y1),
+          x2: Math.round(end.x),
+          y2: Math.round(end.y),
+        };
+      }).filter(Boolean);
+      setSubLines(prev => {
+        if (prev.length === next.length && prev.every((line, i) =>
+          line.key === next[i].key && line.x1 === next[i].x1 && line.y1 === next[i].y1 && line.x2 === next[i].x2 && line.y2 === next[i].y2
+        )) return prev;
+        return next;
+      });
+    };
+    measure();
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
+  }, [pairKey, lineupKey, quarter, swapSel]);
+  const queueWhosNext = (benchPlayer) => {
+    if (!subMode) {
+      setQueueNote("Full quarters. Turn on sub mode to queue a half swap.");
+      return;
+    }
+    const planned = shownPairs.find(pair => pair.inId === benchPlayer.id);
+    const longestField = (currentLineup?.starters || [])
+      .filter(slot => slot.player && !isGkPosition(slot.pos))
+      .map(slot => slot.player)
+      .sort((a, b) => (minutesById[b.id] || 0) - (minutesById[a.id] || 0) || String(a.name || "").localeCompare(String(b.name || "")))[0];
+    const leavingId = planned?.outId || longestField?.id;
+    if (!leavingId || leavingId === goalkeeperId(currentLineup)) { refuseGoalkeeper(); return; }
+    queueSwap(leavingId, benchPlayer.id);
+  };
+  const bringBenchOn = () => {
+    if (!subMode) {
+      setQueueNote("Full quarters. Turn on sub mode to bring the bench on.");
+      return;
+    }
+    if (!currentLineup || shownPairs.length === 0) {
+      setQueueNote("Nobody is waiting on the bench.");
+      return;
+    }
+    const live = running || (clockRef.current || 0) > 0;
+    const rotated = applyBenchRotation(currentLineup, shownPairs);
+    let credit = appearanceCredit || {};
+    let segments = subSegments || {};
+    shownPairs.forEach(pair => {
+      if (live) bankLeave(pair.outId);
+      credit = setAppearanceCreditFor(credit, pair.outId, quarter, true);
+      credit = setAppearanceCreditFor(credit, pair.inId, quarter, false);
+      segments = markQuarterSub(segments, quarter, pair.outId, pair.inId);
+    });
+    setAppearanceCredit(credit);
+    setSubSegments(segments);
+    if (live) shownPairs.forEach(pair => beginStint(pair.inId));
+    const nextAll = { ...lineupsByQuarter, [quarter]: rotated };
+    setLineupsByQuarter(nextAll);
+    const involved = new Set(shownPairs.flatMap(pair => [pair.inId, pair.outId]));
+    setSubQueue(prev => (prev || []).filter(row => row.quarter !== quarter || (!involved.has(row.inId) && !involved.has(row.outId))));
+    setSwapSel(null);
+    warnIfShort(nextAll, players, credit, segments);
+    const named = shownPairs.map(pair => `${playerName(pair.inId)} on for ${playerName(pair.outId)}`).join(", ");
+    setQueueNote(`Bench is on: ${named}. Minutes already played stay. Other quarters stay.`);
+  };
+  const cellKind = (playerId, q, status) => {
+    if (status === "unplanned") return "unplanned";
+    if (status === "blank") return "blank";
+    return playCellKind({ onField: status === "on", segment: segmentAt(subSegments, playerId, q) });
+  };
+  const quarterStory = (playerId) => {
+    const bits = [1, 2, 3, 4].map(q => {
+      const lineup = lineupsByQuarter[q];
+      if (!lineup) return null;
+      const on = lineup.starters.some(slot => slot.player?.id === playerId);
+      const kind = playCellKind({ onField: on, segment: segmentAt(subSegments, playerId, q) });
+      if (kind === "full") return `Q${q} full quarter`;
+      if (kind === "partial-on") return `Q${q} came on mid-quarter`;
+      if (kind === "partial-off") return `Q${q} played, then off`;
+      return null;
+    }).filter(Boolean);
+    if (!bits.length) return "Still on the bench. A box turns green once they are on the field. The count is still quarters, not minutes.";
+    return `${bits.join(". ")}. A full quarter counts as 1. A split counts as half. Minimum is ${minQ} of ${totalQuarters}.`;
+  };
+
+  const formationTemplates = FORMATION_TEMPLATES[format] || [];
+  const activeStrategy = formationTemplates.find(t => t.name === activeFormation) || formationTemplates[0] || null;
+  const applyFormation = (name) => {
+    const tmpl = formationTemplates.find(t => t.name === name) || formationTemplates[0];
+    if (!tmpl) return;
+    setActiveFormation(tmpl.name);
+    if (!lineupsByQuarter[quarter]) return;
+    const allAvail = [
+      ...(lineupsByQuarter[quarter].starters || []).filter(s => s.player).map(s => s.player),
+      ...(lineupsByQuarter[quarter].bench || []),
+    ];
+    const assigned = new Set();
+    const newStarters = tmpl.slots.map(pos => {
+      let best = allAvail.find(p => !assigned.has(p.id) && (p.positions || []).includes(pos));
+      if (!best) best = allAvail.find(p => !assigned.has(p.id));
+      if (best) assigned.add(best.id);
+      return { pos, player: best || null };
+    });
+    const newBench = allAvail.filter(p => !assigned.has(p.id));
+    const beforeIds = new Set((lineupsByQuarter[quarter].starters || []).filter(s => s.player).map(s => s.player.id));
+    const afterIds = new Set(newStarters.filter(s => s.player).map(s => s.player.id));
+    const nextAll = { ...lineupsByQuarter, [quarter]: { starters: newStarters, bench: newBench } };
+    setLineupsByQuarter(nextAll);
+    setSwapSel(null);
+    if (beforeIds.size !== afterIds.size || [...beforeIds].some(id => !afterIds.has(id))) warnIfShort(nextAll);
+    else setFairWarn(null);
+  };
+  const modeNoted = useRef(false);
+  useEffect(() => {
+    if (!modeNoted.current) {
+      modeNoted.current = true;
+      return;
+    }
+    setSwapSel(null);
+    if (!subMode) {
+      setPlanSub(false);
+      setQueueNote("Full quarters. Half swaps are off. Planning uses whole quarters.");
+    } else {
+      setQueueNote("Sub mode. Half swaps are on. Planning spreads sit time across halves.");
+    }
+  }, [subMode]);
+  const saveStrategyToGameDay = () => {
+    if (!setGames) return;
+    const today = new Date().toISOString().slice(0, 10);
+    const sheetInput = {
+      players,
+      lineups: lineupsByQuarter,
+      pairPlan,
+      subMode,
+      segments: subSegments,
+      credit: appearanceCredit,
+      minQ,
+    };
+    const entry = gameLogFromStrategy({
+      id: uid(),
+      date: today,
+      opponent,
+      homeScore,
+      oppScore: awayScore,
+      formation: activeStrategy?.name || activeFormation,
+      formationLabel: activeStrategy?.label || "",
+      subMode,
+      format,
+      league,
+      lineups: lineupsByQuarter,
+      savedAt: new Date().toISOString(),
+      sheets: {
+        field: shareFieldSheet(sheetInput),
+        playTime: sharePlayTimeSheet(sheetInput),
+      },
+    });
+    setGames(prev => upsertGameLog(prev, entry));
+    setSaveNote(`Saved ${entry.strategy.formation || "this strategy"} with the field sheet and the play-time sheet to the Season game log.`);
+  };
 
   // Build rotation grid: rows = players, cols = Q1Q4
   const allTrackedPlayers = [...active, ...midGameInjured];
@@ -1588,8 +2515,10 @@ function TabGame({ format, league, onLeagueChange, onFormatChange, players, setP
     quarters: [1,2,3,4].map(q => {
       const lineup = lineupsByQuarter[q];
       if (!lineup) return "unplanned";
-      const onField = lineup.starters.some(s => s.player?.id === p.id);
-      return onField ? "on" : "bench";
+      const presence = playerQuarterPresence(lineup, p.id);
+      if (presence === "on") return "on";
+      if (presence === "blank") return "blank";
+      return "bench";
     }),
     totalPlanned: [1,2,3,4].filter(q => {
       const l = lineupsByQuarter[q];
@@ -1599,6 +2528,53 @@ function TabGame({ format, league, onLeagueChange, onFormatChange, players, setP
 
   return (
     <div>
+      <div style={{
+        position:"sticky", top: headerOffset, zIndex: 40,
+        margin: "0 0 12px", padding: "8px 0 10px",
+        background: C.bg,
+      }}>
+        <div style={{fontSize:10, color:C.muted, fontWeight:800, letterSpacing:"0.06em", textTransform:"uppercase", marginBottom:6}}>Quarter</div>
+        <div style={{display:"flex", border:`1px solid ${C.border}`, borderRadius:10, overflow:"hidden", background:"rgba(255,255,255,0.02)"}}>
+          {[1,2,3,4].map(q => {
+            const hasLineup = !!lineupsByQuarter[q];
+            const hasInjury = midGameInjured.some(p => p.injuredInQuarter === q);
+            const selected = quarter === q;
+            return (
+              <button key={q} onClick={() => setQuarter(q)} style={{
+                flex:1, minHeight:48, border:"none", cursor:"pointer",
+                borderRight: q < 4 ? `1px solid ${C.border}` : "none",
+                fontWeight:800, fontSize:16, fontFamily:"inherit",
+                background: selected ? "rgba(232,160,32,0.16)" : "transparent",
+                color: selected ? C.gold : C.text,
+                boxShadow: selected ? "inset 0 -3px 0 #e8a020" : "none",
+              }}>
+                Q{q}
+                {hasLineup && (
+                  <span style={{display:"block", fontSize:9, lineHeight:1.1, marginTop:2, color:hasInjury?"#e74c3c":C.muted, fontWeight:700}}>
+                    {hasInjury ? "inj" : "set"}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+        {formationTemplates.length > 0 && (
+          <div style={{display:"flex", gap:6, overflowX:"auto", marginTop:8, paddingBottom:2}}>
+            {formationTemplates.map(t => {
+              const selected = t.name === activeStrategy?.name;
+              return (
+                <button key={t.name} onClick={() => applyFormation(t.name)} style={{
+                  flex:"0 0 auto", minHeight:40, padding:"0 12px", borderRadius:10, cursor:"pointer",
+                  fontFamily:"inherit", fontSize:13, fontWeight:800,
+                  border: selected ? `1px solid ${C.gold}` : `1px solid ${C.border}`,
+                  background: selected ? "rgba(232,160,32,0.18)" : "rgba(255,255,255,0.03)",
+                  color: selected ? C.gold : C.muted,
+                }}>{t.name}</button>
+              );
+            })}
+          </div>
+        )}
+      </div>
       {/* Injury alerts */}
       {injuryAlerts.map(alert => (
         <InjuryAlert key={alert.id} player={alert.player} quarter={alert.quarter}
@@ -1690,14 +2666,23 @@ function TabGame({ format, league, onLeagueChange, onFormatChange, players, setP
         </div>
       </div>
 
-      {/* Success flash */}
-      {justRegenned && (
+      {/* Success flash — only when the plan actually meets the quarter minimum */}
+      {justRegenned && violations.length === 0 && (
         <div style={{
           background:"rgba(39,174,96,0.12)", border:"1px solid rgba(39,174,96,0.35)",
           borderRadius:9, padding:"10px 14px", marginBottom:14,
           fontSize:12, color:"#2ecc71", fontWeight:600,
         }}>
-           All quarters planned  every eligible player meets the minimum play-time rule.
+          All 4 quarters planned. Every eligible player has at least {minQ} of {totalQuarters} quarters on the field.
+        </div>
+      )}
+
+      {!gate.ok && (
+        <div style={{
+          background:"rgba(192,57,43,0.12)", border:"1px solid rgba(192,57,43,0.45)",
+          borderRadius:9, padding:"10px 14px", marginBottom:14, fontSize:12, color:"#f5b7b1", lineHeight:1.5,
+        }}>
+          <b>Can’t plan yet.</b> {gate.reason} {subMode ? "Sub mode counts halves. 50% is 4 of 8." : "Quarters on the field are the unit — not clock minutes."}
         </div>
       )}
 
@@ -1707,8 +2692,17 @@ function TabGame({ format, league, onLeagueChange, onFormatChange, players, setP
           background:"rgba(211,84,0,0.1)", border:"1px solid rgba(211,84,0,0.35)",
           borderRadius:9, padding:"10px 14px", marginBottom:14, fontSize:12, color:C.gold,
         }}>
-           <b>{violations.length} player{violations.length>1?"s":""}</b> still below the {minQ}-quarter minimum:&nbsp;
-          {violations.map(p=>p.name.split(" ")[0]).join(", ")}. Hit <b>Plan Full Game</b> to fix.
+          <b>{violations.length} player{violations.length>1?"s":""}</b> still below {subMode ? `${minHalves} halves (${minQ} of ${totalQuarters} quarters)` : `${minQ} of ${totalQuarters} quarters`} on the field:&nbsp;
+          {violations.map(p=>p.name.split(" ")[0]).join(", ")}.
+        </div>
+      )}
+
+      {fairWarn && (
+        <div style={{
+          background:"rgba(211,84,0,0.1)", border:"1px solid rgba(211,84,0,0.35)",
+          borderRadius:9, padding:"10px 14px", marginBottom:14, fontSize:12, color:C.gold, lineHeight:1.45,
+        }}>
+          <b>Fair-play warning.</b> {fairWarn} The change was kept.
         </div>
       )}
 
@@ -1726,9 +2720,9 @@ function TabGame({ format, league, onLeagueChange, onFormatChange, players, setP
               <div style={{width:24,height:24,borderRadius:"50%",background:"#7b0000",display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,color:"#fff",fontWeight:700,flexShrink:0}}>{p.number}</div>
               <div style={{flex:1}}>
                 <div style={{fontSize:12,color:"#e74c3c",fontWeight:600}}>{p.name}</div>
-                <div style={{fontSize:10,color:"rgba(231,76,60,0.65)"}}>Injured Q{p.injuredInQuarter}  remaining quarters adjusted</div>
+                <div style={{fontSize:10,color:"rgba(231,76,60,0.65)"}}>Injured Q{p.injuredInQuarter}. Later quarters stay blank until you return them.</div>
               </div>
-              <button onClick={() => clearMidGameInjury(p.id)} style={{
+              <button onClick={() => restorePlayer(p.id)} style={{
                 background:"rgba(39,174,96,0.15)",border:"1px solid rgba(39,174,96,0.35)",
                 borderRadius:6,cursor:"pointer",fontSize:11,color:"#2ecc71",
                 padding:"3px 9px",fontWeight:600,fontFamily:"inherit",
@@ -1738,125 +2732,37 @@ function TabGame({ format, league, onLeagueChange, onFormatChange, players, setP
         </div>
       )}
 
-      <div style={{display:"flex",gap:18,flexWrap:"wrap"}}>
+      <style>{`
+        @media (max-width: 820px) {
+          .ck-field { order: -1; width: 100%; }
+          .ck-roster { order: 1; width: 100%; max-width: none !important; overflow-x: clip; }
+        }
+        @keyframes ckHalfFlash {
+          0%, 100% { transform: scale(1); }
+          50% { transform: scale(1.08); }
+        }
+      `}</style>
+      <div className="ck-gameday-row" style={{display:"flex",gap:18,flexWrap:"wrap"}}>
 
         {/* -- LEFT PANEL (Play Time, Strategy, etc.) -- */}
-        <div style={{flex:"1 1 320px",minWidth:0,maxWidth:400}}>
+        <div className="ck-roster" style={{flex:"1 1 320px",minWidth:0,maxWidth:400}}>
 
-          {/* League + Format selectors  above Strategy */}
           <Card style={{marginBottom:14}}>
-            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
-              <div>
-                <label style={{...lbl,marginBottom:4}}>League</label>
-                <select value={league} onChange={e=>onLeagueChange&&onLeagueChange(e.target.value)}
-                  style={{...SS,width:"100%",fontSize:12,padding:"6px 8px"}}>
-                  {LEAGUES.map(l=><option key={l} value={l} style={OPT}>{leagueShortLabel(l)}</option>)}
-                </select>
-              </div>
-              <div>
-                <label style={{...lbl,marginBottom:4,display:"flex",alignItems:"center",gap:4}}>
-                  <span>Format</span>
-                  {format !== leagueDefaultFormat(league) && (
-                    <span style={{fontSize:8,color:C.gold,fontWeight:700,letterSpacing:"0.04em"}}>OVERRIDE</span>
-                  )}
-                </label>
-                <select value={format} onChange={e=>onFormatChange&&onFormatChange(e.target.value)}
-                  style={{...SS,width:"100%",fontSize:12,padding:"6px 8px"}}>
-                  {FORMATS.map(f=><option key={f} value={f} style={OPT}>{f}{f===leagueDefaultFormat(league)?"  default":""}</option>)}
-                </select>
-              </div>
-            </div>
-          </Card>
-
-          {/* Strategy / Formation Picker  minimized */}
-          <Card style={{marginBottom:14}}>
-            {(() => {
-              const templates = FORMATION_TEMPLATES[format] || [];
-              const active = templates.find(t => t.name === activeFormation) || templates[0];
-              const handleApply = () => {
-                const tmpl = templates.find(t => t.name === activeFormation) || active;
-                if (!tmpl) return;
-                const customSlots = tmpl.slots;
-                if (lineupsByQuarter[quarter]) {
-                  const allAvail = [
-                    ...(lineupsByQuarter[quarter].starters||[]).filter(s=>s.player).map(s=>s.player),
-                    ...(lineupsByQuarter[quarter].bench||[]),
-                  ];
-                  const assigned = new Set();
-                  const newStarters = customSlots.map(pos => {
-                    let best = allAvail.find(p => !assigned.has(p.id) && (p.positions||[]).includes(pos));
-                    if (!best) best = allAvail.find(p => !assigned.has(p.id));
-                    if (best) assigned.add(best.id);
-                    return { pos, player: best || null };
-                  });
-                  const newBench = allAvail.filter(p => !assigned.has(p.id));
-                  setLineupsByQuarter(prev => ({ ...prev, [quarter]: { starters: newStarters, bench: newBench } }));
-                }
-              };
-              return (
-                <div>
-                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10,gap:8}}>
-                    <div style={{fontSize:11,color:C.muted,fontWeight:700,textTransform:"uppercase",letterSpacing:"0.05em"}}>Strategy</div>
-                    <div style={{fontSize:20,fontWeight:900,color:C.gold,letterSpacing:"0.02em"}}>
-                      {active ? active.name : "  "}
-                    </div>
-                  </div>
-                  <select value={activeFormation} onChange={e=>setActiveFormation(e.target.value)}
-                    style={{...SS, width:"100%", marginBottom:8, fontSize:12, padding:"7px 8px"}}>
-                    {templates.map(t => (
-                      <option key={t.name} value={t.name} style={OPT}>{t.name}  {t.label}</option>
-                    ))}
-                  </select>
-                  {active && (
-                    <div style={{fontSize:11,color:C.muted,lineHeight:1.5,marginBottom:10,padding:"6px 9px",background:"rgba(255,255,255,0.03)",border:`1px solid ${C.border}`,borderRadius:6}}>
-                      {active.desc}
-                    </div>
-                  )}
-                  <Btn primary full onClick={handleApply}>Apply to Q{quarter}</Btn>
-                </div>
-              );
-            })()}
-          </Card>
-
-          {/* Quarter tabs */}
-          <label style={lbl}>Viewing Quarter</label>
-          <div style={{display:"flex",gap:5,marginBottom:14}}>
-            {[1,2,3,4].map(q => {
-              const hasLineup = !!lineupsByQuarter[q];
-              const hasInjury = midGameInjured.some(p => p.injuredInQuarter === q);
-              return (
-                <button key={q} onClick={() => setQuarter(q)} style={{
-                  flex:1, padding:"7px 0", borderRadius:7, border:"none", cursor:"pointer",
-                  fontWeight:700, fontSize:13, fontFamily:"inherit",
-                  background: quarter===q ? `linear-gradient(135deg,${C.gold},${C.goldDark})` : C.surface,
-                  color: quarter===q ? "#0a0d0f" : C.text,
-                  boxShadow: hasLineup ? `0 0 0 1px ${hasInjury?"#e74c3c55":C.gold+"44"}` : "none",
-                }}>
-                  Q{q}
-                  <span style={{display:"block",fontSize:8,lineHeight:1.2,opacity:0.75,marginTop:1}}>
-                    {hasLineup ? (hasInjury ? "" : "") : ""}
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-
-          {/* PRIMARY ACTION */}
-          <div style={{marginBottom:14}}>
-            <Btn primary full onClick={() => planWholeGame(1)} style={{marginBottom:6,padding:"11px 18px",fontSize:13}}>
-              Plan Full Game (Q1-Q4)
+            <div style={{fontSize:11,color:C.muted,fontWeight:700,textTransform:"uppercase",letterSpacing:"0.05em",marginBottom:8}}>Plan · Q{quarter}</div>
+            <Btn primary full disabled={!gate.ok} onClick={() => planWholeGame(1)} style={{marginBottom:8}}>
+              Plan full game
             </Btn>
-            <div style={{fontSize:10,color:C.muted,lineHeight:1.5,textAlign:"center"}}>
-              Schedules all 4 quarters at once, guaranteeing every player gets {minQ} quarter{minQ!==1?"s":""} of play.
+            <div style={{fontSize:11,color:C.muted,lineHeight:1.45,marginBottom:allPlanned?10:0}}>
+              {subMode
+                ? `Sub mode fills Q1–Q4 in halves. Target is ${minHalves} of 8. Sit time is spread so two halves off in a row is avoided when the bench can come straight back on.`
+                : `Full quarters. Target is ${minQ} of ${totalQuarters}. Half swaps stay off.`}
             </div>
-          </div>
-
-          {/* Secondary: regen from current quarter */}
-          {allPlanned && (
-            <Btn full ghost onClick={() => planWholeGame(quarter)} style={{marginBottom:14,fontSize:11}}>
-              Replan Q{quarter}-Q4 {quarter>1?`(keep Q1-Q${quarter-1})`:"(keep Q1)"}
-            </Btn>
-          )}
+            {allPlanned && (
+              <Btn secondary full disabled={!gate.ok} onClick={() => planWholeGame(quarter)}>
+                Replan Q{quarter}–Q4{quarter>1?` · keep Q1–Q${quarter-1}`:""}
+              </Btn>
+            )}
+          </Card>
 
           {/* Play-time tracker + roster manager */}
           <Card style={{marginBottom:12}}>
@@ -1864,30 +2770,47 @@ function TabGame({ format, league, onLeagueChange, onFormatChange, players, setP
               <div style={{fontSize:11,color:C.muted,fontWeight:700,textTransform:"uppercase",letterSpacing:"0.05em"}}>Play Time</div>
               {allPlanned
                 ? <div style={{fontSize:9,fontWeight:700,color:violations.length===0?C.ok:C.gold,background:violations.length===0?"rgba(39,174,96,0.15)":"rgba(211,84,0,0.15)",padding:"2px 7px",borderRadius:4}}>
-                    {violations.length===0?" ALL MET":" VIOLATIONS"}
+                    {violations.length===0?"QUARTERS MET":"SHORT"}
                   </div>
                 : <div style={{fontSize:9,color:C.muted}}>not fully planned</div>
               }
             </div>
+            <div style={{fontSize:11,color:C.muted,lineHeight:1.45,marginBottom:8}}>
+              Solid green is one quarter. A split box is half a quarter. Gray is the bench. Minimum is {minQ} of {totalQuarters} quarters, which is {minHalves} halves.
+            </div>
+            <div style={{display:"flex",gap:10,marginBottom:10,flexWrap:"wrap"}}>
+              {[
+                ["Full", "#2ecc71", "#0a0d0f"],
+                ["Partial", "linear-gradient(90deg, rgba(255,255,255,0.16) 0 46%, #2ecc71 46% 100%)", "#fff"],
+                ["Bench", "rgba(255,255,255,0.12)", C.muted],
+              ].map(([label, background, color]) => (
+                <span key={label} style={{display:"inline-flex",alignItems:"center",gap:5,fontSize:10,color:C.muted,fontWeight:700}}>
+                  <span style={{width:22,height:12,borderRadius:3,background,color,display:"inline-block"}}/>
+                  {label}
+                </span>
+              ))}
+            </div>
 
             {/* Sort + add roster controls */}
-            <div style={{display:"flex",gap:4,alignItems:"center",marginBottom:8,flexWrap:"wrap"}}>
-              <span style={{fontSize:9,color:C.muted,fontWeight:700,textTransform:"uppercase",letterSpacing:"0.05em",marginRight:2}}>Sort</span>
-              {[["name","A-Z"],["rating","Rating"],["position","Pos"]].map(([k,label])=>(
-                <button key={k} onClick={()=>setRosterSort(k)} style={{
-                  padding:"2px 8px",borderRadius:4,border:"none",cursor:"pointer",
-                  fontSize:9,fontWeight:700,fontFamily:"inherit",letterSpacing:"0.04em",
-                  background:rosterSort===k?C.gold:"rgba(255,255,255,0.06)",
-                  color:rosterSort===k?"#0a0d0f":C.muted,textTransform:"uppercase",
-                }}>{label}</button>
-              ))}
+            <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:10,flexWrap:"wrap"}}>
+              <div style={{display:"flex",border:`1px solid ${C.border}`,borderRadius:8,overflow:"hidden"}}>
+                {[["name","A-Z"],["rating","Rating"],["position","Pos"]].map(([k,label], idx)=>(
+                  <button key={k} onClick={()=>setRosterSort(k)} style={{
+                    minHeight:36, padding:"0 10px", border:"none", cursor:"pointer",
+                    borderRight: idx<2 ? `1px solid ${C.border}` : "none",
+                    fontSize:11, fontWeight:700, fontFamily:"inherit",
+                    background: rosterSort===k ? "rgba(232,160,32,0.16)" : "transparent",
+                    color: rosterSort===k ? C.gold : C.muted,
+                  }}>{label}</button>
+                ))}
+              </div>
               <button onClick={()=>setShowAddPlayer(s=>!s)} style={{
-                marginLeft:"auto",padding:"2px 8px",borderRadius:4,
-                border:`1px solid ${C.border}`,cursor:"pointer",
-                fontSize:9,fontWeight:800,fontFamily:"inherit",letterSpacing:"0.04em",
-                background:showAddPlayer?C.gold:"rgba(255,255,255,0.06)",
-                color:showAddPlayer?"#0a0d0f":C.gold,textTransform:"uppercase",
-              }}>{showAddPlayer?"  Close":"+ Add Player"}</button>
+                marginLeft:"auto", minHeight:36, padding:"0 10px", borderRadius:8,
+                border:"1px solid rgba(255,255,255,0.22)", cursor:"pointer",
+                fontSize:11, fontWeight:700, fontFamily:"inherit",
+                background: showAddPlayer ? "rgba(255,255,255,0.08)" : "transparent",
+                color: C.text,
+              }}>{showAddPlayer ? "Close" : "Add player"}</button>
             </div>
 
             {/* Add player form */}
@@ -1900,11 +2823,11 @@ function TabGame({ format, league, onLeagueChange, onFormatChange, players, setP
                 <input value={newName} onChange={e=>setNewName(e.target.value)}
                   onKeyDown={e=>e.key==="Enter"&&handleAddPlayer()}
                   placeholder="Player name"
-                  style={{...IS,fontSize:11,padding:"5px 8px",flex:"1 1 auto",minWidth:0}}/>
+                  style={{...IS,fontSize:16,padding:"8px 10px",flex:"1 1 auto",minWidth:0}}/>
                 <input value={newNum} onChange={e=>setNewNum(e.target.value)}
                   onKeyDown={e=>e.key==="Enter"&&handleAddPlayer()}
                   placeholder="#"
-                  style={{...IS,fontSize:11,padding:"5px 8px",width:42,flex:"0 0 42px"}}/>
+                  style={{...IS,fontSize:16,padding:"8px 8px",width:64,flex:"0 0 64px"}}/>
                 <button onClick={handleAddPlayer} style={{
                   padding:"5px 10px",borderRadius:5,border:"none",cursor:"pointer",
                   fontSize:11,fontWeight:800,fontFamily:"inherit",
@@ -1930,40 +2853,54 @@ function TabGame({ format, league, onLeagueChange, onFormatChange, players, setP
                 const isInjured = !!p.injured;
                 const isOut     = !!p.out;
                 const isInactive = isInjured || isOut;
-                const planned = rotationGrid.find(r=>r.player.id===p.id)?.totalPlanned ?? 0;
+                const plannedHalves = halvesFor(p.id);
                 const target  = minQ;
-                const pct     = target > 0 ? Math.min(1, planned / target) : 1;
-                const ok      = planned >= target || target === 0 || isMGI || isInactive;
+                const pct     = minHalves > 0 ? Math.min(1, plannedHalves / minHalves) : 1;
+                const ok      = plannedHalves >= minHalves || target === 0 || isMGI || isInactive;
                 const isEditing = editingPlayerId === p.id;
                 const tinyBtn = {
-                  padding:"2px 6px", fontSize:9, fontWeight:800, fontFamily:"inherit",
-                  borderRadius:3, cursor:"pointer", letterSpacing:"0.04em",
-                  border:`1px solid ${C.border}`, background:"rgba(255,255,255,0.05)",
-                  color:C.muted, lineHeight:1.4, textTransform:"uppercase",
+                  minHeight:32, padding:"4px 8px", fontSize:10, fontWeight:700, fontFamily:"inherit",
+                  borderRadius:6, cursor:"pointer",
+                  border:`1px solid ${C.border}`, background:"rgba(255,255,255,0.04)",
+                  color:C.muted,
                 };
+                const onNowKind = cellKind(p.id, quarter, (rotationGrid.find(r=>r.player.id===p.id)?.quarters[quarter-1]) || "unplanned");
+                const onNow = onNowKind === "full" || onNowKind === "partial-on";
+                const focused = chartFocusId === p.id;
                 const nameColor = isMGI ? "#e74c3c"
                                 : isInjured ? "#e74c3c"
                                 : isOut ? "#e67e22"
                                 : ok ? C.text : C.gold;
                 return (
-                  <div key={p.id} style={{
-                    marginBottom:7,
+                  <div key={p.id} data-player-card style={{
+                    marginBottom:8,
+                    maxWidth:"100%",
+                    minWidth:0,
                     opacity:isMGI?0.55:isInactive?0.7:1,
-                    paddingBottom:isEditing?2:0,
-                    borderBottom:isEditing?`1px solid ${C.border}`:"none",
+                    padding: focused ? "6px 6px 4px" : 0,
+                    borderRadius:8,
+                    background: focused ? "rgba(46,204,113,0.06)" : "transparent",
+                    border: focused ? "1px solid rgba(46,204,113,0.28)" : "1px solid transparent",
                   }}>
                     {/* Name + status row */}
-                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",fontSize:11,marginBottom:3,gap:6}}>
-                      <span style={{color:nameColor,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",flex:"1 1 auto",minWidth:0}}>
-                        {p.name} <span style={{color:C.muted}}>#{p.number}</span>
-                      </span>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",fontSize:12,marginBottom:4,gap:6}}>
+                      <button onClick={()=>setChartFocusId(focused?null:p.id)} style={{
+                        background:"none", border:"none", padding:0, cursor:"pointer", fontFamily:"inherit",
+                        color:nameColor, fontSize:12, fontWeight:700, textAlign:"left",
+                        overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", flex:"1 1 auto", minWidth:0,
+                      }}>
+                        {p.name} <span style={{color:C.muted,fontWeight:600}}>#{p.number}</span>
+                      </button>
                       {isInjured ? (
-                        <span style={{fontSize:9,fontWeight:800,color:"#e74c3c",background:"rgba(231,76,60,0.15)",padding:"2px 6px",borderRadius:3,letterSpacing:"0.04em"}}>INJ</span>
+                        <span style={{fontSize:9,fontWeight:800,color:"#e74c3c",background:"rgba(231,76,60,0.15)",padding:"2px 6px",borderRadius:3}}>INJ</span>
                       ) : isOut ? (
-                        <span style={{fontSize:9,fontWeight:800,color:"#e67e22",background:"rgba(230,126,34,0.15)",padding:"2px 6px",borderRadius:3,letterSpacing:"0.04em"}}>OUT</span>
+                        <span style={{fontSize:9,fontWeight:800,color:"#e67e22",background:"rgba(230,126,34,0.15)",padding:"2px 6px",borderRadius:3}}>OUT</span>
                       ) : (
-                        <span style={{fontSize:10,color:ok?C.ok:C.gold,fontWeight:700,flexShrink:0}}>
-                          {allPlanned ? `${planned}/${target}Q` : ""}
+                        <span style={{display:"flex",alignItems:"center",gap:6,flexShrink:0}}>
+                          {onNow && <span style={{fontSize:9,fontWeight:800,color:"#0a0d0f",background:"#2ecc71",borderRadius:3,padding:"2px 5px"}}>IN</span>}
+                          <span style={{fontSize:10,color:ok?"#2ecc71":C.gold,fontWeight:700}}>
+                            {allPlanned ? `${formatQuarterEquity(plannedHalves)}/${target}Q` : ""}
+                          </span>
                         </span>
                       )}
                     </div>
@@ -1971,46 +2908,22 @@ function TabGame({ format, league, onLeagueChange, onFormatChange, players, setP
                     {/* Action buttons */}
                     <div style={{display:"flex",gap:4,marginBottom:isEditing?6:4}}>
                       <button onClick={()=>setEditingPlayerId(isEditing?null:p.id)} style={{...tinyBtn,
-                        color:isEditing?"#0a0d0f":C.gold,
-                        background:isEditing?C.gold:"rgba(232,160,32,0.08)",
-                        borderColor:"rgba(232,160,32,0.4)"}}>{isEditing?"Done":"Edit"}</button>
+                        color:isEditing?"#0a0d0f":C.text,
+                        background:isEditing?"rgba(255,255,255,0.85)":"rgba(255,255,255,0.04)",
+                        borderColor:"rgba(255,255,255,0.22)"}}>{isEditing?"Done":"Edit"}</button>
                       <button onClick={()=>{
-                        if (p.injured) {
-                          // Un-mark injury  if it was a mid-game pull, regen remaining quarters with player back
-                          if (p.midGameInjury) clearMidGameInjury(p.id);
-                          else setPlayers(prev=>prev.map(x=>x.id===p.id?{...x,injured:false}:x));
-                        } else {
-                          // Mark injured  if any lineup is planned, do a mid-game pull + auto-replan
-                          if (Object.keys(lineupsByQuarter).length > 0) {
-                            markMidGameInjury(p.id);
-                          } else {
-                            setPlayers(prev=>prev.map(x=>x.id===p.id?{...x,injured:true,out:false}:x));
-                          }
-                        }
+                        if (p.injured) restorePlayer(p.id);
+                        else if (Object.keys(lineupsByQuarter).length > 0) markUnavailable(p.id, "injury");
+                        else setPlayers(prev=>prev.map(x=>x.id===p.id?{...x,injured:true,out:false}:x));
                       }}
                         style={{...tinyBtn,
                           color:isInjured?"#fff":"#e74c3c",
                           background:isInjured?"rgba(231,76,60,0.85)":"rgba(231,76,60,0.08)",
                           borderColor:"rgba(231,76,60,0.4)"}}>Inj</button>
                       <button onClick={()=>{
-                        if (p.out) {
-                          // Un-mark out
-                          setPlayers(prev=>prev.map(x=>x.id===p.id?{...x,out:false}:x));
-                          // If lineups exist, regen so player returns to rotation
-                          if (Object.keys(lineupsByQuarter).length > 0) {
-                            const updated = players.map(x=>x.id===p.id?{...x,out:false}:x);
-                            regenRemaining(quarter, updated, lineupsByQuarter);
-                          }
-                        } else {
-                          // Mark out  if lineups exist, pull and replan (same as injury)
-                          if (Object.keys(lineupsByQuarter).length > 0) {
-                            markMidGameInjury(p.id);
-                            // markMidGameInjury sets injured:true; flip to out:true instead
-                            setPlayers(prev=>prev.map(x=>x.id===p.id?{...x,injured:false,midGameInjury:false,out:true}:x));
-                          } else {
-                            setPlayers(prev=>prev.map(x=>x.id===p.id?{...x,out:true,injured:false}:x));
-                          }
-                        }
+                        if (p.out) restorePlayer(p.id);
+                        else if (Object.keys(lineupsByQuarter).length > 0) markUnavailable(p.id, "out");
+                        else setPlayers(prev=>prev.map(x=>x.id===p.id?{...x,out:true,injured:false}:x));
                       }}
                         style={{...tinyBtn,
                           color:isOut?"#0a0d0f":"#e67e22",
@@ -2028,39 +2941,56 @@ function TabGame({ format, league, onLeagueChange, onFormatChange, players, setP
                       />
                     )}
 
-                    {/* Per-quarter position tiles + progress  only for active players */}
-                    {!isInactive && !isEditing && (
+                    {!isEditing && (
                       <>
-                        <div style={{display:"flex",gap:3,marginBottom:3}}>
+                        <div style={{display:"flex",gap:4,marginBottom:4}}>
                           {[1,2,3,4].map(q => {
                             const entry = rotationGrid.find(r=>r.player.id===p.id);
                             const status = entry ? entry.quarters[q-1] : "unplanned";
+                            const kind = cellKind(p.id, q, status);
                             const qLineup = lineupsByQuarter[q];
                             const slot = qLineup?.starters?.find(s=>s.player?.id===p.id);
-                            const posLabel = status==="on" && slot ? (POS_LABEL[slot.pos] || slot.pos) : status==="bench" ? "" : "?";
-                            const bg = status==="on" ? C.ok : status==="bench" ? "rgba(255,255,255,0.12)" : "rgba(255,255,255,0.04)";
-                            const textColor = status==="on" ? "#0a0d0f" : "rgba(255,255,255,0.3)";
-                            const isActiveQ = quarter===q;
+                            const pos = slot ? (POS_LABEL[slot.pos] || slot.pos) : "";
+                            const label = kind==="full" || kind==="partial-on" ? pos : kind==="partial-off" ? "½" : kind==="unplanned" ? "?" : "";
+                            const title = kind==="full" ? `Q${q} full quarter${pos?` · ${pos}`:""}`
+                              : kind==="partial-on" ? `Q${q} partial · came on${pos?` · ${pos}`:""}`
+                              : kind==="partial-off" ? `Q${q} partial · played, then off`
+                              : kind==="bench" ? `Q${q} bench`
+                              : kind==="blank" ? `Q${q} unavailable` : `Q${q} not planned`;
+                            const background = kind==="full" ? "#2ecc71"
+                              : kind==="partial-on" ? "linear-gradient(90deg, rgba(255,255,255,0.16) 0 46%, #2ecc71 46% 100%)"
+                              : kind==="partial-off" ? "linear-gradient(90deg, #2ecc71 0 46%, rgba(255,255,255,0.12) 46% 100%)"
+                              : kind==="bench" ? "rgba(255,255,255,0.12)"
+                              : kind==="blank" ? "transparent"
+                              : "rgba(255,255,255,0.04)";
+                            const textColor = kind==="full" ? "#0a0d0f"
+                              : kind==="partial-on" || kind==="partial-off" ? "#fff"
+                              : "rgba(255,255,255,0.35)";
                             return (
-                              <div key={q} onClick={()=>setQuarter(q)}
-                                title={`Q${q}: ${status==="on"?posLabel:status}`}
+                              <div key={q} onClick={()=>{ setQuarter(q); setChartFocusId(p.id); }}
+                                title={title}
                                 style={{
-                                  flex:1, height:20, borderRadius:3, background:bg,
+                                  flex:1, height:28, borderRadius:4, background,
                                   display:"flex", alignItems:"center", justifyContent:"center",
-                                  fontSize:status==="on"?7:9, color:textColor,
-                                  fontWeight:800, cursor:"pointer", letterSpacing:"0.02em",
-                                  border:isActiveQ?"1px solid rgba(255,255,255,0.35)":"1px solid transparent",
-                                  boxShadow:isActiveQ?"0 0 0 1px rgba(255,255,255,0.1)":"none",
+                                  fontSize:8, color:textColor, fontWeight:800, cursor:"pointer",
+                                  letterSpacing:"0.02em",
+                                  textShadow: kind.startsWith("partial") ? "0 1px 2px rgba(0,0,0,0.55)" : "none",
+                                  border: quarter===q ? "1px solid rgba(255,255,255,0.7)" : kind==="blank" ? "1px dashed rgba(255,255,255,0.2)" : "1px solid transparent",
                                 }}>
-                                {posLabel}
+                                {label}
                               </div>
                             );
                           })}
                         </div>
-                        <div style={{height:3,background:"rgba(255,255,255,0.07)",borderRadius:2}}>
-                          <div style={{height:"100%",width:`${pct*100}%`,borderRadius:2,transition:"width 0.4s",
-                            background:isMGI?"#e74c3c":ok?C.ok:C.gold}}/>
-                        </div>
+                        {focused && (
+                          <div style={{fontSize:11,color:C.muted,lineHeight:1.4,marginBottom:4}}>{quarterStory(p.id)}</div>
+                        )}
+                        {!isInactive && (
+                          <div style={{height:3,background:"rgba(255,255,255,0.07)",borderRadius:2}}>
+                            <div style={{height:"100%",width:`${pct*100}%`,borderRadius:2,transition:"width 0.4s",
+                              background:isMGI?"#e74c3c":ok?"#2ecc71":C.gold}}/>
+                          </div>
+                        )}
                       </>
                     )}
                   </div>
@@ -2069,100 +2999,375 @@ function TabGame({ format, league, onLeagueChange, onFormatChange, players, setP
             })()}
           </Card>
 
-          {/* Bench this quarter */}
-          {currentLineup?.bench?.length > 0 && (
-            <Card>
-              <div style={{fontSize:11,color:C.gold,fontWeight:700,marginBottom:7,textTransform:"uppercase",letterSpacing:"0.05em"}}> Q{quarter} Bench</div>
-              {currentLineup.bench.map(p => (
-                <div key={p.id} style={{fontSize:12,color:C.text,padding:"4px 0",borderBottom:`1px solid ${C.border}`,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                  <span>#{p.number} {p.name}</span>
-                  <span style={{fontSize:10,color:C.muted}}>{(p.positions||[]).slice(0,2).join(", ")}</span>
-                </div>
-              ))}
-            </Card>
-          )}
         </div>
 
         {/* -- FIELD -- */}
-        <div style={{flex:"2 1 320px",minWidth:0}}>
-          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,marginBottom:10}}>
+        <div className="ck-field" style={{flex:"2 1 320px",minWidth:0,display:"flex",flexDirection:"column"}}>
+          {currentLineup && (
+            <Card style={{order:2,marginTop:12,border:`1px solid ${C.gold}`,background:"rgba(232,160,32,0.06)"}}>
+              <button onClick={() => setSubsOpen(v => !v)} style={{
+                width:"100%", minHeight:44, display:"flex", justifyContent:"space-between", alignItems:"center",
+                gap:8, marginBottom: subsOpen ? 8 : 0, padding:0, border:"none", background:"transparent",
+                color:C.gold, cursor:"pointer", fontFamily:"inherit",
+              }}>
+                <span style={{fontSize:12,fontWeight:800,textTransform:"uppercase",letterSpacing:"0.06em"}}>Mid-quarter subs</span>
+                <span style={{fontSize:12,fontWeight:800,color:C.text}}>{subsOpen ? "Hide" : "Show"}</span>
+              </button>
+              {!subsOpen && (
+                <div style={{fontSize:11,color:C.muted,lineHeight:1.4}}>
+                  {pendingSwaps.length}/3 queued.
+                </div>
+              )}
+              {subsOpen && (
+              <>
+              <div style={{display:"flex",gap:8,marginBottom:10,flexWrap:"wrap"}}>
+                <button onClick={() => {
+                  if (!subMode) {
+                    setQueueNote("Full quarters. Turn on sub mode to queue a half swap.");
+                    return;
+                  }
+                  setPlanSub(v => !v);
+                  setSwapSel(null);
+                  setQueueNote(null);
+                }} style={{
+                  minHeight:36, padding:"8px 12px", borderRadius:8, cursor:"pointer", fontFamily:"inherit",
+                  fontSize:12, fontWeight:800,
+                  border:`1px solid ${planSub ? C.gold : "rgba(255,255,255,0.22)"}`,
+                  background: planSub ? "rgba(232,160,32,0.18)" : "transparent",
+                  color: planSub ? C.gold : C.text,
+                  opacity: subMode ? 1 : 0.45,
+                }}>{planSub ? "Plan sub: on" : "Plan sub"}</button>
+              </div>
+              <div style={{fontSize:11,color:C.muted,lineHeight:1.45,marginBottom:10}}>
+                {!subMode
+                  ? "Full quarters. Half swaps and the queue stay off. Drag still moves a player now."
+                  : planSub
+                  ? "Tap who leaves, then who comes on. The queue shows that pair by name. Drag still swaps right away."
+                  : "Drag or tap to swap now. Plan sub queues the next 2–3 swaps without moving anyone yet."}
+                {" "}Changing quarter keeps minutes already played.
+              </div>
+              {shownPairs.length > 0 && (
+                <div style={{marginBottom:12,padding:"10px",borderRadius:10,background:"rgba(0,0,0,0.2)",border:"1px solid rgba(46,204,113,0.28)"}}>
+                  <div style={{fontSize:13,fontWeight:800,color:C.text,marginBottom:4}}>Subs go in for who?</div>
+                  <div style={{fontSize:11,color:C.muted,lineHeight:1.4,marginBottom:8}}>
+                    {shownPairs.every(pair => pair.fromPlan)
+                      ? `Everyone on the bench comes on, matching Q${Math.min(quarter + 1, totalQuarters)}.`
+                      : "Dotted lines on the field show the same pairs. Tap a bench player, then a field player, to move a line."}
+                  </div>
+                  {shownPairs.map(pair => (
+                    <div key={`${pair.inId}-${pair.outId}`} style={{display:"flex",alignItems:"baseline",gap:6,marginBottom:6,flexWrap:"wrap",fontSize:13}}>
+                      <span style={{fontWeight:800,color:"#2ecc71"}}>{playerName(pair.inId)}</span>
+                      <span style={{fontSize:10,fontWeight:800,color:"#2ecc71",letterSpacing:"0.04em"}}>ON</span>
+                      <span style={{color:C.muted}}>→</span>
+                      <span style={{fontWeight:800}}>{playerName(pair.outId)}</span>
+                      <span style={{fontSize:10,fontWeight:800,color:C.muted,letterSpacing:"0.04em"}}>OFF</span>
+                      {pair.fromPlan && <span style={{fontSize:10,color:C.muted}}>next quarter</span>}
+                    </div>
+                  ))}
+                  <Btn secondary full onClick={bringBenchOn} style={{marginTop:4,borderColor:"rgba(46,204,113,0.45)"}}>
+                    Bring the bench on
+                  </Btn>
+                  <div style={{fontSize:10,color:C.muted,lineHeight:1.4,marginTop:6}}>
+                    This quarter only. Minutes already played stay. Other quarters stay.
+                  </div>
+                </div>
+              )}
+              <div style={{fontSize:11,color:C.muted,fontWeight:700,marginBottom:6,textTransform:"uppercase",letterSpacing:"0.05em"}}>Who’s next</div>
+              {whosNext.length === 0 && <div style={{fontSize:12,color:C.muted,marginBottom:8}}>Bench is empty.</div>}
+              {whosNext.slice(0, 3).map(p => {
+                const partner = shownPairs.find(pair => pair.inId === p.id);
+                const offPlayer = partner ? playerName(partner.outId) : longestOnField()?.name;
+                return (
+                  <div key={p.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:6,fontSize:12,flexWrap:"wrap"}}>
+                    <span>
+                      <b>{p.name}</b>
+                      {offPlayer && (
+                        <>
+                          <span style={{color:"#2ecc71",fontWeight:800}}> on </span>
+                          <span style={{color:C.muted}}>→</span>
+                          <span> {offPlayer} </span>
+                          <span style={{color:C.muted,fontWeight:700}}>off</span>
+                        </>
+                      )}
+                    </span>
+                    <button onClick={() => queueWhosNext(p)} style={{
+                      minHeight:32, padding:"4px 8px", borderRadius:6, border:"1px solid rgba(255,255,255,0.22)", cursor:"pointer",
+                      background:"transparent", color:C.text, fontSize:11, fontWeight:700, fontFamily:"inherit", flexShrink:0,
+                    }}>Queue</button>
+                  </div>
+                );
+              })}
+              {!anyMinutes && whosNext.length > 0 && (
+                <div style={{fontSize:10,color:C.muted,margin:"2px 0 8px"}}>This order uses quarters on the field.</div>
+              )}
+              {anyMinutes && whosNext.length > 0 && (
+                <div style={{fontSize:10,color:C.muted,margin:"0 0 8px"}}>
+                  {whosNext.slice(0, 3).map(p => `${p.name.split(" ")[0]} ${Math.round(minutesById[p.id] || 0)}m`).join(" · ")}
+                </div>
+              )}
+              <div style={{fontSize:11,color:C.muted,fontWeight:700,margin:"8px 0 6px",textTransform:"uppercase",letterSpacing:"0.05em"}}>Upcoming swaps ({pendingSwaps.length}/3)</div>
+              {pendingSwaps.length === 0 && <div style={{fontSize:12,color:C.muted}}>None queued. Plan sub, or bring the bench on.</div>}
+              {pendingSwaps.map(row => (
+                <div key={row.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:8,flexWrap:"wrap",padding:"8px",borderRadius:8,background:"rgba(0,0,0,0.18)"}}>
+                  <div style={{fontSize:13,color:C.text,lineHeight:1.35}}>
+                    <div style={{fontSize:10,color:C.muted,fontWeight:700,marginBottom:2}}>Q{row.quarter}</div>
+                    <span style={{fontWeight:800,color:"#2ecc71"}}>{playerName(row.inId)}</span>
+                    <span style={{fontSize:10,fontWeight:800,color:"#2ecc71"}}> ON </span>
+                    <span style={{color:C.muted}}>→</span>
+                    <span style={{fontWeight:800}}> {playerName(row.outId)}</span>
+                    <span style={{fontSize:10,fontWeight:800,color:C.muted}}> OFF</span>
+                  </div>
+                  <div style={{display:"flex",gap:6}}>
+                    <button onClick={() => executeSwap(row)} style={{
+                      minHeight:36, padding:"6px 10px", borderRadius:6, border:"none", cursor:"pointer",
+                      background:"#1e7a45", color:"#fff", fontSize:12, fontWeight:800, fontFamily:"inherit",
+                    }}>Run now</button>
+                    <button onClick={() => setSubQueue(prev => cancelOneSwap(prev, row.id))} style={{
+                      minHeight:36, padding:"6px 10px", borderRadius:6, border:"1px solid rgba(255,255,255,0.22)", cursor:"pointer",
+                      background:"transparent", color:C.text, fontSize:12, fontWeight:700, fontFamily:"inherit",
+                    }}>Cancel</button>
+                  </div>
+                </div>
+              ))}
+              {queueNote && <div style={{fontSize:11,color:C.gold,marginTop:6,lineHeight:1.4}}>{queueNote}</div>}
+              {players.some(p => p.out) && (
+                <div style={{marginTop:10}}>
+                  <div style={{fontSize:11,color:C.gold,fontWeight:700,marginBottom:6}}>Late arrival</div>
+                  {players.filter(p => p.out).map(p => (
+                    <button key={p.id} onClick={() => restorePlayer(p.id)} style={{
+                      marginRight:6, marginBottom:6, padding:"6px 10px", borderRadius:6, cursor:"pointer",
+                      border:`1px solid ${C.border}`, background:"rgba(255,255,255,0.04)", color:C.text,
+                      fontSize:11, fontWeight:700, fontFamily:"inherit",
+                    }}>#{p.number} {p.name} arrived</button>
+                  ))}
+                </div>
+              )}
+              </>
+              )}
+            </Card>
+          )}
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,marginBottom:10,flexWrap:"wrap"}}>
             <div style={{fontSize:11,color:C.gold,fontWeight:700,textTransform:"uppercase",letterSpacing:"0.07em"}}>
-              Q{quarter} Field  Drag to Swap
+              Q{quarter} field
             </div>
-            <button onClick={()=>setShowShare(true)} style={{
-              padding:"5px 11px",borderRadius:6,
-              border:`1px solid ${C.gold}55`,
-              background:`linear-gradient(135deg,rgba(232,160,32,0.18),rgba(184,120,24,0.10))`,
-              color:C.gold,fontSize:10,fontWeight:800,cursor:"pointer",fontFamily:"inherit",
-              letterSpacing:"0.05em",textTransform:"uppercase",flexShrink:0,
-            }}>Share Lineup</button>
+            <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+              <button onClick={saveStrategyToGameDay} style={{
+                minHeight:36, padding:"6px 12px", borderRadius:8, cursor:"pointer",
+                fontFamily:"inherit", fontWeight:800, fontSize:11,
+                border:`1px solid ${C.gold}`, background:"transparent", color:C.gold,
+              }}>Save game day</button>
+              <button onClick={()=>setShowShare(true)} style={{
+                minHeight:36, padding:"6px 12px", borderRadius:8,
+                border:"1px solid rgba(255,255,255,0.22)",
+                background:"transparent",
+                color:C.text, fontSize:11, fontWeight:700, cursor:"pointer", fontFamily:"inherit",
+                flexShrink:0,
+              }}>Share lineup</button>
+            </div>
           </div>
+          {saveNote && <div style={{fontSize:11, color:C.gold, lineHeight:1.4, marginTop:-4, marginBottom:8}}>{saveNote}</div>}
           {!allPlanned && !currentLineup && (
             <div style={{
               background:C.surface, borderRadius:12, minHeight:200,
               border:`2px dashed ${C.border}`, display:"flex", flexDirection:"column",
               alignItems:"center", justifyContent:"center", gap:12, padding:24,
             }}>
-              <div style={{fontSize:32}}></div>
               <div style={{fontSize:13,color:C.muted,textAlign:"center",lineHeight:1.6}}>
-                Hit <b style={{color:C.gold}}>Plan Full Game</b> to schedule all 4 quarters at once,<br/>
-                guaranteeing fair play time for every player.
+                Hit <b style={{color:C.gold}}>Plan Full Game</b> to schedule all 4 quarters.<br/>
+                {subMode
+                  ? `Sub mode targets ${minHalves} of 8 halves and spreads sit time.`
+                  : `Full quarters target ${minQ} of ${totalQuarters} on the field.`}
               </div>
-              <Btn primary onClick={() => planWholeGame(1)}> Plan Full Game</Btn>
+              <Btn primary disabled={!gate.ok} onClick={() => planWholeGame(1)}>Plan full game</Btn>
             </div>
           )}
-          {/* Swipeable field  swipe left = next quarter, right = previous */}
-          {(()=>{
-            return (
-              <div
-                onTouchStart={e=>{ swipeTouchStart.current = e.touches[0].clientX; }}
-                onTouchEnd={e=>{
-                  if (swipeTouchStart.current===null) return;
-                  const dx = e.changedTouches[0].clientX - swipeTouchStart.current;
-                  swipeTouchStart.current = null;
-                  if (Math.abs(dx) < 40) return;
-                  if (dx < 0 && quarter < 4) setQuarter(q=>q+1);
-                  if (dx > 0 && quarter > 1) setQuarter(q=>q-1);
-                }}
-                style={{position:"relative",userSelect:"none"}}
-              >
-                {/* Quarter nav bar */}
-                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6,padding:"0 2px"}}>
-                  <button onClick={()=>setQuarter(q=>Math.max(1,q-1))} disabled={quarter===1} style={{
-                    background:"none",border:"none",cursor:quarter===1?"default":"pointer",
-                    color:quarter===1?"rgba(255,255,255,0.1)":C.gold,fontSize:22,padding:"0 6px",lineHeight:1,
-                  }}></button>
-                  <div style={{fontSize:11,color:C.muted,fontWeight:600}}>
-                    Q{quarter} Field View <span style={{opacity:0.4}}> swipe or tap arrows</span>
-                  </div>
-                  <button onClick={()=>setQuarter(q=>Math.min(4,q+1))} disabled={quarter===4} style={{
-                    background:"none",border:"none",cursor:quarter===4?"default":"pointer",
-                    color:quarter===4?"rgba(255,255,255,0.1)":C.gold,fontSize:22,padding:"0 6px",lineHeight:1,
-                  }}></button>
-                </div>
-                {/* Pip dots */}
-                <div style={{display:"flex",justifyContent:"center",gap:6,marginBottom:8}}>
-                  {[1,2,3,4].map(q=>(
-                    <div key={q} onClick={()=>setQuarter(q)} style={{
-                      width:q===quarter?20:6,height:6,borderRadius:3,cursor:"pointer",
-                      background:q===quarter?C.gold:"rgba(255,255,255,0.15)",
-                      transition:"all 0.2s",
-                    }}/>
-                  ))}
-                </div>
-                <SoccerField lineup={currentLineup} onSwap={handleSwap} format={format} quarter={quarter}/>
+          <div style={{position:"relative",userSelect:"none"}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6,padding:"0 2px"}}>
+              <button onClick={()=>setQuarter(q=>Math.max(1,q-1))} disabled={quarter===1} style={{
+                background:"none",border:"none",cursor:quarter===1?"default":"pointer",
+                color:quarter===1?"rgba(255,255,255,0.1)":C.gold,fontSize:22,padding:"0 6px",lineHeight:1,
+              }}>‹</button>
+              <div style={{fontSize:11,color:C.muted,fontWeight:600}}>
+                Q{quarter} Field View <span style={{opacity:0.4}}> tap arrows</span>
               </div>
-            );
-          })()}
+              <button onClick={()=>setQuarter(q=>Math.min(4,q+1))} disabled={quarter===4} style={{
+                background:"none",border:"none",cursor:quarter===4?"default":"pointer",
+                color:quarter===4?"rgba(255,255,255,0.1)":C.gold,fontSize:22,padding:"0 6px",lineHeight:1,
+              }}>›</button>
+            </div>
+            {currentLineup && (
+              <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:8}}>
+                <Btn sm secondary onClick={scramblePositions}>Scramble positions</Btn>
+                <Btn sm secondary onClick={scrambleMembership}>Redraw who plays Q{quarter}</Btn>
+              </div>
+            )}
+            {swapSel && (
+              <div style={{fontSize:12,color:C.text,textAlign:"center",marginBottom:6,lineHeight:1.4}}>
+                {planSub && swapSel.type==="field"
+                  ? `${playerName(swapSel.playerId)} off. Tap who comes on for ${playerName(swapSel.playerId)}.`
+                  : swapSel.type==="field"
+                    ? `${playerName(currentLineup?.starters?.[swapSel.idx]?.player?.id)} selected. Tap who they swap with.`
+                    : `${playerName(swapSel.playerId)} on. Tap the field player they replace.`}
+              </div>
+            )}
+            {scrambleNote && (
+              <div style={{fontSize:11,color:C.muted,textAlign:"center",marginBottom:6,lineHeight:1.4}}>{scrambleNote}</div>
+            )}
+            <div ref={pitchWrapRef} style={{position:"relative", zIndex:1, display:"flex", gap:6, alignItems:"stretch"}}>
+              {currentLineup && (
+                <div
+                  data-drop="bench-zone"
+                  style={{
+                    width:76, flexShrink:0, display:"flex", flexDirection:"column",
+                    justifyContent:(currentLineup.bench||[]).length ? "space-evenly" : "center",
+                    gap:6, padding:"8px 4px", borderRadius:10, position:"relative", zIndex:5,
+                    border: drag.hover==="bench-zone" ? "2px solid #2ecc71" : "1px dashed rgba(255,255,255,0.22)",
+                    background: drag.hover==="bench-zone" ? "rgba(46,204,113,0.14)" : "rgba(10,13,15,0.55)",
+                    boxShadow: drag.hover==="bench-zone" ? "0 0 0 4px rgba(46,204,113,0.28)" : "none",
+                  }}
+                >
+                  <button
+                    onClick={() => {
+                      if (!subMode) {
+                        setQueueNote("Full quarters. Turn on sub mode to run the listed swaps.");
+                        return;
+                      }
+                      if (shownPairs.length > 0) {
+                        bringBenchOn();
+                        setPlanSub(false);
+                        return;
+                      }
+                      setPlanSub(v => !v);
+                      setSwapSel(null);
+                      setQueueNote(planSub ? null : "No pairs yet. Tap a bench player, then the field player they replace.");
+                    }}
+                    aria-pressed={subMode}
+                    style={{
+                      minHeight:56, borderRadius:10, cursor:"pointer", fontFamily:"inherit",
+                      fontSize:16, fontWeight:900, letterSpacing:"0.08em", lineHeight:1,
+                      border: subMode ? "2px solid #2ecc71" : "2px solid rgba(232,160,32,0.9)",
+                      background: subMode ? `linear-gradient(180deg,#f2c14b,${C.goldDark})` : "rgba(20,16,8,0.92)",
+                      color: subMode ? "#0a0d0f" : C.gold,
+                      boxShadow: subMode
+                        ? (shownPairs.length ? "0 0 0 3px rgba(46,204,113,0.55), 0 6px 16px rgba(232,160,32,0.45)" : "0 0 0 3px rgba(232,160,32,0.35)")
+                        : "none",
+                    }}
+                  >
+                    <div>SUB</div>
+                    <div style={{fontSize:8, fontWeight:800, letterSpacing:"0.06em", marginTop:3}}>
+                      {!subMode ? "FULL Q" : shownPairs.length ? "RUN" : planSub ? "ON" : "READY"}
+                    </div>
+                  </button>
+                  <div style={{fontSize:9, color:C.muted, fontWeight:800, textAlign:"center", letterSpacing:"0.06em"}}>BENCH</div>
+                  {(currentLineup.bench||[]).length === 0 && (
+                    <div style={{fontSize:10, color:C.muted, textAlign:"center", lineHeight:1.3}}>All on</div>
+                  )}
+                  {(currentLineup.bench||[]).map(p => {
+                    const selected = swapSel?.type==="bench" && swapSel.playerId===p.id;
+                    const hovered = drag.hover===`bench:${p.id}`;
+                    const sourced = drag.activeSource?.type==="bench" && drag.activeSource.playerId===p.id;
+                    const partner = shownPairs.find(pair => pair.inId === p.id);
+                    return (
+                      <div key={p.id}
+                        data-drop={`bench:${p.id}`}
+                        onPointerDown={e => drag.pointerDown(e, { type:"bench", playerId:p.id }, `#${p.number}`)}
+                        onPointerMove={drag.pointerMove}
+                        onPointerUp={e => { if (drag.pointerUp(e) === "tap") onBenchTap(p.id); }}
+                        onPointerCancel={e => { drag.pointerUp(e); }}
+                        style={{
+                          minHeight:48, borderRadius:8, padding:"6px 4px",
+                          border: hovered || sourced ? "2px solid #2ecc71" : selected ? "2px solid #2ecc71" : `1px solid ${C.border}`,
+                          boxShadow: hovered ? "0 0 0 4px rgba(46,204,113,0.45)" : "none",
+                          background: selected ? "rgba(46,204,113,0.16)" : "rgba(0,0,0,0.25)",
+                          color:C.text, textAlign:"center", cursor:"grab", touchAction:"none",
+                          opacity: sourced ? 0.55 : 1,
+                        }}
+                      >
+                        <div style={{fontSize:13, fontWeight:800, lineHeight:1.1}}>#{p.number}</div>
+                        <div style={{display:"flex", alignItems:"center", justifyContent:"flex-end", gap:3, minWidth:0}}>
+                          <div style={{flex:"1 1 auto", minWidth:0, fontSize:10, fontWeight:700, lineHeight:1.2, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap"}}>
+                            {(p.name || "").split(" ")[0]}
+                          </div>
+                          {partner && (
+                            <span
+                              data-sub-from={p.id}
+                              aria-hidden="true"
+                              style={{
+                                width:8, height:8, borderRadius:"50%", flexShrink:0,
+                                background:"#2ecc71",
+                                boxShadow:"0 0 0 2px rgba(46,204,113,0.45)",
+                              }}
+                            />
+                          )}
+                        </div>
+                        {partner && (
+                          <div style={{fontSize:8, color:"#2ecc71", fontWeight:700, marginTop:2, lineHeight:1.2}}>
+                            for {(playerName(partner.outId) || "").split(" ")[0]}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+              <div style={{flex:"1 1 auto", minWidth:0, position:"relative"}}>
+                <SoccerField
+                  lineup={currentLineup}
+                  onTap={onFieldTap}
+                  selectedIdx={swapSel?.type==="field" ? swapSel.idx : null}
+                  quarter={quarter}
+                  drag={drag}
+                  hoverToken={drag.hover}
+                  activeSource={drag.activeSource}
+                />
+              </div>
+              {subLines.length > 0 && (
+                <svg style={{position:"absolute", inset:0, width:"100%", height:"100%", pointerEvents:"none", zIndex:5, overflow:"visible"}}>
+                  {subLines.map(line => (
+                    <line key={line.key}
+                      x1={line.x1} y1={line.y1} x2={line.x2} y2={line.y2}
+                      stroke="#2ecc71" strokeWidth="2" strokeDasharray="5 4" strokeLinecap="round"
+                    />
+                  ))}
+                </svg>
+              )}
+            </div>
+            {currentLineup && (
+              <div style={{fontSize:11, color:C.muted, lineHeight:1.4, marginTop:8, textAlign:"center"}}>
+                {subMode
+                  ? "SUB runs the listed swaps. Tap a bench player, then a field player, to move a line. A green ring means release will swap."
+                  : "Full quarters. SUB stays off until sub mode is on. Drag still swaps a player."}
+              </div>
+            )}
+            {queueNote && !subsOpen && (
+              <div style={{fontSize:12, color:C.gold, lineHeight:1.4, marginTop:6, textAlign:"center"}}>{queueNote}</div>
+            )}
+          </div>
           {midGameInjured.length > 0 && (
             <div style={{marginTop:10,padding:"7px 12px",borderRadius:7,
               background:"rgba(120,0,0,0.15)",border:"1px solid rgba(231,76,60,0.2)",
               fontSize:11,color:"rgba(231,76,60,0.75)",textAlign:"center",lineHeight:1.5}}>
-              Open slots left by injured players. Use  Return if they recover.
+              Injured players keep the minutes they already played. Return puts them on this quarter’s bench.
             </div>
           )}
         </div>
       </div>
+      {drag.ghost && (
+        <div style={{
+          position:"fixed", left:drag.ghost.x, top:drag.ghost.y, transform:"translate(-50%,-50%)",
+          width:52, height:52, borderRadius:"50%", pointerEvents:"none", zIndex:10000,
+          background:`linear-gradient(135deg,${C.gold},${C.goldDark})`,
+          border:"3px solid #2ecc71",
+          display:"flex", alignItems:"center", justifyContent:"center",
+          fontWeight:800, fontSize:12, color:"#1a1a1a",
+          boxShadow:"0 0 0 6px rgba(46,204,113,0.45), 0 8px 24px rgba(0,0,0,0.45)",
+        }}>
+          {drag.ghost.label}
+          <div style={{position:"absolute", top:"100%", marginTop:6, fontSize:11, fontWeight:800, color:"#2ecc71", whiteSpace:"nowrap", textShadow:"0 1px 2px #000"}}>
+            Release to swap
+          </div>
+        </div>
+      )}
 
       {/* GAME STATUS  bottom of Game Day tab */}
       <Card style={{marginTop:18}}>
@@ -2177,7 +3382,7 @@ function TabGame({ format, league, onLeagueChange, onFormatChange, players, setP
         {midGameInjured.length > 0 && (
           <div style={{fontSize:11,color:"#e74c3c",marginTop:3}}> {midGameInjured.length} mid-game injur{midGameInjured.length>1?"ies":"y"}</div>
         )}
-        {minQ > 0 && <div style={{fontSize:11,color:C.muted,marginTop:3}}>Min: {minQ}Q per player ({rule.minFraction*100|0}%)</div>}
+        {minQ > 0 && <div style={{fontSize:11,color:C.muted,marginTop:3}}>Min: {minQ} of {totalQuarters} quarters ({minHalves} halves, {Math.round(rule.minFraction*100)}%). A split counts as half.</div>}
       </Card>
 
       {/* Share Lineup Modal */}
@@ -2185,6 +3390,11 @@ function TabGame({ format, league, onLeagueChange, onFormatChange, players, setP
         <ShareLineupModal
           players={players}
           lineupsByQuarter={lineupsByQuarter}
+          pairPlan={pairPlan}
+          subMode={subMode}
+          segments={subSegments}
+          credit={appearanceCredit}
+          minQ={minQ}
           quarter={quarter}
           homeScore={homeScore}
           awayScore={awayScore}
@@ -2197,169 +3407,83 @@ function TabGame({ format, league, onLeagueChange, onFormatChange, players, setP
   );
 }
 
-// 
-// SHARE LINEUP MODAL  canvas PNG for screenshotting
-// 
-function ShareLineupModal({ players, lineupsByQuarter, quarter, homeScore, awayScore, opponent, league, onClose }) {
-  const canvasRef = useRef(null);
+const sheetSaveBtn = {
+  flex: 1,
+  minHeight: 44,
+  padding: "10px 12px",
+  borderRadius: 7,
+  border: "none",
+  cursor: "pointer",
+  background: "linear-gradient(135deg,#e8a020,#b87818)",
+  color: "#0a0d0f",
+  fontWeight: 700,
+  fontSize: 13,
+  fontFamily: "inherit",
+};
 
-  const FBASE = {
-    GK:{x:50,y:88},LD:{x:22,y:75},CD:{x:50,y:72},RD:{x:78,y:75},
-    LM:{x:18,y:52},CM:{x:50,y:50},RM:{x:82,y:52},
-    LF:{x:28,y:22},CF:{x:50,y:18},RF:{x:72,y:22},
-  };
-
-  const roundRect = (ctx, x, y, w, h, r) => {
-    ctx.beginPath();
-    ctx.moveTo(x+r,y); ctx.lineTo(x+w-r,y); ctx.quadraticCurveTo(x+w,y,x+w,y+r);
-    ctx.lineTo(x+w,y+h-r); ctx.quadraticCurveTo(x+w,y+h,x+w-r,y+h);
-    ctx.lineTo(x+r,y+h); ctx.quadraticCurveTo(x,y+h,x,y+h-r);
-    ctx.lineTo(x,y+r); ctx.quadraticCurveTo(x,y,x+r,y);
-    ctx.closePath();
-  };
-
-  const drawField = (ctx, fx, fy, fw, fh, qNum) => {
-    const fg = ctx.createLinearGradient(fx,fy,fx,fy+fh);
-    fg.addColorStop(0,"#1e4d1a"); fg.addColorStop(1,"#163d13");
-    ctx.fillStyle=fg; roundRect(ctx,fx,fy,fw,fh,8); ctx.fill();
-    ctx.strokeStyle="rgba(255,255,255,0.3)"; ctx.lineWidth=1.2;
-    roundRect(ctx,fx,fy,fw,fh,8); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(fx+8,fy+fh/2); ctx.lineTo(fx+fw-8,fy+fh/2); ctx.stroke();
-    ctx.beginPath(); ctx.arc(fx+fw/2,fy+fh/2,28,0,Math.PI*2); ctx.stroke();
-    ctx.strokeRect(fx+fw*0.28,fy+4,fw*0.44,42);
-    ctx.strokeRect(fx+fw*0.28,fy+fh-46,fw*0.44,42);
-    // Quarter pill (per-quarter color gradient, prominent)
-    const QCOLORS = {
-      1: ["#f4c442","#b87818"], // gold
-      2: ["#5dadec","#2471a3"], // blue
-      3: ["#c88ce0","#7d3c98"], // purple
-      4: ["#ec7063","#a93226"], // coral/red
-    };
-    const qc = QCOLORS[qNum] || QCOLORS[1];
-    const qGrad = ctx.createLinearGradient(fx+8, fy+8, fx+8, fy+30);
-    qGrad.addColorStop(0, qc[0]); qGrad.addColorStop(1, qc[1]);
-    ctx.fillStyle=qGrad; roundRect(ctx,fx+8,fy+8,42,22,5); ctx.fill();
-    ctx.strokeStyle="rgba(0,0,0,0.6)"; ctx.lineWidth=1; roundRect(ctx,fx+8,fy+8,42,22,5); ctx.stroke();
-    ctx.fillStyle="#0a0d0f"; ctx.font="900 14px Arial, sans-serif"; ctx.textAlign="center";
-    ctx.fillText("Q"+qNum,fx+29,fy+24);
-    const lineup = lineupsByQuarter[qNum];
-    if (lineup && lineup.starters) {
-      lineup.starters.forEach(function(slot) {
-        const fb = FBASE[slot.pos]||{x:50,y:50};
-        const px = fx+(fb.x/100)*fw;
-        const py = fy+(fb.y/100)*fh;
-        const grad = ctx.createRadialGradient(px,py,1,px,py,15);
-        grad.addColorStop(0,"#f5c86a"); grad.addColorStop(1,"#b87818");
-        ctx.fillStyle=grad; ctx.beginPath(); ctx.arc(px,py,15,0,Math.PI*2); ctx.fill();
-        ctx.strokeStyle="rgba(255,255,255,0.85)"; ctx.lineWidth=1.2; ctx.stroke();
-        const num=slot.player?slot.player.number:"?";
-        ctx.fillStyle="#0a0d0f"; ctx.font="900 12px Arial, sans-serif"; ctx.textAlign="center"; ctx.textBaseline="middle";
-        ctx.fillText(num,px,py);
-        ctx.textBaseline="alphabetic";
-        const fname=slot.player?slot.player.name.split(" ")[0].slice(0,7):"";
-        ctx.fillStyle="#fff"; ctx.font="bold 9px Arial, sans-serif"; ctx.fillText(fname,px,py+25);
-        ctx.fillStyle="#ffe066"; ctx.font="900 9px Arial, sans-serif"; ctx.fillText(slot.pos,px,py-19);
-      });
-    } else {
-      ctx.fillStyle="rgba(255,255,255,0.25)"; ctx.font="bold 12px Arial, sans-serif"; ctx.textAlign="center";
-      ctx.fillText("Not planned",fx+fw/2,fy+fh/2+3);
-    }
-  };
-
+function SheetCanvases({ field, playTime, league, opponent, homeScore, awayScore }) {
+  const fieldRef = useRef(null);
+  const playRef = useRef(null);
   useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-    // Render at high DPR for crisp output (sharp on screen, sharp PNG download)
-    const DPR = Math.max(2, (typeof window !== "undefined" && window.devicePixelRatio) || 1);
-    const W = 600, H = 920;
-    canvas.width  = Math.round(W * DPR);
-    canvas.height = Math.round(H * DPR);
-    canvas.style.width  = "100%";
-    canvas.style.height = "auto";
-    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
-    ctx.imageSmoothingEnabled = true;
-    ctx.imageSmoothingQuality = "high";
-    ctx.textBaseline = "alphabetic";
+    if (fieldRef.current) paintFieldSheet(fieldRef.current, { field, league, opponent, homeScore, awayScore });
+    if (playRef.current) paintPlayTimeSheet(playRef.current, { playTime, league });
+  }, [field, playTime, league, opponent, homeScore, awayScore]);
+  return (
+    <div>
+      <div style={{fontSize:12,fontWeight:800,color:"#e8a020",marginBottom:6}}>Sheet 1 · Field, bench, and sub lines</div>
+      <div style={{borderRadius:8,overflow:"hidden",marginBottom:8,border:"1px solid rgba(255,255,255,0.08)",background:"#0c1409"}}>
+        <canvas ref={fieldRef} style={{width:"100%",height:"auto",display:"block"}} />
+      </div>
+      <button type="button" onClick={() => downloadCanvas(fieldRef.current, "CoachKit_Field_Q1-Q4.png")} style={{...sheetSaveBtn, width:"100%", marginBottom:16}}>
+        Save field image
+      </button>
+      <div style={{fontSize:12,fontWeight:800,color:"#2ecc71",marginBottom:6}}>Sheet 2 · Play time</div>
+      <div style={{borderRadius:8,overflow:"hidden",marginBottom:8,border:"1px solid rgba(255,255,255,0.08)",background:"#0c1409"}}>
+        <canvas ref={playRef} style={{width:"100%",height:"auto",display:"block"}} />
+      </div>
+      <button type="button" onClick={() => downloadCanvas(playRef.current, "CoachKit_PlayTime.png")} style={{...sheetSaveBtn, width:"100%"}}>
+        Save play time image
+      </button>
+    </div>
+  );
+}
 
-    ctx.fillStyle="#0c1409"; ctx.fillRect(0,0,W,H);
-    ctx.fillStyle="#1a2518"; ctx.fillRect(0,0,W,70);
-    ctx.fillStyle="#e8a020"; ctx.beginPath(); ctx.arc(36,35,18,0,Math.PI*2); ctx.fill();
-    ctx.fillStyle="#0a0d0f"; ctx.font="900 14px Arial, sans-serif"; ctx.textAlign="center"; ctx.fillText("CK",36,40);
-    ctx.fillStyle="#e8e4dc"; ctx.font="bold 18px Arial, sans-serif"; ctx.textAlign="left"; ctx.fillText("CoachKit",64,29);
-    ctx.fillStyle="#a8a39e"; ctx.font="11px Arial, sans-serif"; ctx.fillText("SAY East Youth Soccer",64,46);
-    ctx.fillStyle="#e8a020"; ctx.font="bold 13px Arial, sans-serif"; ctx.textAlign="right"; ctx.fillText(league,W-14,29);
-    ctx.fillStyle="#a8a39e"; ctx.font="11px Arial, sans-serif"; ctx.fillText(new Date().toLocaleDateString(),W-14,46);
-    ctx.fillStyle="rgba(232,160,32,0.1)"; roundRect(ctx,12,78,W-24,52,7); ctx.fill();
-    ctx.strokeStyle="rgba(232,160,32,0.35)"; ctx.lineWidth=1; roundRect(ctx,12,78,W-24,52,7); ctx.stroke();
-    ctx.textAlign="center";
-    ctx.fillStyle="#a8a39e"; ctx.font="bold 11px Arial, sans-serif"; ctx.fillText("US",W/2-70,94);
-    ctx.fillStyle=opponent?"#e8e4dc":"#a8a39e"; ctx.fillText((opponent||"THEM").toUpperCase(),W/2+70,94);
-    ctx.fillStyle="#e8a020"; ctx.font="900 30px Arial, sans-serif"; ctx.fillText(homeScore,W/2-70,121);
-    ctx.fillStyle="#666"; ctx.font="bold 20px Arial, sans-serif"; ctx.fillText(":",W/2,116);
-    ctx.fillStyle=homeScore<awayScore?"#e74c3c":"#e8e4dc"; ctx.font="900 30px Arial, sans-serif"; ctx.fillText(awayScore,W/2+70,121);
-    var pad=10, fw=(W-pad*3)/2, fh=330;
-    [[1,0,0],[2,1,0],[3,0,1],[4,1,1]].forEach(function(qc) {
-      var q=qc[0], col=qc[1], row=qc[2];
-      drawField(ctx, pad+col*(fw+pad), 136+row*(fh+pad), fw, fh, q);
-    });
-    var benchY=136+2*(fh+pad)+6;
-    ctx.fillStyle="#141a12"; roundRect(ctx,12,benchY,W-24,76,5); ctx.fill();
-    ctx.strokeStyle="rgba(255,255,255,0.08)"; roundRect(ctx,12,benchY,W-24,76,5); ctx.stroke();
-    ctx.fillStyle="#e8a020"; ctx.font="bold 11px Arial, sans-serif"; ctx.textAlign="left";
-    ctx.fillText("BENCH",20,benchY+16);
-    var bench=(lineupsByQuarter[1]&&lineupsByQuarter[1].bench)||[];
-    bench.forEach(function(p,i) {
-      var bx=20+(i%6)*((W-40)/6);
-      var by=benchY+24+Math.floor(i/6)*22;
-      ctx.fillStyle="rgba(255,255,255,0.06)"; roundRect(ctx,bx,by,(W-40)/6-3,18,3); ctx.fill();
-      ctx.fillStyle="#e8e4dc"; ctx.font="bold 10px Arial, sans-serif"; ctx.textAlign="left";
-      ctx.fillText("#"+p.number+" "+p.name.split(" ")[0],bx+5,by+12);
-    });
-    ctx.fillStyle="#666"; ctx.font="bold 10px Arial, sans-serif"; ctx.textAlign="center";
-    ctx.fillText("CoachKit - "+league+" - "+new Date().toLocaleDateString(),W/2,H-9);
-  }, [lineupsByQuarter, homeScore, awayScore, opponent, league]);
-
-  const handleDownload = function() {
-    var a = document.createElement("a");
-    a.download = "CoachKit_AllQuarters_Lineup.png";
-    a.href = canvasRef.current.toDataURL("image/png");
-    a.click();
-  };
-
+function ShareLineupModal({ players, lineupsByQuarter, pairPlan, subMode, segments, credit, minQ, homeScore, awayScore, opponent, league, onClose }) {
+  const field = useMemo(
+    () => shareFieldSheet({ lineups: lineupsByQuarter, pairPlan, subMode }),
+    [lineupsByQuarter, pairPlan, subMode],
+  );
+  const playTime = useMemo(
+    () => sharePlayTimeSheet({ players, lineups: lineupsByQuarter, segments, credit, minQ }),
+    [players, lineupsByQuarter, segments, credit, minQ],
+  );
   return (
     <div style={{position:"fixed",inset:0,zIndex:9999,background:"rgba(0,0,0,0.88)",
       display:"flex",alignItems:"center",justifyContent:"center",padding:16}}
       onClick={onClose}>
-      <div style={{background:"#141a12",borderRadius:16,width:"100%",maxWidth:520,
+      <div style={{background:"#141a12",borderRadius:16,width:"100%",maxWidth:560,
         border:"1px solid rgba(255,255,255,0.08)",overflow:"hidden",maxHeight:"92vh",display:"flex",flexDirection:"column"}}
-        onClick={function(e){e.stopPropagation();}}>
+        onClick={e => e.stopPropagation()}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",
-          padding:"14px 18px",borderBottom:"1px solid rgba(255,255,255,0.08)",flexShrink:0}}>
-          <div style={{fontSize:15,fontWeight:800,color:"#e8a020"}}>Share Lineup - All 4 Quarters</div>
+          padding:"14px 18px",borderBottom:"1px solid rgba(255,255,255,0.08)",flexShrink:0,gap:8}}>
+          <div style={{fontSize:15,fontWeight:800,color:"#e8a020"}}>Share lineup</div>
           <button onClick={onClose} style={{
             background:"rgba(255,255,255,0.1)",border:"1px solid rgba(255,255,255,0.2)",
             borderRadius:6,cursor:"pointer",color:"#e8e4dc",fontSize:13,fontWeight:700,padding:"4px 12px",fontFamily:"inherit",
           }}>Close</button>
         </div>
         <div style={{padding:"14px 16px",overflow:"auto"}}>
-          <div style={{fontSize:11,color:"#7a7570",marginBottom:10,lineHeight:1.5}}>
-            All 4 quarters on one image. Tap Save Image to download and share.
+          <div style={{fontSize:11,color:"#7a7570",marginBottom:12,lineHeight:1.5}}>
+            Sheet 1 is the field for all four quarters, with the bench and dotted lines to who they sub for. Sheet 2 is the green play-time bars. Save strategy to game day keeps both in the Season log.
           </div>
-          <div style={{borderRadius:8,overflow:"hidden",marginBottom:12,border:"1px solid rgba(255,255,255,0.08)",background:"#0c1409"}}>
-            <canvas ref={canvasRef} style={{width:"100%",height:"auto",display:"block"}}/>
-          </div>
-          <div style={{display:"flex",gap:8}}>
-            <button onClick={handleDownload} style={{
-              flex:1,padding:"10px",borderRadius:7,border:"none",cursor:"pointer",
-              background:"linear-gradient(135deg,#e8a020,#b87818)",color:"#0a0d0f",
-              fontWeight:700,fontSize:13,fontFamily:"inherit",
-            }}>Save Image</button>
-            <button onClick={onClose} style={{
-              padding:"10px 18px",borderRadius:7,border:"1px solid rgba(255,255,255,0.08)",
-              cursor:"pointer",background:"transparent",color:"#7a7570",fontSize:13,fontFamily:"inherit",
-            }}>Close</button>
-          </div>
+          <SheetCanvases
+            field={field}
+            playTime={playTime}
+            league={league}
+            opponent={opponent}
+            homeScore={homeScore}
+            awayScore={awayScore}
+          />
         </div>
       </div>
     </div>
@@ -2432,9 +3556,10 @@ function PlayerRow({ player, onUpdate, onRemove }) {
   const sc = player.injured?"#e74c3c":player.out?"#e67e22":C.ok;
 
   return (
-    <div style={{
+    <div data-player-card style={{
       background:C.surface, borderRadius:10, padding:"10px 14px", marginBottom:8,
       border:`1px solid ${player.injured||player.out?"rgba(220,80,60,0.3)":C.border}`,
+      maxWidth:"100%", minWidth:0, boxSizing:"border-box",
     }}>
       <div style={{display:"flex",alignItems:"center",gap:10}}>
         <div style={{
@@ -2484,11 +3609,14 @@ function PlayerRow({ player, onUpdate, onRemove }) {
           <div style={{display:"flex",gap:8,marginBottom:10}}>
             <div style={{flex:1}}>
               <label style={lbl}>Name</label>
-              <input value={name} onChange={e=>setName(e.target.value)} style={IS} onBlur={save}/>
+              <input value={name} onChange={e=>setName(e.target.value)} style={{...IS, fontSize:16}} onBlur={save} onFocus={e => {
+                const card = e.target.closest("[data-player-card]");
+                window.setTimeout(() => card?.scrollIntoView({ block: "start", inline: "nearest" }), 300);
+              }}/>
             </div>
-            <div style={{width:60}}>
+            <div style={{width:72, flexShrink:0}}>
               <label style={lbl}>#</label>
-              <input value={num} onChange={e=>setNum(e.target.value)} style={IS} onBlur={save}/>
+              <input value={num} onChange={e=>setNum(e.target.value)} style={{...IS, fontSize:16}} onBlur={save}/>
             </div>
           </div>
 
@@ -2504,7 +3632,7 @@ function PlayerRow({ player, onUpdate, onRemove }) {
           </div>
 
           <label style={lbl}>Player Ratings (factors into auto-lineup priority)</label>
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:10}}>
+          <div style={{display:"grid",gridTemplateColumns:"minmax(0,1fr) minmax(0,1fr)",gap:8,marginBottom:10,maxWidth:"100%"}}>
             {SKILL_CATEGORIES.map(cat=>(
               <div key={cat}>
                 <div style={{fontSize:11,color:C.muted,marginBottom:3}}>{cat}</div>
@@ -3207,7 +4335,7 @@ function TabPractice({ drills, league }) {
 const TABS = [
   {id:"game",     icon:"", label:"Game Day"},
   {id:"season",   icon:"", label:"Season"},
-  {id:"team",     icon:"", label:"Team"},
+  {id:"team",     icon:"", label:"Contacts"},
   {id:"rules",    icon:"", label:"Rules"},
   {id:"drills",   icon:"", label:"Drills"},
   {id:"practice", icon:"", label:"Practice"},
@@ -3307,12 +4435,29 @@ export default function App() {
 }
 
 function CoachKitApp() {
+  const { isLoaded, user } = useUser();
+  if (!isLoaded || !user?.id) {
+    return (
+      <div style={{minHeight:"100vh",background:C.bg,color:C.muted,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"Georgia,serif"}}>
+        Loading your team…
+      </div>
+    );
+  }
+  return <CoachKitLoaded />;
+}
+
+function CoachKitLoaded() {
   const { user } = useUser();
+  const { session } = useSession();
   const pfx = user?.id ? `ck_${user.id}_` : "ck_guest_";
 
   const [tab,             setTab]             = useState("game");
-  const [league,          setLeague]          = useState("U8 / Passers");
-  const [format,          setFormat]          = useState("6v6");
+  const [league,          setLeague]          = usePersistedState(pfx+"league", "U8 / Passers");
+  const [subMode,         setSubMode]         = usePersistedState(pfx+"subMode", true);
+  const [autoRegen,       setAutoRegen]       = usePersistedState(pfx+"autoRegen", true);
+  const [quarterMinutes,  setQuarterMinutes]  = usePersistedState(pfx+"quarterMinutes", null);
+  const [settingsOpen,    setSettingsOpen]    = useState(false);
+  const [format,          setFormat]          = usePersistedState(pfx+"format", "6v6");
   const [lineupsByQuarter,setLineupsByQuarter]= usePersistedState(pfx+"lineups", {});
 
   const [teamName,           setTeamName]          = usePersistedState(pfx+"teamName",     "");
@@ -3323,8 +4468,65 @@ function CoachKitApp() {
   const [games,              setGames]              = usePersistedState(pfx+"games",         []);
   const [practiceAttendance, setPracticeAttendance] = usePersistedState(pfx+"practiceAtt",  {});
   const [practiceDates,      setPracticeDates]      = usePersistedState(pfx+"practiceDates",[]);
+  const [schedule,           setSchedule]           = usePersistedState(pfx+"schedule", []);
+  const [gameDay,            setGameDay]            = usePersistedState(pfx+"gameDay", () => {
+    const get = (key, fallback) => {
+      try {
+        const raw = localStorage.getItem(pfx + key);
+        return raw ? JSON.parse(raw) : fallback;
+      } catch {
+        return fallback;
+      }
+    };
+    return snapshotFromStorage(get).gameDay;
+  });
 
   const allDrills = [...DRILLS, ...customDrills];
+
+  const applySnapshot = useCallback((snap) => {
+    if (!snap) return;
+    if (typeof snap.teamName === "string") setTeamName(snap.teamName);
+    if (snap.league) setLeague(snap.league);
+    if (snap.format) setFormat(snap.format);
+    if (Array.isArray(snap.players)) setPlayers(snap.players);
+    if (snap.lineups && typeof snap.lineups === "object") setLineupsByQuarter(snap.lineups);
+    if (Array.isArray(snap.customDrills)) setCustomDrills(snap.customDrills);
+    if (snap.playerStats && typeof snap.playerStats === "object") setPlayerStats(snap.playerStats);
+    if (Array.isArray(snap.games)) setGames(snap.games);
+    if (Array.isArray(snap.practiceDates)) setPracticeDates(snap.practiceDates);
+    if (snap.practiceAttendance && typeof snap.practiceAttendance === "object") setPracticeAttendance(snap.practiceAttendance);
+    if (snap.settings && typeof snap.settings === "object") {
+      if (typeof snap.settings.subMode === "boolean") setSubMode(snap.settings.subMode);
+      if (typeof snap.settings.autoRegen === "boolean") setAutoRegen(snap.settings.autoRegen);
+      if ("quarterMinutes" in snap.settings) setQuarterMinutes(snap.settings.quarterMinutes);
+    }
+    if (snap.gameDay && typeof snap.gameDay === "object") setGameDay(normalizeGameDay(snap.gameDay));
+    if (Array.isArray(snap.schedule)) setSchedule(snap.schedule);
+  }, [setTeamName, setLeague, setFormat, setPlayers, setLineupsByQuarter, setCustomDrills, setPlayerStats, setGames, setPracticeDates, setPracticeAttendance, setSubMode, setAutoRegen, setQuarterMinutes, setGameDay, setSchedule]);
+
+  const snapshot = useMemo(() => ({
+    teamName,
+    league,
+    format,
+    players,
+    lineups: lineupsByQuarter,
+    customDrills,
+    playerStats,
+    games,
+    practiceDates,
+    practiceAttendance,
+    settings: { subMode, autoRegen, quarterMinutes },
+    gameDay,
+    schedule,
+  }), [teamName, league, format, players, lineupsByQuarter, customDrills, playerStats, games, practiceDates, practiceAttendance, subMode, autoRegen, quarterMinutes, gameDay, schedule]);
+
+  const cloud = useTeamCloud({
+    userId: user?.id || "",
+    email: user?.primaryEmailAddress?.emailAddress || user?.emailAddresses?.[0]?.emailAddress || "",
+    getToken: () => session?.getToken() ?? Promise.resolve(null),
+    snapshot,
+    applySnapshot,
+  });
 
   const addPlayer    = p  => {
     const pid = uid();
@@ -3346,10 +4548,6 @@ function CoachKitApp() {
   };
   const handleFormatChange = f => { setFormat(f); setLineupsByQuarter({}); };
 
-  const injured      = players.filter(p=>p.injured).length;
-  const midGameCount = players.filter(p=>p.midGameInjury).length;
-  const out          = players.filter(p=>p.out).length;
-
   return (
     <div style={{
       minHeight:"100vh",
@@ -3358,16 +4556,16 @@ function CoachKitApp() {
       color: C.text,
     }}>
       {/* HEADER */}
-      <div style={{
+      <div id="ck-app-header" style={{
         background:"linear-gradient(180deg,#111810 0%,#0c140a 100%)",
         borderBottom:`1px solid rgba(232,160,32,0.18)`,
         position:"sticky",top:0,zIndex:100,
       }}>
         <div style={{maxWidth:960,margin:"0 auto",padding:"0 16px"}}>
-          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:10,padding:"12px 0 8px"}}>
-            <div style={{display:"flex",alignItems:"center",gap:12}}>
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,padding:"8px 0 6px"}}>
+            <div style={{display:"flex",alignItems:"center",gap:10,minWidth:0}}>
               <div style={{
-                width:44,height:44,borderRadius:11,
+                width:36,height:36,borderRadius:9,
                 overflow:"hidden",
                 boxShadow:`0 4px 12px ${C.gold}44`,
                 flexShrink:0,
@@ -3380,7 +4578,7 @@ function CoachKitApp() {
                 />
               </div>
               <div>
-                <div style={{fontSize:19,fontWeight:800,color:C.text,letterSpacing:"-0.01em"}}>CoachKit</div>
+                <div style={{fontSize:16,fontWeight:800,color:C.text,letterSpacing:"-0.01em",lineHeight:1.1}}>CoachKit</div>
                 {editingTeamName ? (
                   <input
                     autoFocus value={teamName} onChange={e=>setTeamName(e.target.value)}
@@ -3403,18 +4601,33 @@ function CoachKitApp() {
                     {teamName || "+ Add Team Name"}
                   </div>
                 )}
+                <div style={{fontSize:10,color:C.muted,marginTop:3}}>
+                  {cloud.status==="loading" && "Syncing team…"}
+                  {cloud.status==="synced" && `Saved with ${cloud.team?.name || "your team"}`}
+                  {cloud.status==="off" && "Saved on this device"}
+                  {cloud.status==="error" && "Saved on this device — cloud sync paused"}
+                </div>
+                {cloud.teams.length > 1 && (
+                  <select
+                    value={cloud.team?.id || ""}
+                    onChange={e => cloud.selectTeam(e.target.value)}
+                    style={{...SS, fontSize:11, padding:"3px 6px", marginTop:4, width:200}}
+                  >
+                    {cloud.teams.map(t => (
+                      <option key={t.id} value={t.id} style={OPT}>{t.name} ({t.role})</option>
+                    ))}
+                  </select>
+                )}
               </div>
             </div>
 
-            <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
-              <WeatherButton />
-              <div style={{display:"flex",gap:10,alignItems:"center"}}>
-                <Stat label="Roster"   val={players.length}    color={C.text}/>
-                {injured>0&&<Stat label=" Injured" val={injured} color="#e74c3c"/>}
-                {midGameCount>0&&<Stat label=" Mid-Game" val={midGameCount} color="#e74c3c"/>}
-                {out>0    &&<Stat label=" Out"     val={out}     color="#e67e22"/>}
-                <UserMenu />
-              </div>
+            <div style={{display:"flex",gap:8,alignItems:"center",flexShrink:0}}>
+              <button type="button" aria-label="Settings" onClick={() => setSettingsOpen(true)} style={{
+                width:36, height:36, borderRadius:8, cursor:"pointer", fontFamily:"inherit",
+                border:`1px solid ${C.border}`, background:"rgba(255,255,255,0.04)", color:C.gold,
+                fontSize:18, lineHeight:1,
+              }}>⚙</button>
+              <UserMenu />
             </div>
           </div>
 
@@ -3434,10 +4647,31 @@ function CoachKitApp() {
       </div>
 
       {/* BODY */}
-      <div style={{maxWidth:960,margin:"0 auto",padding:"20px 16px"}}>
-        {tab==="game"     && <TabGame     format={format} league={league} onLeagueChange={handleLeagueChange} onFormatChange={handleFormatChange} players={players} setPlayers={setPlayers} addPlayer={addPlayer} removePlayer={removePlayer} lineupsByQuarter={lineupsByQuarter} setLineupsByQuarter={setLineupsByQuarter}/>}
+      <div style={{maxWidth:960,margin:"0 auto",padding:"20px 16px",opacity:cloud.status==="loading"?0.55:1,pointerEvents:cloud.status==="loading"?"none":"auto"}}>
+        {cloud.error && (
+          <div style={{marginBottom:12,padding:"10px 12px",borderRadius:8,background:"rgba(211,84,0,0.12)",border:"1px solid rgba(211,84,0,0.35)",fontSize:12,color:C.gold,lineHeight:1.45}}>
+            {cloud.error}
+          </div>
+        )}
+        {tab==="game"     && <TabGame     format={format} league={league} players={players} setPlayers={setPlayers} addPlayer={addPlayer} removePlayer={removePlayer} lineupsByQuarter={lineupsByQuarter} setLineupsByQuarter={setLineupsByQuarter} storagePrefix={pfx} setGames={setGames} subMode={subMode} autoRegen={autoRegen} quarterMinutes={quarterMinutes} gameDay={gameDay} setGameDay={setGameDay}/>}
+        <GameSettings
+          open={settingsOpen}
+          onClose={() => setSettingsOpen(false)}
+          subMode={subMode}
+          onSubMode={setSubMode}
+          league={league}
+          onLeagueChange={handleLeagueChange}
+          format={format}
+          onFormatChange={handleFormatChange}
+          autoRegen={autoRegen}
+          onAutoRegen={setAutoRegen}
+          quarterMinutes={quarterMinutes}
+          onQuarterMinutes={setQuarterMinutes}
+          leagueMinutes={(LEAGUE_RULES[league] || {}).periodMin || 10}
+          fairPlayLabel={`Fair-play target: ${minQuarters((PLAY_TIME_RULES[league] || {}).minFraction || 0, 4)} of 4 quarters (${minQuarters((PLAY_TIME_RULES[league] || {}).minFraction || 0, 4) * 2} halves).`}
+        />
         {tab==="season"   && <TabSeason   players={players} playerStats={playerStats} setPlayerStats={setPlayerStats} games={games} setGames={setGames} practiceDates={practiceDates} setPracticeDates={setPracticeDates} practiceAttendance={practiceAttendance} setPracticeAttendance={setPracticeAttendance}/>}
-        {tab==="team"     && <TabTeam     players={players} updatePlayer={updatePlayer} league={league} games={games}/>}
+        {tab==="team"     && <TabTeam     players={players} updatePlayer={updatePlayer} league={league} games={games} cloud={cloud} clerkUserId={user?.id || ""} schedule={schedule} setSchedule={setSchedule}/>}
         {tab==="rules"    && <TabRules    league={league} setLeague={setLeague} setFormat={setFormat}/>}
         {tab==="drills"   && <TabDrills   drills={allDrills} league={league} addCustomDrill={addCustomDrill} removeCustomDrill={removeCustomDrill}/>}
         {tab==="practice" && <TabPractice drills={allDrills} league={league}/>}
@@ -3614,15 +4848,17 @@ function TabSeason({ players, playerStats, setPlayerStats, games, setGames, prac
               </div>
             </Card>
           )}
-          {games.length===0 && <div style={{textAlign:"center",color:C.muted,padding:40}}>No games logged yet.</div>}
+          {games.length===0 && <div style={{textAlign:"center",color:C.muted,padding:40,lineHeight:1.5}}>No games logged yet. Save a strategy from Game Day, or add a result here.</div>}
           {[...games].sort((a,b)=>b.date.localeCompare(a.date)).map(g=>{
             const result = g.homeScore>g.oppScore?"W":g.homeScore<g.oppScore?"L":"D";
             const resultColor = result==="W"?C.ok:result==="L"?"#e74c3c":C.gold;
+            const sheets = g.strategy?.sheets;
             return (
               <div key={g.id} style={{
-                display:"flex",alignItems:"center",gap:12,padding:"10px 14px",
+                display:"flex",flexDirection:"column",alignItems:"stretch",gap:8,padding:"10px 14px",
                 background:C.surface,borderRadius:9,marginBottom:6,border:`1px solid ${C.border}`,
               }}>
+                <div style={{display:"flex",alignItems:"flex-start",gap:12}}>
                 <div style={{
                   width:32,height:32,borderRadius:7,flexShrink:0,
                   background:`${resultColor}22`,border:`1px solid ${resultColor}44`,
@@ -3632,12 +4868,44 @@ function TabSeason({ players, playerStats, setPlayerStats, games, setGames, prac
                 <div style={{flex:1,minWidth:0}}>
                   <div style={{fontSize:13,fontWeight:600,color:C.text}}>vs {g.opponent}</div>
                   <div style={{fontSize:11,color:C.muted}}>{g.date}  <b style={{color:g.homeScore>g.oppScore?C.ok:"#e74c3c"}}>{g.homeScore}</b>  {g.oppScore}</div>
+                  {g.strategy && (
+                    <div style={{fontSize:11, color:C.gold, fontWeight:700, marginTop:3}}>
+                      {g.strategy.formation || "Strategy"}{g.strategy.formationLabel ? ` · ${g.strategy.formationLabel}` : ""} · {g.strategy.subMode ? "Sub mode" : "Full quarters"}{g.strategy.format ? ` · ${g.strategy.format}` : ""}
+                    </div>
+                  )}
+                  {sheets?.field && sheets?.playTime && (
+                    <div style={{fontSize:11, color:C.gold, fontWeight:700, marginTop:3}}>Sheets saved</div>
+                  )}
+                  {!sheets && g.strategy?.lineups && (
+                    <div style={{fontSize:11, color:C.muted, lineHeight:1.45, marginTop:4}}>
+                      {[1, 2, 3, 4].filter(q => g.strategy.lineups[q]).map(q => {
+                        const names = (g.strategy.lineups[q].starters || []).map(slot => slot.player?.name?.split(" ")[0]).filter(Boolean);
+                        return <div key={q}>Q{q}: {names.join(", ") || "open spots"}</div>;
+                      })}
+                    </div>
+                  )}
                   {g.notes && <div style={{fontSize:11,color:C.muted,marginTop:2,fontStyle:"italic"}}>{g.notes}</div>}
                 </div>
                 <button onClick={()=>setGames(prev=>prev.filter(x=>x.id!==g.id))} style={{
                   background:"none",border:"none",cursor:"pointer",color:"rgba(255,255,255,0.2)",
                   fontSize:16,lineHeight:1,padding:"4px 6px",
                 }}></button>
+                </div>
+                {sheets?.field && sheets?.playTime && (
+                  <details>
+                    <summary style={{cursor:"pointer",fontSize:12,fontWeight:700,color:C.text}}>Field sheet and play time</summary>
+                    <div style={{marginTop:10}}>
+                      <SheetCanvases
+                        field={sheets.field}
+                        playTime={sheets.playTime}
+                        league={g.strategy.league || ""}
+                        opponent={g.opponent}
+                        homeScore={g.homeScore}
+                        awayScore={g.oppScore}
+                      />
+                    </div>
+                  </details>
+                )}
               </div>
             );
           })}
@@ -3708,16 +4976,97 @@ function TabSeason({ players, playerStats, setPlayerStats, games, setGames, prac
 // 
 // TAB: TEAM MANAGEMENT
 // 
-function TabTeam({ players, updatePlayer, league, games }) {
+function CoachesCard({ cloud, clerkUserId }) {
+  const [value, setValue] = useState("");
+  const [msg, setMsg] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const submit = async () => {
+    if (!value.trim() || busy) return;
+    setBusy(true);
+    setMsg("");
+    try {
+      await cloud.addCoach(value);
+      setValue("");
+      setMsg(value.includes("@")
+        ? "Invite saved. They get access after signing in with that email, or sooner if you add their Clerk user id."
+        : "Coach added. They will see this roster the next time they open CoachKit.");
+    } catch (err) {
+      setMsg(err?.message || "Could not add that coach.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (!cloud?.configured) {
+    return (
+      <Card style={{marginBottom:14}}>
+        <div style={{fontSize:12,fontWeight:700,color:C.gold,marginBottom:6}}>Coaches</div>
+        <div style={{fontSize:12,color:C.muted,lineHeight:1.5}}>
+          Cloud sync is off until VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY are set. The roster stays on this device.
+        </div>
+      </Card>
+    );
+  }
+
+  return (
+    <Card style={{marginBottom:14}}>
+      <div style={{fontSize:12,fontWeight:700,color:C.gold,marginBottom:6}}>Coaches on this team</div>
+      <div style={{fontSize:11,color:C.muted,lineHeight:1.5,marginBottom:8}}>
+        Your Clerk user id: <b style={{color:C.text}}>{clerkUserId || "—"}</b>
+      </div>
+      <div style={{display:"flex",gap:8,marginBottom:10,flexWrap:"wrap"}}>
+        <Btn sm onClick={async () => {
+          try {
+            await navigator.clipboard.writeText(clerkUserId || "");
+            setMsg("Copied your Clerk user id.");
+          } catch {
+            setMsg(clerkUserId || "");
+          }
+        }}>Copy my id</Btn>
+      </div>
+      {(cloud.members || []).map(member => (
+        <div key={member.id} style={{display:"flex",alignItems:"center",gap:8,padding:"8px 0",borderBottom:`1px solid ${C.border}`}}>
+          <div style={{flex:1,minWidth:0}}>
+            <div style={{fontSize:12,color:C.text,fontWeight:600}}>
+              {member.role === "owner" ? "Owner" : "Coach"}
+              {member.status === "invited" ? " · pending" : ""}
+            </div>
+            <div style={{fontSize:11,color:C.muted,overflow:"hidden",textOverflow:"ellipsis"}}>
+              {member.clerk_user_id || member.email || "Invite"}
+            </div>
+          </div>
+          {member.role === "coach" && (
+            <Btn sm danger onClick={async () => {
+              try { await cloud.removeCoach(member.id); setMsg("Coach removed."); }
+              catch (err) { setMsg(err?.message || "Could not remove that coach."); }
+            }}>Remove</Btn>
+          )}
+        </div>
+      ))}
+      <div style={{display:"flex",gap:6,marginTop:10,flexWrap:"wrap"}}>
+        <input
+          value={value}
+          onChange={e => setValue(e.target.value)}
+          onKeyDown={e => e.key === "Enter" && submit()}
+          placeholder="user_… or coach@email"
+          style={{...IS, flex:"1 1 180px"}}
+        />
+        <Btn primary disabled={busy} onClick={submit}>{busy ? "Adding…" : "Add coach"}</Btn>
+      </div>
+      <div style={{fontSize:10,color:C.muted,lineHeight:1.45,marginTop:8}}>
+        A Clerk user id gives access right away. An email stays pending until that person signs in and the Clerk token includes their email. The owner cannot be removed here.
+      </div>
+      {msg && <div style={{fontSize:12,color:C.gold,marginTop:8,lineHeight:1.4}}>{msg}</div>}
+    </Card>
+  );
+}
+
+function TabTeam({ players, updatePlayer, league, games, cloud, clerkUserId, schedule, setSchedule }) {
   const [view, setView] = useState("contacts"); // contacts | schedule | dev
   const [showPrintModal, setShowPrintModal] = useState(false);
   const [editPlayer, setEditPlayer] = useState(null);
   const [newScheduleItem, setNewScheduleItem] = useState({date:"",type:"game",opponent:"",location:"",notes:""});
-  const [schedule, setSchedule] = useState([
-    {id:"s1",date:"2026-03-22",type:"game",opponent:"FC Milford",location:"East Side Park, Field 2",notes:"Bring extra water"},
-    {id:"s2",date:"2026-03-25",type:"practice",opponent:"",location:"SAY East Complex",notes:"Focus on positioning"},
-    {id:"s3",date:"2026-03-29",type:"game",opponent:"Blue Wave SC",location:"Lunken Fields",notes:"Away game  carpool"},
-  ]);
   const [showAddEvent, setShowAddEvent] = useState(false);
 
   const saveEvent = () => {
@@ -3729,6 +5078,7 @@ function TabTeam({ players, updatePlayer, league, games }) {
 
   return (
     <div>
+      <CoachesCard cloud={cloud} clerkUserId={clerkUserId} />
       {/* Sub tabs */}
       <div style={{display:"flex",gap:4,marginBottom:14,flexWrap:"wrap"}}>
         {[["contacts"," Parent Contacts"],["schedule"," Schedule"],["dev"," Dev Notes"]].map(([k,l])=>(
@@ -3824,7 +5174,10 @@ function TabTeam({ players, updatePlayer, league, games }) {
               </div>
             </Card>
           )}
-          {[...schedule].sort((a,b)=>a.date.localeCompare(b.date)).map(ev=>{
+          {(schedule || []).length === 0 && !showAddEvent && (
+            <div style={{textAlign:"center",color:C.muted,padding:28,lineHeight:1.5}}>No events yet. Add a game or practice and it stays with this team.</div>
+          )}
+          {[...(schedule || [])].sort((a,b)=>String(a.date||"").localeCompare(String(b.date||""))).map(ev=>{
             const typeIcon = ev.type==="game"?"":ev.type==="practice"?"":"";
             const typeColor = ev.type==="game"?C.gold:ev.type==="practice"?C.ok:C.muted;
             const isPast = ev.date < new Date().toISOString().slice(0,10);
@@ -4048,16 +5401,6 @@ function PrintLineupModal({ players, onClose }) {
           </div>
         </div>
       </div>
-    </div>
-  );
-}
-
-
-function Stat({label,val,color}) {
-  return (
-    <div style={{textAlign:"center"}}>
-      <div style={{fontSize:16,fontWeight:800,color,lineHeight:1}}>{val}</div>
-      <div style={{fontSize:9,color:C.muted,textTransform:"uppercase",letterSpacing:"0.05em"}}>{label}</div>
     </div>
   );
 }
