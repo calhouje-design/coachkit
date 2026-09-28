@@ -10,6 +10,7 @@ import {
   drillHasLockedSchema,
   letterSheet,
   strokeStyle,
+  TRIANGLE_CARD_LAYOUT,
 } from "./drillDiagram.js";
 
 const triangle = coachkitDrillSeed.find(drill => drill.title === "Triangle Passing");
@@ -102,6 +103,15 @@ test("gates and traffic lights resolve cone targets, dribbles, and every ball", 
   });
   assert.equal(lightsModel.balls.length, 4);
   assert.equal(strokeStyle("run").dash, null);
+});
+
+test("triangle letter card keeps progressions in the right column above the footer", () => {
+  assert.equal(TRIANGLE_CARD_LAYOUT.orientation, "landscape");
+  assert.deepEqual(TRIANGLE_CARD_LAYOUT.rightColumn, ["purpose", "setup", "coachingPoints", "progressions"]);
+  assert.equal(TRIANGLE_CARD_LAYOUT.rightColumn.at(-1), "progressions");
+  assert.equal(TRIANGLE_CARD_LAYOUT.footer.includes("progressions"), false);
+  assert.deepEqual(TRIANGLE_CARD_LAYOUT.leftColumn, ["header", "field", "summary"]);
+  assert.deepEqual(TRIANGLE_CARD_LAYOUT.footer, ["legend"]);
 });
 
 test("coaching line names Lazear as head coach", () => {

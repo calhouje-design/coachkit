@@ -3862,7 +3862,7 @@ function TabDrills({ drills, league, addCustomDrill, removeCustomDrill }) {
 
   return (
     <div>
-      <PrintableDrillList drills={coachkitDrillSeed} onOpen={setSheetDrill} />
+      <PrintableDrillList drills={coachkitDrillSeed.filter(drill => drill.id === "triangle-passing")} onOpen={setSheetDrill} />
       {/* Filters */}
       <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:12,alignItems:"center"}}>
         <input value={search} onChange={e=>setSearch(e.target.value)} placeholder=" Search drills" style={{...IS,width:"auto",flex:"1 1 140px"}}/>

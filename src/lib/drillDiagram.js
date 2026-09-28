@@ -20,6 +20,14 @@ export const LETTER_SHEET_FIELDS = [
   "legend",
 ];
 
+/** Letter-card regions for the Triangle Passing reference family. */
+export const TRIANGLE_CARD_LAYOUT = {
+  orientation: "landscape",
+  leftColumn: ["header", "field", "summary"],
+  rightColumn: ["purpose", "setup", "coachingPoints", "progressions"],
+  footer: ["legend"],
+};
+
 export const DETAILS_ONLY_FIELDS = [
   "howToRun",
   "commonMistakes",
@@ -80,7 +88,8 @@ export function diagramPoint(entity, view = DIAGRAM_VIEW) {
   const x = Number(entity?.x);
   const y = Number(entity?.y);
   if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
-  return { x: x * view.w, y: y * view.h };
+  const pad = Number(view.pad) || 0;
+  return { x: pad + x * (view.w - pad * 2), y: pad + y * (view.h - pad * 2) };
 }
 
 export function markerById(diagram, id) {
@@ -169,10 +178,23 @@ export function distanceAnchor(diagram, distance, view = DIAGRAM_VIEW) {
   const dx = to.x - from.x;
   const dy = to.y - from.y;
   const len = Math.hypot(dx, dy) || 1;
-  const lift = 16;
+  let ox = -dy / len;
+  let oy = dx / len;
+  const markers = [...(diagram?.players || []), ...(diagram?.cones || [])]
+    .map(marker => diagramPoint(marker, view))
+    .filter(Boolean);
+  if (markers.length) {
+    const cx = markers.reduce((sum, point) => sum + point.x, 0) / markers.length;
+    const cy = markers.reduce((sum, point) => sum + point.y, 0) / markers.length;
+    if (ox * (mx - cx) + oy * (my - cy) < 0) {
+      ox = -ox;
+      oy = -oy;
+    }
+  }
+  const lift = 22 * (view.w / DIAGRAM_VIEW.w);
   return {
-    x: mx + (-dy / len) * lift,
-    y: my + (dx / len) * lift,
+    x: mx + ox * lift,
+    y: my + oy * lift,
     label: distance.label || "",
   };
 }
@@ -180,7 +202,8 @@ export function distanceAnchor(diagram, distance, view = DIAGRAM_VIEW) {
 export function ballAnchors(diagram, view = DIAGRAM_VIEW) {
   return (diagram?.players || []).filter(player => player?.hasBall).map(player => {
     const point = diagramPoint(player, view);
-    return point ? { id: player.id, x: point.x + 12, y: point.y + 14 } : null;
+    const scale = view.w / DIAGRAM_VIEW.w;
+    return point ? { id: player.id, x: point.x + 16 * scale, y: point.y + 8 * scale } : null;
   }).filter(Boolean);
 }
 
@@ -197,7 +220,8 @@ export function buildDiagramModel(diagram, options = {}) {
   }).filter(Boolean);
   const strokes = (diagram?.strokes || []).map((stroke, index) => {
     let points = strokePoints(diagram, stroke, view);
-    if (points.length >= 2 && stroke?.type !== "dribble") points = trimEnds(points, 18, 20);
+    const scale = view.w / DIAGRAM_VIEW.w;
+    if (points.length >= 2 && stroke?.type !== "dribble") points = trimEnds(points, 26 * scale, 30 * scale);
     return {
       id: `${stroke?.type || "run"}-${index}`,
       type: stroke?.type || "run",
