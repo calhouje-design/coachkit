@@ -47,6 +47,17 @@ import {
 import { downloadCanvas, paintFieldSheet, paintPlayTimeSheet } from "./lib/sharePaint.js";
 import { useTeamCloud } from "./lib/teamCloud.js";
 import { bindField, normalizeGameDay, snapshotFromStorage } from "./lib/teamSnapshot.js";
+import {
+  AGES,
+  ORGS,
+  ageNumber,
+  canonicalAge,
+  defaultSlots,
+  formatFromCount,
+  playersFromFormat,
+  resolveSetup,
+  tableRule,
+} from "./lib/leagueRules.js";
 
 // -- localStorage persistence helper --
 function usePersistedState(key, defaultValue) {
@@ -68,329 +79,37 @@ function usePersistedState(key, defaultValue) {
 // DATA LAYER
 // 
 
-// SAY East division names & age mappings (Silver Matrix, birth-year based Aug 1Jul 31)
-// Instructional=U6(ages4-5), Passers=U8(6-7), Wings=U10(8-9),
-// Strikers=U12(10-11), Kickers=U14(12-13), Minors=U16(14-15), Seniors=U19(16-18)
-const LEAGUES = [
-  "U6 / Instructional",
-  "U8 / Passers",
-  "U10 / Wings",
-  "U12 / Strikers",
-  "U14 / Kickers",
-  "U16 / Minors",
-  "U19 / Seniors",
-];
-const FORMATS = ["4v4","5v5","6v6","7v7","8v8","9v9","11v11"];
+// Ages U6–U19. Organization defaults live in src/lib/leagueRules.js.
+const LEAGUES = AGES;
+const FORMATS = ["4v4","5v5","6v6","7v7","8v8","9v9","10v10","11v11"];
 const ALL_POSITIONS = ["GK","LD","CD","RD","LM","CM","RM","LF","CF","RF"];
 
-// Short label for the league dropdown ("U8 / Passers" -> "U8")
-function leagueShortLabel(l){ return (l || "").split(" / ")[0]; }
+function leagueShortLabel(l){ return canonicalAge(l); }
 
-// SAY East default format per league (auto-applied when league changes)
-const LEAGUE_DEFAULT_FORMAT = {
-  "U6 / Instructional": "4v4",
-  "U8 / Passers":       "6v6",
-  "U10 / Wings":        "8v8",
-  "U12 / Strikers":     "9v9",
-  "U14 / Kickers":      "9v9",
-  "U16 / Minors":       "11v11",
-  "U19 / Seniors":      "11v11",
-};
-function leagueDefaultFormat(l){ return LEAGUE_DEFAULT_FORMAT[l] || "6v6"; }
+function ageIndex(code) {
+  const idx = AGES.indexOf(canonicalAge(code));
+  return idx === -1 ? 0 : idx;
+}
 
 // Position rule: 1 in a row = center, 2 = left/right (no center), 3 = L/C/R, 4 = L/C/C/R, etc.
 const POSITIONS_BY_FORMAT = {
-  "4v4":  ["GK","CD","CM","CF"],                                    // 1-1-1
-  "5v5":  ["GK","LD","RD","CM","CF"],                               // 2-1-1
-  "6v6":  ["GK","LD","RD","LM","RM","CF"],                          // 2-2-1
-  "7v7":  ["GK","LD","RD","LM","CM","RM","CF"],                     // 2-3-1
-  "8v8":  ["GK","LD","CD","RD","LM","CM","RM","CF"],                // 3-3-1 (SAY East U10 default)
-  "9v9":  ["GK","LD","CD","RD","LM","CM","RM","LF","RF"],           // 3-3-2
-  "11v11":["GK","LB","CB","CB","RB","LM","CM","CM","RM","LF","RF"], // 4-4-2
+  "4v4":  ["GK","CD","CM","CF"],
+  "5v5":  ["GK","LD","RD","CM","CF"],
+  "6v6":  ["GK","LD","RD","LM","RM","CF"],
+  "7v7":  ["GK","LD","RD","LM","CM","RM","CF"],
+  "8v8":  ["GK","LD","CD","RD","LM","CM","RM","CF"],
+  "9v9":  ["GK","LD","CD","RD","LM","CM","RM","LF","RF"],
+  "10v10":["GK","LD","CD","RD","LM","CM","RM","LF","CF","RF"],
+  "11v11":["GK","LB","CB","CB","RB","LM","CM","CM","RM","LF","RF"],
 };
 
-// Human-readable label for display in position tiles
 const POS_LABEL = {
   GK:"GK", LB:"LB", RB:"RB", CB:"CB",
   LD:"LD", RD:"RD", CD:"CD",
   LM:"LM", RM:"RM", CM:"CM",
   LF:"LF", RF:"RF", CF:"CF",
-  // legacy fallbacks
   DEF:"DEF", MID:"MID", FWD:"FWD", CAM:"CAM", CDM:"CDM",
   LW:"LW", RW:"RW", ST:"ST", Wing:"W",
-};
-
-// -- SAY East Play-Time Rules (SAY Rule 12) --
-// Every player present must play approximately half the game.
-// Source: SAY East Playing Laws Rulebook (Updated Jan 2026), Rule 12
-const PLAY_TIME_RULES = {
-  "U6 / Instructional": { minFraction: 1.0, note: "All players play the entire game (Instructional only)" },
-  "U8 / Passers":       { minFraction: 0.5, note: "SAY Rule 12: Every player must play - half the game" },
-  "U10 / Wings":        { minFraction: 0.5, note: "SAY Rule 12: Every player must play - half the game" },
-  "U12 / Strikers":     { minFraction: 0.5, note: "SAY Rule 12: Every player must play - half the game" },
-  "U14 / Kickers":      { minFraction: 0.5, note: "SAY Rule 12: Every player must play - half the game" },
-  "U16 / Minors":       { minFraction: 0.5, note: "SAY Rule 12: Every player must play - half the game" },
-  "U19 / Seniors":      { minFraction: 0.5, note: "SAY Rule 12: Every player must play - half the game" },
-};
-
-// -- SAY East League Rules --
-// Source: SAY East Playing Laws Rulebook (Updated Jan 2026) + SAY National Playing Laws (2024/2026)
-// SAY East specific exceptions: Silver Matrix age chart, SAY East formats, GK punting allowed, no blowouts
-const LEAGUE_RULES = {
-  "U6 / Instructional": {
-    divisionName: "Instructional", ageRange: "Ages 4-5",
-    format: "4v4", ballSize: 3,
-    fieldLength: "25-35 yds", fieldWidth: "15-25 yds",
-    goalSize: "4-6 ft",
-    heading: false, offside: false, slideTackle: false, buildOut: false,
-    gkPunt: false, throwIns: false, penaltyKick: false, yellowRedCards: false,
-    periods: 4, periodMin: 8,
-    quickRules: [
-      { icon:"", text:"Development only - score is NOT kept", important: true },
-      { icon:"", text:"No heading - IFK awarded to opponents if it occurs", important: true },
-      { icon:"", text:"4 x 8 min quarters (32 min total)" },
-      { icon:"", text:"Kick-ins replace throw-ins (no throw-ins)" },
-      { icon:"", text:"No offside rule applies" },
-      { icon:"", text:"All players play the entire game" },
-      { icon:"", text:"GK may NOT punt - roll or throw only" },
-      { icon:"", text:"No yellow or red cards - verbal guidance only" },
-      { icon:"", text:"Size 3 ball" },
-      { icon:"", text:"Small field: 25-35 x 15-25 yards" },
-    ],
-    unknownRules: [
-      "Coaches are often allowed near the field to guide young players - SAY encourages teaching moments",
-      "Even 'accidental' heading results in an IFK for the other team at this age",
-      "No penalty kicks in Instructional play - all free kicks are indirect",
-      "If a team is winning by more than 5 goals, SAY East's 'no blowout' rule requires adjustments - coaches must act",
-      "The build-out line is NOT used at U6/Instructional; it begins at U8/Passers",
-      "Referees at this age are there to educate, not just officiate - expect teaching stoppages",
-    ],
-    officialLinks: [
-      { label: "SAY East Official Site", url: "https://www.sayeast.org" },
-      { label: "SAY National Playing Laws (2024)", url: "https://www.saysoccer.org/Default.aspx?tabid=733802" },
-      { label: "SAY East Rulebook PDF (Jan 2026)", url: "https://www.sayeast.org/wp-content/uploads/2022/07/SAY-East-Playing-Laws-Rulebook.pdf" },
-    ]
-  },
-
-  "U8 / Passers": {
-    divisionName: "Passers", ageRange: "Ages 6-7 (Silver Matrix)",
-    format: "6v6 (SAY East)", ballSize: 3,
-    fieldLength: "55-65 yds", fieldWidth: "35-45 yds",
-    goalSize: "12-18 ft wide x 6-7 ft high",
-    heading: false, offside: false, slideTackle: false, buildOut: true,
-    gkPunt: true, throwIns: true, penaltyKick: false, yellowRedCards: true,
-    periods: 4, periodMin: 12,
-    quickRules: [
-      { icon:"", text:"No heading - IFK awarded to opponents", important: true },
-      { icon:"", text:"Build-out line: all opponents must retreat on GK ball or goal kick", important: true },
-      { icon:"", text:"4 x 12 min quarters (48 min total)" },
-      { icon:"", text:"SAY East: 6v6 format (spring & fall)" },
-      { icon:"", text:"Every player must play - half the game (SAY Rule 12)" },
-      { icon:"", text:"GK may punt (SAY East exception to national rule)" },
-      { icon:"", text:"No offside rule - open play encouraged" },
-      { icon:"", text:"Unlimited subs: goal kicks, after goals, injuries, between periods, cautions" },
-      { icon:"", text:"Size 3 ball" },
-      { icon:"", text:"7v7 small-sided field: 55-65 x 35-45 yards" },
-    ],
-    unknownRules: [
-      "SAY East uses 6v6 format, not the SAY national standard of 7v7 - plan your roster accordingly",
-      "Build-out line: when the GK has the ball OR on a goal kick, all opponents must retreat behind the build-out line before the ball is played",
-      "GK cannot score directly from a punt (ball must touch another player first)",
-      "No penalty kicks at this age - direct free kicks from outside the penalty area only",
-      "SAY East 'no blowout' rule: winning by more than 5 goals is a violation - coaches must rotate and adjust",
-      "A player ejected (Red Card for fighting) is suspended for the next 2 games per SAY East rules",
-      "Players who re-enter after subbing are fully allowed - re-entry is unlimited",
-    ],
-    officialLinks: [
-      { label: "SAY East Official Site", url: "https://www.sayeast.org" },
-      { label: "SAY National Playing Laws (2024)", url: "https://www.saysoccer.org/Default.aspx?tabid=733802" },
-      { label: "SAY East Rulebook PDF (Jan 2026)", url: "https://www.sayeast.org/wp-content/uploads/2022/07/SAY-East-Playing-Laws-Rulebook.pdf" },
-    ]
-  },
-
-  "U10 / Wings": {
-    divisionName: "Wings", ageRange: "Ages 8-9 (Silver Matrix)",
-    format: "8v8 (SAY East)", ballSize: 4,
-    fieldLength: "55-65 yds", fieldWidth: "35-45 yds",
-    goalSize: "12-18 ft wide x 6-7 ft high",
-    heading: false, offside: false, slideTackle: false, buildOut: true,
-    gkPunt: true, throwIns: true, penaltyKick: true, yellowRedCards: true,
-    periods: 4, periodMin: 15,
-    quickRules: [
-      { icon:"", text:"No heading - IFK awarded to opponents", important: true },
-      { icon:"", text:"Build-out line used - opponents retreat on GK possession / goal kicks", important: true },
-      { icon:"", text:"4 x 15 min quarters (60 min total)" },
-      { icon:"", text:"SAY East: 8v8 format (spring & fall)" },
-      { icon:"", text:"Every player must play - half the game (SAY Rule 12)" },
-      { icon:"", text:"GK may punt (SAY East exception)" },
-      { icon:"", text:"No offside rule at this age" },
-      { icon:"", text:"Unlimited substitutions (with referee permission)" },
-      { icon:"", text:"Yellow & red cards apply" },
-      { icon:"", text:"Size 4 ball" },
-      { icon:"", text:"7v7 small-sided field: 55-65 x 35-45 yards" },
-    ],
-    unknownRules: [
-      "SAY East uses 8v8 format - this is larger than the national 7v7 standard",
-      "Build-out line is still active: opponents must retreat when GK has the ball or on goal kicks",
-      "Even though penalty kicks are possible, they are taken from the 7v7 penalty mark (10 yards), not the full 12 yards",
-      "No offside is called at Wings - the build-out line is the only positional restriction",
-      "SAY East 'no blowout' rule: winning margin over 5 goals requires coaches to adjust strategy",
-      "A red card for fighting means a 2-game suspension under SAY East rules",
-      "Goal kick ball does not have to leave the penalty area to be in play (SAY rule)",
-    ],
-    officialLinks: [
-      { label: "SAY East Official Site", url: "https://www.sayeast.org" },
-      { label: "SAY National Playing Laws (2024)", url: "https://www.saysoccer.org/Default.aspx?tabid=733802" },
-      { label: "SAY East Rulebook PDF (Jan 2026)", url: "https://www.sayeast.org/wp-content/uploads/2022/07/SAY-East-Playing-Laws-Rulebook.pdf" },
-    ]
-  },
-
-  "U12 / Strikers": {
-    divisionName: "Strikers", ageRange: "Ages 10-11 (Silver Matrix)",
-    format: "9v9 (SAY East)", ballSize: 4,
-    fieldLength: "70-80 yds", fieldWidth: "45-55 yds",
-    goalSize: "18-21 ft wide x 6-7 ft high",
-    heading: false, offside: true, slideTackle: false, buildOut: false,
-    gkPunt: true, throwIns: true, penaltyKick: true, yellowRedCards: true,
-    periods: 4, periodMin: 20,
-    quickRules: [
-      { icon:"", text:"NO heading - banned in games & practices through U12", important: true },
-      { icon:"", text:"Full offside rule applies (from defensive line, whole field)", important: true },
-      { icon:"", text:"4 x 20 min quarters (80 min total)" },
-      { icon:"", text:"SAY East: 9v9 format (spring & fall)" },
-      { icon:"", text:"Every player must play - half the game (SAY Rule 12)" },
-      { icon:"", text:"GK may punt (SAY East exception)" },
-      { icon:"", text:"No build-out line at this age - full field offside" },
-      { icon:"", text:"Unlimited substitutions with referee permission" },
-      { icon:"", text:"Full yellow/red card system" },
-      { icon:"", text:"Size 4 ball" },
-      { icon:"", text:"9v9 field: 70-80 x 45-55 yards" },
-    ],
-    unknownRules: [
-      "Heading is STILL banned at U12 - any deliberate header results in an IFK for the other team, even in games and at practice",
-      "This is the first SAY age group where the full FIFA offside rule applies from the defensive line",
-      "No build-out line at Strikers - opponents no longer need to retreat for GK possession",
-      "SAY East 'no blowout' rule still applies - win margin over 5 is a violation",
-      "Slide tackling: SAY rules do not expressly prohibit it but refs may restrict it locally - ask your referee before games",
-      "Penalty mark is at 10 yards (9v9 field), not the full 12-yard FIFA spot",
-      "Red card for fighting = 2-game suspension under SAY East rules",
-    ],
-    officialLinks: [
-      { label: "SAY East Official Site", url: "https://www.sayeast.org" },
-      { label: "SAY National Playing Laws (2024)", url: "https://www.saysoccer.org/Default.aspx?tabid=733802" },
-      { label: "SAY East Rulebook PDF (Jan 2026)", url: "https://www.sayeast.org/wp-content/uploads/2022/07/SAY-East-Playing-Laws-Rulebook.pdf" },
-    ]
-  },
-
-  "U14 / Kickers": {
-    divisionName: "Kickers", ageRange: "Ages 12-13 (Silver Matrix)",
-    format: "9v9 (spring) / 11v11 (fall) - SAY East", ballSize: 5,
-    fieldLength: "80130 yds (11v11) / 7080 yds (9v9)", fieldWidth: "50100 yds (11v11)",
-    goalSize: "24 ft wide x 8 ft high (11v11)",
-    heading: true, offside: true, slideTackle: true, buildOut: false,
-    gkPunt: true, throwIns: true, penaltyKick: true, yellowRedCards: true,
-    periods: 2, periodMin: 35,
-    quickRules: [
-      { icon:"", text:"Heading is allowed - limit practice headers per SAY policy", important: true },
-      { icon:"", text:"Full offside rule (FIFA standard from defensive line)" },
-      { icon:"", text:"2 x 35 min halves (70 min total)" },
-      { icon:"", text:"SAY East: 9v9 spring / 11v11 fall" },
-      { icon:"", text:"Every player must play - half the game (SAY Rule 12)" },
-      { icon:"", text:"GK may punt" },
-      { icon:"", text:"Unlimited substitutions with referee permission" },
-      { icon:"", text:"Full yellow/red card system - cards carry across games" },
-      { icon:"", text:"Size 5 ball" },
-      { icon:"", text:"Full-sided field (11v11): 80-130 x 50-100 yards" },
-    ],
-    unknownRules: [
-      "Heading is now allowed but SAY limits practice headers to max 1520 reps and 30 minutes per week at U14",
-      "SAY East uses 9v9 in spring and 11v11 in fall - confirm format with your district coordinator each season",
-      "Yellow cards can accumulate across games - check your district's suspension threshold (often 3 yellows = 1 game ban)",
-      "Slide tackling is permitted at U14+ under SAY rules - referees will still penalize dangerous challenges",
-      "Penalty kicks are from the full 12-yard FIFA spot on 11v11 fields",
-      "SAY East 'no blowout' rule still technically applies - coaches should manage score differential sportsmanly",
-      "Red card for fighting = 2-game suspension (SAY East local rule, same for all divisions)",
-      "GK cannot be replaced by a field player mid-play without referee notification - must wait for a stoppage",
-    ],
-    officialLinks: [
-      { label: "SAY East Official Site", url: "https://www.sayeast.org" },
-      { label: "SAY National Playing Laws (2024)", url: "https://www.saysoccer.org/Default.aspx?tabid=733802" },
-      { label: "SAY East Rulebook PDF (Jan 2026)", url: "https://www.sayeast.org/wp-content/uploads/2022/07/SAY-East-Playing-Laws-Rulebook.pdf" },
-      { label: "FIFA Laws of the Game (IFAB)", url: "https://www.theifab.com/laws-of-the-game" },
-    ]
-  },
-
-  "U16 / Minors": {
-    divisionName: "Minors", ageRange: "Ages 14-15 (Silver Matrix)",
-    format: "11v11", ballSize: 5,
-    fieldLength: "80-130 yds", fieldWidth: "50-100 yds",
-    goalSize: "24 ft wide x 8 ft high",
-    heading: true, offside: true, slideTackle: true, buildOut: false,
-    gkPunt: true, throwIns: true, penaltyKick: true, yellowRedCards: true,
-    periods: 2, periodMin: 40,
-    quickRules: [
-      { icon:"", text:"Full SAY/FIFA Laws of the Game apply", important: true },
-      { icon:"", text:"2 x 40 min halves (80 min total)" },
-      { icon:"", text:"Heading fully allowed - no practice limits" },
-      { icon:"", text:"Full offside rule - FIFA standard" },
-      { icon:"", text:"Every player must play - half the game (SAY Rule 12)" },
-      { icon:"", text:"Unlimited substitutions with referee permission" },
-      { icon:"", text:"Yellow/red cards - accumulation rules apply" },
-      { icon:"", text:"Size 5 ball" },
-      { icon:"", text:"Full-sided field: 80-130 x 50-100 yards" },
-    ],
-    unknownRules: [
-      "No heading restrictions at U16 - practice and game headers are unlimited",
-      "Referees at this level are expected to use a stricter interpretation of Laws 12 (fouls) and 11 (offside)",
-      "A player ejected (Red Card for fighting) is suspended for 2 games - SAY East local rule",
-      "Goal kicks: ball is in play once it is kicked and clearly moves - does not need to leave the penalty area",
-      "GK has 6 seconds to distribute from hands before an IFK is awarded to opponents",
-      "Yellow card accumulation suspensions apply - confirm threshold with your district",
-      "Coaches receiving a red card must leave the vicinity of the field",
-    ],
-    officialLinks: [
-      { label: "SAY East Official Site", url: "https://www.sayeast.org" },
-      { label: "SAY National Playing Laws (2024)", url: "https://www.saysoccer.org/Default.aspx?tabid=733802" },
-      { label: "SAY East Rulebook PDF (Jan 2026)", url: "https://www.sayeast.org/wp-content/uploads/2022/07/SAY-East-Playing-Laws-Rulebook.pdf" },
-      { label: "IFAB Laws of the Game", url: "https://www.theifab.com/laws-of-the-game" },
-    ]
-  },
-
-  "U19 / Seniors": {
-    divisionName: "Seniors", ageRange: "Ages 16-18 (Silver Matrix)",
-    format: "11v11", ballSize: 5,
-    fieldLength: "80-130 yds", fieldWidth: "50-100 yds",
-    goalSize: "24 ft wide x 8 ft high",
-    heading: true, offside: true, slideTackle: true, buildOut: false,
-    gkPunt: true, throwIns: true, penaltyKick: true, yellowRedCards: true,
-    periods: 2, periodMin: 45,
-    quickRules: [
-      { icon:"", text:"Full SAY/FIFA Laws of the Game apply", important: true },
-      { icon:"", text:"2 x 45 min halves (90 min total)" },
-      { icon:"", text:"Heading fully allowed" },
-      { icon:"", text:"Full offside rule - FIFA standard" },
-      { icon:"", text:"Every player must play - half the game (SAY Rule 12)" },
-      { icon:"", text:"Unlimited substitutions with referee permission" },
-      { icon:"", text:"Full yellow/red card system - suspensions carry across games" },
-      { icon:"", text:"Size 5 ball" },
-      { icon:"", text:"Full-sided field: 80-130 x 50-100 yards" },
-    ],
-    unknownRules: [
-      "SAY Seniors is for ages 1618 - this is the highest SAY recreational division",
-      "SAY Rule 12 still applies at Seniors - every player must get approximately half the game",
-      "A player receiving a red card for fighting is suspended for 2 games per SAY East rules",
-      "The 'no blowout' culture is still encouraged at SAY East, even at the senior level",
-      "Deliberate handball leading to the prevention of a goal can result in a Red Card (DOGSO-H)",
-      "GK is allowed 6 seconds to release the ball from hands - IFK awarded if exceeded",
-      "Coaches can be cautioned or sent off by the referee for misconduct on the sideline",
-    ],
-    officialLinks: [
-      { label: "SAY East Official Site", url: "https://www.sayeast.org" },
-      { label: "SAY National Playing Laws (2024)", url: "https://www.saysoccer.org/Default.aspx?tabid=733802" },
-      { label: "SAY East Rulebook PDF (Jan 2026)", url: "https://www.sayeast.org/wp-content/uploads/2022/07/SAY-East-Playing-Laws-Rulebook.pdf" },
-      { label: "IFAB Laws of the Game", url: "https://www.theifab.com/laws-of-the-game" },
-    ]
-  },
 };
 
 // Player skill ratings (1-5 per category)
@@ -710,27 +429,19 @@ const DIFFICULTIES = ["Beginner","Intermediate","Advanced"];
 // PRACTICE TEMPLATES BY AGE + FOCUS
 // 
 function generatePractice(league, focus, skills, duration, allDrills) {
-  // Map short age codes to full LEAGUES strings for comparison
-  const AGE_MAP = {
-    "U6":"U6 / Instructional","U8":"U8 / Passers","U10":"U10 / Wings",
-    "U12":"U12 / Strikers","U14":"U14 / Kickers","U16":"U16 / Minors",
-    "U19":"U19 / Seniors","Adult":"U19 / Seniors",
-  };
-  const leagueIdx = LEAGUES.indexOf(league);
+  const leagueIdx = ageIndex(league);
 
   // Filter drills eligible for this age group
   const eligible = allDrills.filter(d => {
-    const minIdx = LEAGUES.indexOf(AGE_MAP[d.ageMin] || d.ageMin || "U6 / Instructional");
-    const maxIdx = LEAGUES.indexOf(AGE_MAP[d.ageMax] || d.ageMax || "U19 / Seniors");
-    const lo = minIdx === -1 ? 0 : minIdx;
-    const hi = maxIdx === -1 ? LEAGUES.length - 1 : maxIdx;
-    return leagueIdx >= lo && leagueIdx <= hi;
+    const minIdx = ageIndex(d.ageMin || "U6");
+    const maxIdx = d.ageMax ? ageIndex(d.ageMax) : AGES.length - 1;
+    return leagueIdx >= minIdx && leagueIdx <= maxIdx;
   });
 
   // Fallback: if filter still yields nothing, use all drills
   const pool = eligible.length > 0 ? eligible : allDrills;
 
-  const isYoung = leagueIdx <= 1; // U6, U8
+  const isYoung = ageNumber(league) <= 8;
 
   // Categorise pool
   const warmupCandidates  = pool.filter(d => ["Dribbling","Passing","Fitness","Ball Control"].includes(d.category));
@@ -805,13 +516,12 @@ function uid() { return Math.random().toString(36).slice(2,9); }
  * 5. Within each quarter, players are sorted to best-fit positions.
  * 6. Players who sat last quarter get priority for the next one (rotation).
  */
-function scheduleWholeGame(players, format, league, lockedLineups = {}, fromQuarter = 1, segments = {}, credit = {}, slotOverride = null) {
-  const TOTAL_Q  = 4;
-  const fallback = POSITIONS_BY_FORMAT[format] || POSITIONS_BY_FORMAT["7v7"];
+function scheduleWholeGame(players, format, league, lockedLineups = {}, fromQuarter = 1, segments = {}, credit = {}, slotOverride = null, totalPeriods = 4, minFraction = 0.5) {
+  const TOTAL_Q  = totalPeriods;
+  const fallback = defaultSlots(playersFromFormat(format) || 7, true);
   const slots    = slotOverride?.length ? slotOverride : fallback;
   const slotsPerQ = slots.length;
-  const rule     = PLAY_TIME_RULES[league] || { minFraction: 0.5 };
-  const minQ     = Math.ceil(rule.minFraction * TOTAL_Q); // e.g. 2 of 4 quarters
+  const minQ     = Math.ceil(minFraction * TOTAL_Q);
 
   // Shuffle active players so bonus-slot distribution isn't biased
   // by roster order  every fresh plan gives a different player the extra quarter
@@ -1527,8 +1237,8 @@ function PlayerEditPanel({ player, onUpdate, onDelete, onClose }) {
 // SETTINGS  set-and-forget for Game Day. League and format stay here.
 //
 function GameSettings({
-  open, onClose, subMode, onSubMode, league, onLeagueChange, format, onFormatChange,
-  autoRegen, onAutoRegen, quarterMinutes, onQuarterMinutes, leagueMinutes, fairPlayLabel,
+  open, onClose, subMode, onSubMode, setup, onOrgChange, onAgeChange, onFormatChange, onGkChange,
+  onPeriodsChange, onSeasonChange, autoRegen, onAutoRegen, quarterMinutes, onQuarterMinutes, fairPlayLabel,
 }) {
   if (!open) return null;
   const choice = (on, label, active, color) => (
@@ -1556,36 +1266,76 @@ function GameSettings({
             border: `1px solid ${C.border}`, background: "transparent", color: C.text, fontWeight: 700,
           }}>Done</button>
         </div>
-        <div style={{fontSize: 11, color: C.muted, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase", marginBottom: 8}}>Play mode</div>
-        <div style={{display: "flex", gap: 8, marginBottom: 8}}>
-          {choice(true, "Half quarters", subMode, "#2ecc71")}
-          {choice(false, "Full quarters", !subMode, C.gold)}
-        </div>
-        <div style={{fontSize: 12, color: C.muted, lineHeight: 1.45, marginBottom: 16}}>
-          {subMode
-            ? "Half-quarter subs. Planning spreads sit time and still targets the fair-play line."
-            : "Full quarters. Half swaps and the sub queue stay off. Drag still moves a player."}
-        </div>
-        <div style={{display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 16}}>
+        <div style={{fontSize: 11, color: C.muted, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase", marginBottom: 8}}>Organization</div>
+        <select value={setup.legacy ? "" : (setup.orgId || "us-soccer")} onChange={e => onOrgChange(e.target.value)}
+          style={{...SS, width: "100%", fontSize: 16, padding: "8px 10px", marginBottom: 8}}>
+          {setup.legacy && <option value="" style={OPT}>US Soccer standard (saved team)</option>}
+          {ORGS.map(org => <option key={org.id} value={org.id} style={OPT}>{org.label}</option>)}
+        </select>
+        <div style={{fontSize: 12, color: C.muted, lineHeight: 1.45, marginBottom: 14}}>{setup.note}</div>
+        {setup.verified === false && (
+          <div style={{fontSize: 12, color: C.gold, lineHeight: 1.45, marginBottom: 14}}>
+            Part of this default is unverified. Check the note before the match.
+          </div>
+        )}
+        <div style={{display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 12}}>
           <div>
-            <label style={{...lbl, marginBottom: 4}}>League</label>
-            <select value={league} onChange={e => onLeagueChange && onLeagueChange(e.target.value)}
+            <label style={{...lbl, marginBottom: 4}}>Age</label>
+            <select value={setup.age} onChange={e => onAgeChange(e.target.value)}
               style={{...SS, width: "100%", fontSize: 16, padding: "8px 10px"}}>
-              {LEAGUES.map(l => <option key={l} value={l} style={OPT}>{leagueShortLabel(l)}</option>)}
+              {AGES.map(age => <option key={age} value={age} style={OPT}>{age}</option>)}
             </select>
           </div>
           <div>
             <label style={{...lbl, marginBottom: 4, display: "flex", alignItems: "center", gap: 4}}>
-              <span>Format</span>
-              {format !== leagueDefaultFormat(league) && (
+              <span>On the field</span>
+              {setup.orgId !== "custom" && setup.tablePlayers && setup.playersOnField !== setup.tablePlayers && (
                 <span style={{fontSize: 8, color: C.gold, fontWeight: 700}}>OVERRIDE</span>
               )}
             </label>
-            <select value={format} onChange={e => onFormatChange && onFormatChange(e.target.value)}
+            <select value={setup.format} onChange={e => onFormatChange(e.target.value)}
               style={{...SS, width: "100%", fontSize: 16, padding: "8px 10px"}}>
-              {FORMATS.map(f => <option key={f} value={f} style={OPT}>{f}{f === leagueDefaultFormat(league) ? "  default" : ""}</option>)}
+              {FORMATS.map(f => <option key={f} value={f} style={OPT}>{f}{setup.tablePlayers && f === formatFromCount(setup.tablePlayers) ? "  default" : ""}</option>)}
             </select>
           </div>
+        </div>
+        {setup.showSeason && (
+          <div style={{marginBottom: 12}}>
+            <label style={{...lbl, marginBottom: 4}}>SAY East season</label>
+            <div style={{display: "flex", gap: 8}}>
+              {[["fall", "Fall 11v11"], ["spring", "Spring 9v9"]].map(([id, label]) => (
+                <button key={id} type="button" onClick={() => onSeasonChange(id)} style={{
+                  flex: 1, minHeight: 40, borderRadius: 8, cursor: "pointer", fontFamily: "inherit", fontWeight: 800,
+                  border: setup.saySeason === id ? `2px solid ${C.gold}` : `1px solid ${C.border}`,
+                  background: setup.saySeason === id ? "rgba(232,160,32,0.16)" : "transparent",
+                  color: setup.saySeason === id ? C.gold : C.muted,
+                }}>{label}</button>
+              ))}
+            </div>
+          </div>
+        )}
+        <label style={{display: "flex", alignItems: "center", gap: 10, marginBottom: 12, fontSize: 13, color: C.text}}>
+          <input type="checkbox" checked={!!setup.gk} onChange={e => onGkChange(e.target.checked)} style={{width: 18, height: 18}} />
+          Goalkeeper {setup.orgId !== "custom" && setup.tableGk != null && setup.gk !== setup.tableGk ? "(override)" : ""}
+        </label>
+        <div style={{marginBottom: 12}}>
+          <label style={{...lbl, marginBottom: 4}}>Periods</label>
+          <select value={String(setup.periods)} onChange={e => onPeriodsChange(Number(e.target.value))}
+            style={{...SS, width: "100%", fontSize: 16, padding: "8px 10px"}}>
+            <option value="4" style={OPT}>4 quarters</option>
+            <option value="3" style={OPT}>3 periods</option>
+            <option value="2" style={OPT}>2 halves</option>
+          </select>
+        </div>
+        <div style={{fontSize: 11, color: C.muted, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase", marginBottom: 8}}>Play mode</div>
+        <div style={{display: "flex", gap: 8, marginBottom: 8}}>
+          {choice(true, "Half periods", subMode, "#2ecc71")}
+          {choice(false, "Full periods", !subMode, C.gold)}
+        </div>
+        <div style={{fontSize: 12, color: C.muted, lineHeight: 1.45, marginBottom: 16}}>
+          {subMode
+            ? `Subs at the middle of each ${setup.periodNounOne}. The goalkeeper still plays the whole ${setup.periodNounOne}.`
+            : `Each ${setup.periodNounOne} is planned whole. Half swaps and the sub queue stay off.`}
         </div>
         <div style={{fontSize: 12, color: C.text, lineHeight: 1.45, marginBottom: 14}}>{fairPlayLabel}</div>
         <label style={{display: "flex", alignItems: "center", gap: 10, marginBottom: 16, fontSize: 13, color: C.text}}>
@@ -1593,23 +1343,24 @@ function GameSettings({
           Auto-regenerate the lineup when a player is marked injured
         </label>
         <div style={{marginBottom: 16}}>
-          <label style={{...lbl, marginBottom: 4}}>Quarter length (minutes)</label>
+          <label style={{...lbl, marginBottom: 4}}>{setup.periodNounOne[0].toUpperCase() + setup.periodNounOne.slice(1)} length (minutes)</label>
           <input
             type="number"
             min="1"
             max="60"
             inputMode="numeric"
             value={quarterMinutes ?? ""}
-            placeholder={String(leagueMinutes)}
+            placeholder={String(setup.tableMinutes || setup.periodMinutes)}
             onChange={e => {
               const raw = e.target.value;
+              const fallback = setup.tableMinutes || setup.periodMinutes;
               if (raw === "") onQuarterMinutes(null);
-              else onQuarterMinutes(Math.max(1, Math.min(60, Number(raw) || leagueMinutes)));
+              else onQuarterMinutes(Math.max(1, Math.min(60, Number(raw) || fallback)));
             }}
             style={{...IS, fontSize: 16, padding: "8px 10px"}}
           />
           <div style={{fontSize: 11, color: C.muted, marginTop: 4, lineHeight: 1.4}}>
-            League default is {leagueMinutes} minutes. Clear the box to use that again.
+            Default is {setup.tableMinutes || setup.periodMinutes} minutes. Clear the box to use that again.
           </div>
         </div>
         <div style={{fontSize: 12, color: C.muted, lineHeight: 1.45, marginBottom: 16}}>
@@ -1625,7 +1376,14 @@ function GameSettings({
 //
 // TAB: GAME DAY
 //
-function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer, lineupsByQuarter, setLineupsByQuarter, storagePrefix = "ck_guest_", setGames, subMode = true, autoRegen = true, quarterMinutes = null, gameDay, setGameDay }) {
+function shapesFor(format, gk, slots) {
+  const list = (gk ? FORMATION_TEMPLATES[format] : []) || [];
+  const usable = list.filter(item => item.slots?.length === slots.length && item.slots.includes("GK") === !!gk);
+  if (usable.length) return usable;
+  return [{ name: "Standard", label: "Standard", desc: "Default shape for this player count.", slots }];
+}
+
+function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer, lineupsByQuarter, setLineupsByQuarter, storagePrefix = "ck_guest_", setGames, subMode = true, autoRegen = true, quarterMinutes = null, gameDay, setGameDay, setup }) {
   const [quarter,       setQuarterRaw]    = useState(1);
   const [injuryAlerts,  setInjuryAlerts]  = useState([]);
   const [justRegenned,  setJustRegenned]  = useState(false);
@@ -1650,13 +1408,13 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
   const applyDragRef = useRef(() => {});
   const drag = usePitchDrag(result => applyDragRef.current(result));
 
-  // When format changes, reset to a valid strategy for the new player count
+  // When the player count or goalkeeper flag changes, reset to a valid shape
   useEffect(() => {
-    const templates = FORMATION_TEMPLATES[format] || [];
+    const templates = shapesFor(format, !!setup?.gk, setup?.slots || []);
     if (templates.length === 0) return;
     const stillValid = templates.some(t => t.name === activeFormation);
     if (!stillValid) setActiveFormation(templates[0].name);
-  }, [format]);
+  }, [format, setup?.gk, setup?.playersOnField]);
 
   // Roster helpers exposed inside the Play Time tracker
   const updatePlayer = (p) => setPlayers(prev => prev.map(x => x.id === p.id ? p : x));
@@ -1706,18 +1464,25 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
   const [showShare, setShowShare] = useState(false);
   const shareCanvasRef = useRef(null);
 
-  const totalQuarters = 4;
-  const rule   = PLAY_TIME_RULES[league] || { minFraction: 0, note: "" };
-  const minQ   = minQuarters(rule.minFraction, totalQuarters);
+  const totalQuarters = setup?.periods || 4;
+  useEffect(() => {
+    if (quarter > totalQuarters) setQuarterRaw(totalQuarters);
+  }, [quarter, totalQuarters]);
+  const periodList = Array.from({ length: totalQuarters }, (_, i) => i + 1);
+  const abbr = setup?.periodAbbrev || "Q";
+  const noun = setup?.periodNoun || "quarters";
+  const nounOne = setup?.periodNounOne || "quarter";
+  const minQ   = minQuarters(setup?.minFraction ?? 0.5, totalQuarters);
 
   const currentLineup  = lineupsByQuarter[quarter] || null;
   const active         = players.filter(p => !p.injured && !p.out);
-  const needed         = (POSITIONS_BY_FORMAT[format] || []).length;
+  const planSlotsNow  = setup?.slots?.length ? setup.slots : defaultSlots(playersFromFormat(format) || 7, true);
+  const needed         = planSlotsNow.length;
   const midGameInjured = players.filter(p => p.midGameInjury);
-  const allPlanned     = [1,2,3,4].every(q => !!lineupsByQuarter[q]);
+  const allPlanned     = periodList.every(q => !!lineupsByQuarter[q]);
   const gate           = feasibility({ activeCount: active.length, slotsPerPeriod: needed, minQ, periods: totalQuarters, subMode });
 
-  const periodMin = Number(quarterMinutes) > 0 ? Number(quarterMinutes) : ((LEAGUE_RULES[league] || {}).periodMin || 10);
+  const periodMin = Number(quarterMinutes) > 0 ? Number(quarterMinutes) : (setup?.periodMinutes || 10);
   useEffect(() => {
     const half = periodMin * 30;
     if (half <= 0) return undefined;
@@ -1743,7 +1508,7 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
   }, [running, periodMin, clockSec >= periodMin * 30]);
   const minHalves = minQ * 2;
   const halvesFor = (id, lineups = lineupsByQuarter, credit = appearanceCredit, segments = subSegments) =>
-    equityHalves(id, { lineups, segments, credit, quarters: [1, 2, 3, 4] });
+    equityHalves(id, { lineups, segments, credit, quarters: periodList });
 
   const violations = allPlanned && minQ > 0
     ? players.filter(p => !p.injured && !p.out && !p.midGameInjury && halvesFor(p.id) < minHalves)
@@ -1827,7 +1592,7 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
     setScrambleNote(null);
     setSwapSel(null);
     const viol = roster.filter(p => !p.injured && !p.out && !p.midGameInjury && minQ > 0 && halvesFor(p.id, nextLineups, credit, segments) < minHalves);
-    const complete = [1,2,3,4].every(q => nextLineups?.[q]);
+    const complete = periodList.every(q => nextLineups?.[q]);
     if (viol.length === 0 && complete) {
       setJustRegenned(true);
       setTimeout(() => setJustRegenned(false), 2500);
@@ -1837,7 +1602,7 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
   };
 
   const warnIfShort = (nextLineups, roster = players, credit = appearanceCredit, segments = subSegments) => {
-    const unplanned = [1,2,3,4].filter(q => !nextLineups?.[q]).length;
+    const unplanned = periodList.filter(q => !nextLineups?.[q]).length;
     const short = roster.filter(p => {
       if (p.injured || p.out || p.midGameInjury || minQ <= 0) return false;
       const halves = halvesFor(p.id, nextLineups, credit, segments);
@@ -1848,7 +1613,7 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
         const halves = halvesFor(p.id, nextLineups, credit, segments);
         return `${p.name.split(" ")[0]} ${formatQuarterEquity(halves)}/${minQ}`;
       }).join(", ");
-      setFairWarn(`${names} would finish under ${minQ} of ${totalQuarters} quarters. A split counts as half. Other quarters were not changed.`);
+      setFairWarn(`${names} would finish under ${minQ} of ${totalQuarters} ${noun}. A split counts as half. Other ${noun} were not changed.`);
     } else {
       setFairWarn(null);
     }
@@ -1887,8 +1652,8 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
     }
     const nextSegments = fromQ === 1 ? {} : clearSubSegmentsFrom(subSegments, fromQ);
     if (fromQ > 1) setSubSegments(nextSegments);
-    const formatSlots = POSITIONS_BY_FORMAT[format] || POSITIONS_BY_FORMAT["7v7"];
-    const chosenShape = (FORMATION_TEMPLATES[format] || []).find(t => t.name === activeFormation);
+    const formatSlots = planSlotsNow;
+    const chosenShape = shapesFor(format, !!setup?.gk, formatSlots).find(t => t.name === activeFormation);
     const planSlots = chosenShape?.slots?.length === formatSlots.length ? chosenShape.slots : formatSlots;
     const creditForPlan = fromQ === 1 ? {} : appearanceCredit;
     if (subMode) {
@@ -1897,6 +1662,7 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
         fromQuarter: fromQ,
         lockedLineups: locked,
         lockedSegments: nextSegments,
+        totalQuarters,
         rate: getOverallRating,
       });
       setSubSegments(planned.segments);
@@ -1916,6 +1682,8 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
       nextSegments,
       creditForPlan,
       planSlots,
+      totalQuarters,
+      setup?.minFraction ?? 0.5,
     );
     notePlanResult(result, players, creditForPlan, nextSegments);
     if (fromQ !== 1 && fromQ === quarter && running) {
@@ -1933,8 +1701,8 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
   };
 
   const planSlotsFor = () => {
-    const formatSlots = POSITIONS_BY_FORMAT[format] || POSITIONS_BY_FORMAT["7v7"];
-    const chosenShape = (FORMATION_TEMPLATES[format] || []).find(t => t.name === activeFormation);
+    const formatSlots = planSlotsNow;
+    const chosenShape = shapesFor(format, !!setup?.gk, formatSlots).find(t => t.name === activeFormation);
     return chosenShape?.slots?.length === formatSlots.length ? chosenShape.slots : formatSlots;
   };
 
@@ -1980,6 +1748,7 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
         minHalves,
         subMode,
         rate: getOverallRating,
+        totalQuarters,
       });
       let segments = planned.segments;
       if (wasOn && live) segments = noteSubSegment(segments, playerId, quarter, "left");
@@ -2032,6 +1801,7 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
         minHalves,
         subMode,
         rate: getOverallRating,
+        totalQuarters,
       });
       setSubSegments(planned.segments);
       notePlanResult(planned.lineups, updatedPlayers, appearanceCredit, planned.segments);
@@ -2046,7 +1816,7 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
 
   const gkLocked = () => subMode || running || (clockRef.current || 0) > 0;
   const refuseGoalkeeper = () => {
-    setQueueNote(GK_FULL_QUARTER_REASON);
+    setQueueNote(setup?.gkReason || GK_FULL_QUARTER_REASON);
     setSwapSel(null);
     return true;
   };
@@ -2419,21 +2189,21 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
     return playCellKind({ onField: status === "on", segment: segmentAt(subSegments, playerId, q) });
   };
   const quarterStory = (playerId) => {
-    const bits = [1, 2, 3, 4].map(q => {
+    const bits = periodList.map(q => {
       const lineup = lineupsByQuarter[q];
       if (!lineup) return null;
       const on = lineup.starters.some(slot => slot.player?.id === playerId);
       const kind = playCellKind({ onField: on, segment: segmentAt(subSegments, playerId, q) });
-      if (kind === "full") return `Q${q} full quarter`;
-      if (kind === "partial-on") return `Q${q} came on mid-quarter`;
-      if (kind === "partial-off") return `Q${q} played, then off`;
+      if (kind === "full") return `${abbr}${q} full ${nounOne}`;
+      if (kind === "partial-on") return `${abbr}${q} came on mid-${nounOne}`;
+      if (kind === "partial-off") return `${abbr}${q} played, then off`;
       return null;
     }).filter(Boolean);
-    if (!bits.length) return "Still on the bench. A box turns green once they are on the field. The count is still quarters, not minutes.";
-    return `${bits.join(". ")}. A full quarter counts as 1. A split counts as half. Minimum is ${minQ} of ${totalQuarters}.`;
+    if (!bits.length) return `Still on the bench. A box turns green once they are on the field. The count is still ${noun}, not minutes.`;
+    return `${bits.join(". ")}. A full ${nounOne} counts as 1. A split counts as half. Minimum is ${minQ} of ${totalQuarters}.`;
   };
 
-  const formationTemplates = FORMATION_TEMPLATES[format] || [];
+  const formationTemplates = shapesFor(format, !!setup?.gk, planSlotsNow);
   const activeStrategy = formationTemplates.find(t => t.name === activeFormation) || formationTemplates[0] || null;
   const applyFormation = (name) => {
     const tmpl = formationTemplates.find(t => t.name === name) || formationTemplates[0];
@@ -2497,11 +2267,13 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
       subMode,
       format,
       league,
+      periods: totalQuarters,
+      periodType: setup?.periodType || "quarters",
       lineups: lineupsByQuarter,
       savedAt: new Date().toISOString(),
       sheets: {
-        field: shareFieldSheet(sheetInput),
-        playTime: sharePlayTimeSheet(sheetInput),
+        field: shareFieldSheet({ ...sheetInput, quarters: periodList, periodAbbrev: abbr }),
+        playTime: sharePlayTimeSheet({ ...sheetInput, quarters: periodList, periodAbbrev: abbr }),
       },
     });
     setGames(prev => upsertGameLog(prev, entry));
@@ -2512,7 +2284,7 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
   const allTrackedPlayers = [...active, ...midGameInjured];
   const rotationGrid = allTrackedPlayers.map(p => ({
     player: p,
-    quarters: [1,2,3,4].map(q => {
+    quarters: periodList.map(q => {
       const lineup = lineupsByQuarter[q];
       if (!lineup) return "unplanned";
       const presence = playerQuarterPresence(lineup, p.id);
@@ -2520,7 +2292,7 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
       if (presence === "blank") return "blank";
       return "bench";
     }),
-    totalPlanned: [1,2,3,4].filter(q => {
+    totalPlanned: periodList.filter(q => {
       const l = lineupsByQuarter[q];
       return l && l.starters.some(s => s.player?.id === p.id);
     }).length,
@@ -2533,22 +2305,22 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
         margin: "0 0 12px", padding: "8px 0 10px",
         background: C.bg,
       }}>
-        <div style={{fontSize:10, color:C.muted, fontWeight:800, letterSpacing:"0.06em", textTransform:"uppercase", marginBottom:6}}>Quarter</div>
+        <div style={{fontSize:10, color:C.muted, fontWeight:800, letterSpacing:"0.06em", textTransform:"uppercase", marginBottom:6}}>{nounOne}</div>
         <div style={{display:"flex", border:`1px solid ${C.border}`, borderRadius:10, overflow:"hidden", background:"rgba(255,255,255,0.02)"}}>
-          {[1,2,3,4].map(q => {
+          {periodList.map(q => {
             const hasLineup = !!lineupsByQuarter[q];
             const hasInjury = midGameInjured.some(p => p.injuredInQuarter === q);
             const selected = quarter === q;
             return (
               <button key={q} onClick={() => setQuarter(q)} style={{
                 flex:1, minHeight:48, border:"none", cursor:"pointer",
-                borderRight: q < 4 ? `1px solid ${C.border}` : "none",
+                borderRight: q < totalQuarters ? `1px solid ${C.border}` : "none",
                 fontWeight:800, fontSize:16, fontFamily:"inherit",
                 background: selected ? "rgba(232,160,32,0.16)" : "transparent",
                 color: selected ? C.gold : C.text,
                 boxShadow: selected ? "inset 0 -3px 0 #e8a020" : "none",
               }}>
-                Q{q}
+                {abbr}{q}
                 {hasLineup && (
                   <span style={{display:"block", fontSize:9, lineHeight:1.1, marginTop:2, color:hasInjury?"#e74c3c":C.muted, fontWeight:700}}>
                     {hasInjury ? "inj" : "set"}
@@ -2673,7 +2445,7 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
           borderRadius:9, padding:"10px 14px", marginBottom:14,
           fontSize:12, color:"#2ecc71", fontWeight:600,
         }}>
-          All 4 quarters planned. Every eligible player has at least {minQ} of {totalQuarters} quarters on the field.
+          All {totalQuarters} {noun} planned. Every eligible player has at least {minQ} of {totalQuarters} {noun} on the field.
         </div>
       )}
 
@@ -2754,12 +2526,12 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
             </Btn>
             <div style={{fontSize:11,color:C.muted,lineHeight:1.45,marginBottom:allPlanned?10:0}}>
               {subMode
-                ? `Sub mode fills Q1–Q4 in halves. Target is ${minHalves} of 8. Sit time is spread so two halves off in a row is avoided when the bench can come straight back on.`
-                : `Full quarters. Target is ${minQ} of ${totalQuarters}. Half swaps stay off.`}
+                ? `Sub mode fills ${abbr}1–${abbr}${totalQuarters} in halves. Target is ${minHalves} of ${totalQuarters * 2}. Sit time is spread so two halves off in a row is avoided when the bench can come straight back on.`
+                : `Full ${noun}. Target is ${minQ} of ${totalQuarters}. Half swaps stay off.`}
             </div>
             {allPlanned && (
               <Btn secondary full disabled={!gate.ok} onClick={() => planWholeGame(quarter)}>
-                Replan Q{quarter}–Q4{quarter>1?` · keep Q1–Q${quarter-1}`:""}
+                Replan {abbr}{quarter}–{abbr}{totalQuarters}{quarter>1?` · keep ${abbr}1–${abbr}${quarter-1}`:""}
               </Btn>
             )}
           </Card>
@@ -2776,7 +2548,7 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
               }
             </div>
             <div style={{fontSize:11,color:C.muted,lineHeight:1.45,marginBottom:8}}>
-              Solid green is one quarter. A split box is half a quarter. Gray is the bench. Minimum is {minQ} of {totalQuarters} quarters, which is {minHalves} halves.
+              Solid green is one {nounOne}. A split box is half a {nounOne}. Gray is the bench. Minimum is {minQ} of {totalQuarters} {noun}, which is {minHalves} halves.
             </div>
             <div style={{display:"flex",gap:10,marginBottom:10,flexWrap:"wrap"}}>
               {[
@@ -2944,7 +2716,7 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
                     {!isEditing && (
                       <>
                         <div style={{display:"flex",gap:4,marginBottom:4}}>
-                          {[1,2,3,4].map(q => {
+                          {periodList.map(q => {
                             const entry = rotationGrid.find(r=>r.player.id===p.id);
                             const status = entry ? entry.quarters[q-1] : "unplanned";
                             const kind = cellKind(p.id, q, status);
@@ -3382,7 +3154,7 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
         {midGameInjured.length > 0 && (
           <div style={{fontSize:11,color:"#e74c3c",marginTop:3}}> {midGameInjured.length} mid-game injur{midGameInjured.length>1?"ies":"y"}</div>
         )}
-        {minQ > 0 && <div style={{fontSize:11,color:C.muted,marginTop:3}}>Min: {minQ} of {totalQuarters} quarters ({minHalves} halves, {Math.round(rule.minFraction*100)}%). A split counts as half.</div>}
+        {minQ > 0 && <div style={{fontSize:11,color:C.muted,marginTop:3}}>Min: {minQ} of {totalQuarters} {noun} ({minHalves} halves, {Math.round((setup?.minFraction ?? 0.5)*100)}%). A split counts as half.</div>}
       </Card>
 
       {/* Share Lineup Modal */}
@@ -3395,7 +3167,8 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
           segments={subSegments}
           credit={appearanceCredit}
           minQ={minQ}
-          quarter={quarter}
+          quarters={periodList}
+          periodAbbrev={abbr}
           homeScore={homeScore}
           awayScore={awayScore}
           opponent={opponent}
@@ -3448,14 +3221,14 @@ function SheetCanvases({ field, playTime, league, opponent, homeScore, awayScore
   );
 }
 
-function ShareLineupModal({ players, lineupsByQuarter, pairPlan, subMode, segments, credit, minQ, homeScore, awayScore, opponent, league, onClose }) {
+function ShareLineupModal({ players, lineupsByQuarter, pairPlan, subMode, segments, credit, minQ, quarters = [1, 2, 3, 4], periodAbbrev = "Q", homeScore, awayScore, opponent, league, onClose }) {
   const field = useMemo(
-    () => shareFieldSheet({ lineups: lineupsByQuarter, pairPlan, subMode }),
-    [lineupsByQuarter, pairPlan, subMode],
+    () => shareFieldSheet({ lineups: lineupsByQuarter, pairPlan, subMode, quarters, periodAbbrev }),
+    [lineupsByQuarter, pairPlan, subMode, quarters, periodAbbrev],
   );
   const playTime = useMemo(
-    () => sharePlayTimeSheet({ players, lineups: lineupsByQuarter, segments, credit, minQ }),
-    [players, lineupsByQuarter, segments, credit, minQ],
+    () => sharePlayTimeSheet({ players, lineups: lineupsByQuarter, segments, credit, minQ, quarters, periodAbbrev }),
+    [players, lineupsByQuarter, segments, credit, minQ, quarters, periodAbbrev],
   );
   return (
     <div style={{position:"fixed",inset:0,zIndex:9999,background:"rgba(0,0,0,0.88)",
@@ -3474,7 +3247,7 @@ function ShareLineupModal({ players, lineupsByQuarter, pairPlan, subMode, segmen
         </div>
         <div style={{padding:"14px 16px",overflow:"auto"}}>
           <div style={{fontSize:11,color:"#7a7570",marginBottom:12,lineHeight:1.5}}>
-            Sheet 1 is the field for all four quarters, with the bench and dotted lines to who they sub for. Sheet 2 is the green play-time bars. Save strategy to game day keeps both in the Season log.
+            Sheet 1 is the field for every period, with the bench and dotted lines to who they sub for. Sheet 2 is the green play-time bars. Save strategy to game day keeps both in the Season log.
           </div>
           <SheetCanvases
             field={field}
@@ -3652,177 +3425,56 @@ function PlayerRow({ player, onUpdate, onRemove }) {
 // 
 // TAB: RULES
 // 
-function TabRules({ league, setLeague, setFormat }) {
-  const [view, setView] = useState("quick");
-  const r = LEAGUE_RULES[league] || LEAGUE_RULES["U10 / Wings"];
-
+function TabRules({ setup, onAgeChange }) {
   return (
     <div>
-      {/* SAY East badge */}
       <div style={{
         display:"flex",alignItems:"center",gap:10,marginBottom:14,
         background:"rgba(232,160,32,0.07)",border:"1px solid rgba(232,160,32,0.2)",
         borderRadius:10,padding:"10px 14px",
       }}>
         <div>
-          <div style={{fontSize:12,fontWeight:800,color:C.gold,letterSpacing:"0.06em"}}>SAY EAST CINCINNATI - OFFICIAL RULES</div>
-          <div style={{fontSize:11,color:C.muted}}>Source: SAY East Playing Laws Rulebook (Updated Jan 2026) - Silver Matrix age chart</div>
+          <div style={{fontSize:12,fontWeight:800,color:C.gold,letterSpacing:"0.06em"}}>{setup.orgLabel.toUpperCase()}</div>
+          <div style={{fontSize:11,color:C.muted}}>{setup.age} · {setup.durationLabel}{setup.gk ? " · goalkeeper" : " · no goalkeeper"}</div>
         </div>
       </div>
-
-      {/* Division selector */}
       <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:16}}>
-        {LEAGUES.map(l=>(
-          <button key={l} onClick={()=>{ setLeague(l); if(setFormat) setFormat(leagueDefaultFormat(l)); }} style={{
+        {AGES.map(age => (
+          <button key={age} onClick={() => onAgeChange(age)} style={{
             padding:"5px 13px",borderRadius:7,border:"none",cursor:"pointer",fontSize:12,fontWeight:600,fontFamily:"inherit",
-            background:league===l?`linear-gradient(135deg,${C.gold},${C.goldDark})`:C.surface,
-            color:league===l?"#0a0d0f":C.muted,
-            boxShadow:league===l?`0 2px 8px ${C.gold}44`:"none",
-          }}>{leagueShortLabel(l)}</button>
+            background:setup.age===age?`linear-gradient(135deg,${C.gold},${C.goldDark})`:C.surface,
+            color:setup.age===age?"#0a0d0f":C.muted,
+          }}>{age}</button>
         ))}
       </div>
-
-      {/* Division header */}
       <div style={{
         background:`linear-gradient(135deg,rgba(232,160,32,0.12),rgba(184,120,24,0.06))`,
         border:`1px solid rgba(232,160,32,0.25)`,
         borderRadius:12,padding:"14px 18px",marginBottom:16,
       }}>
-        <div style={{fontSize:18,fontWeight:800,color:C.gold,marginBottom:2}}>
-          {leagueShortLabel(league)}{r.divisionName ? `  ${r.divisionName}` : ""}
-        </div>
-        {r.ageRange && <div style={{fontSize:11,color:C.muted,marginBottom:10}}>{r.ageRange}</div>}
-
-        {/* Key spec badges */}
         <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
           {[
-            ["Format",   r.format || ""],
-            ["Ball",     `Size ${r.ballSize}`],
-            ["Field",    r.fieldLength ? `${r.fieldLength} x ${r.fieldWidth}` : ""],
-            ["Goals",    r.goalSize || ""],
-            ["Duration", r.periods === 4 ? `4 x ${r.periodMin} min quarters` : `2 x ${r.periodMin} min halves`],
-          ].map(([k,v])=>(
+            ["Players", `${setup.playersOnField} (${setup.format})`],
+            ["Goalkeeper", setup.gk ? "Yes" : "No"],
+            ["Clock", setup.durationLabel],
+            ["Ball", setup.ballSize ? `Size ${setup.ballSize}` : "Coach's choice"],
+          ].map(([k,v]) => (
             <div key={k} style={{background:"rgba(0,0,0,0.35)",borderRadius:7,padding:"5px 11px",fontSize:11}}>
               <span style={{color:C.muted}}>{k}: </span><span style={{color:C.text,fontWeight:700}}>{v}</span>
             </div>
           ))}
         </div>
-
-        {/* Rule flags row */}
-        <div style={{display:"flex",gap:8,flexWrap:"wrap",marginTop:8}}>
-          {[
-            ["Heading",      r.heading      ? "Allowed" : "Banned"],
-            ["Offside",      r.offside      ? "Full rule" : "None"],
-            ["Build-Out",    r.buildOut     ? "Active" : "Not used"],
-            ["Slide Tackle", r.slideTackle  ? "Allowed" : "Restricted"],
-            ["GK Punt",      r.gkPunt       ? "Allowed (SAY East)" : "Not allowed"],
-            ["Cards",        r.yellowRedCards ? "Full system" : "No cards"],
-          ].map(([k,v])=>(
-            <div key={k} style={{background:"rgba(0,0,0,0.25)",borderRadius:6,padding:"4px 9px",fontSize:11}}>
-              <span style={{color:C.muted}}>{k}: </span><span style={{color:C.text,fontWeight:600}}>{v}</span>
-            </div>
-          ))}
-        </div>
+        {setup.verified === false && (
+          <div style={{fontSize:12,color:C.gold,marginTop:10}}>Unverified default. The note says what the rulebook did not settle.</div>
+        )}
+        <div style={{fontSize:13,color:C.text,lineHeight:1.5,marginTop:12}}>{setup.note}</div>
+        {setup.gk && <div style={{fontSize:12,color:C.muted,lineHeight:1.45,marginTop:8}}>{setup.gkReason}</div>}
+        {setup.source && (
+          <a href={setup.source} target="_blank" rel="noreferrer" style={{display:"inline-block",marginTop:12,fontSize:12,color:C.gold}}>
+            Source
+          </a>
+        )}
       </div>
-
-      {/* View tabs */}
-      <div style={{display:"flex",gap:4,marginBottom:14}}>
-        {[["quick","Quick Reference"],["unknown","Easily Missed Rules"],["links","Official Links"]].map(([k,l])=>(
-          <button key={k} onClick={()=>setView(k)} style={{
-            padding:"6px 14px",borderRadius:7,border:"none",cursor:"pointer",fontSize:12,fontWeight:600,fontFamily:"inherit",
-            background:view===k?`linear-gradient(135deg,${C.gold},${C.goldDark})`:C.surface,
-            color:view===k?"#0a0d0f":C.muted,
-          }}>{l}</button>
-        ))}
-      </div>
-
-      {view==="quick" && (
-        <div>
-          {r.quickRules.map((rule,i)=>(
-            <div key={i} style={{
-              display:"flex",alignItems:"flex-start",gap:12,padding:"10px 14px",
-              marginBottom:6,borderRadius:9,
-              background: rule.important?"rgba(232,160,32,0.08)":C.surface,
-              border:`1px solid ${rule.important?"rgba(232,160,32,0.25)":C.border}`,
-            }}>
-              {rule.icon && <span style={{fontSize:18,lineHeight:1,flexShrink:0}}>{rule.icon}</span>}
-              <div style={{fontSize:13,color:rule.important?C.text:C.muted,fontWeight:rule.important?600:400}}>{rule.text}</div>
-              {rule.important && <div style={{marginLeft:"auto",fontSize:9,color:C.gold,fontWeight:700,flexShrink:0}}>KEY</div>}
-            </div>
-          ))}
-          {/* Min play time */}
-          <div style={{
-            display:"flex",alignItems:"flex-start",gap:12,padding:"10px 14px",
-            marginBottom:6,borderRadius:9,
-            background:"rgba(39,174,96,0.08)",border:"1px solid rgba(39,174,96,0.2)",
-          }}>
-            <div>
-              <div style={{fontSize:13,color:C.text,fontWeight:600}}>Min Play Time (SAY Rule 12)</div>
-              <div style={{fontSize:12,color:C.muted}}>{PLAY_TIME_RULES[league]?.note||"Check local rules"}</div>
-            </div>
-          </div>
-          {/* No blowout rule */}
-          <div style={{
-            display:"flex",alignItems:"flex-start",gap:12,padding:"10px 14px",
-            borderRadius:9,background:"rgba(211,84,0,0.06)",border:"1px solid rgba(211,84,0,0.2)",
-          }}>
-            <div>
-              <div style={{fontSize:13,color:C.text,fontWeight:600}}>No Blowout Rule (SAY East)</div>
-              <div style={{fontSize:12,color:C.muted}}>Winning by more than 5 goals is a violation. Coaches must have a plan to manage score - rotate, adjust tactics, avoid running up the score.</div>
-            </div>
-            <div style={{marginLeft:"auto",fontSize:9,color:C.warn,fontWeight:700,flexShrink:0}}>KEY</div>
-          </div>
-        </div>
-      )}
-
-      {view==="unknown" && (
-        <div>
-          <div style={{fontSize:12,color:C.muted,marginBottom:12,lineHeight:1.6}}>
-            Rules frequently misunderstood by coaches and parents in SAY East.
-          </div>
-          {(r.unknownRules||[]).map((rule,i)=>(
-            <div key={i} style={{
-              display:"flex",alignItems:"flex-start",gap:12,padding:"12px 14px",
-              marginBottom:8,borderRadius:9,background:C.surface,border:`1px solid ${C.border}`,
-            }}>
-              <div style={{
-                width:22,height:22,borderRadius:"50%",flexShrink:0,
-                background:`linear-gradient(135deg,${C.gold},${C.goldDark})`,
-                display:"flex",alignItems:"center",justifyContent:"center",
-                fontSize:11,fontWeight:700,color:"#0a0d0f"
-              }}>{i+1}</div>
-              <div style={{fontSize:13,color:C.text,lineHeight:1.6}}>{rule}</div>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {view==="links" && (
-        <div>
-          <div style={{fontSize:12,color:C.muted,marginBottom:12}}>
-            Official SAY East and SAY National rulebooks for {league}:
-          </div>
-          {(r.officialLinks||[]).map((link,i)=>(
-            <a key={i} href={link.url} target="_blank" rel="noopener noreferrer" style={{
-              display:"flex",alignItems:"center",gap:12,padding:"12px 16px",
-              marginBottom:8,borderRadius:9,
-              background:C.surface,border:`1px solid ${C.border}`,
-              textDecoration:"none",transition:"border-color 0.15s",
-            }}
-            onMouseEnter={e=>e.currentTarget.style.borderColor=C.gold}
-            onMouseLeave={e=>e.currentTarget.style.borderColor=C.border}>
-              <div style={{flex:1}}>
-                <div style={{fontSize:13,color:C.text,fontWeight:600}}>{link.label}</div>
-                <div style={{fontSize:11,color:C.muted,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{link.url}</div>
-              </div>
-              <span style={{color:C.gold,fontSize:14}}></span>
-            </a>
-          ))}
-          <div style={{fontSize:11,color:C.muted,marginTop:12,lineHeight:1.6,padding:"10px 14px",background:C.surface,borderRadius:8,border:`1px solid ${C.border}`}}>
-             Rules may vary by local league, state association, or competition. Always verify with your specific league administrator.
-          </div>
-        </div>
-      )}
     </div>
   );
 }
@@ -3843,16 +3495,16 @@ function TabDrills({ drills, league, addCustomDrill, removeCustomDrill }) {
   const [progInput,   setProgInput]   = useState("");
   const [equipInput,  setEquipInput]  = useState("");
 
-  const ageOrder = LEAGUES;
-  const leagueIdx = ageOrder.indexOf(league);
+  const ageOrder = AGES;
+  const leagueIdx = ageIndex(league);
 
   const filtered = drills.filter(d => {
     if (catFilter!=="All" && d.category!==catFilter) return false;
     if (skillFilter!=="All" && !d.skills.includes(skillFilter)) return false;
     if (diffFilter!=="All" && d.difficulty!==diffFilter) return false;
     if (ageFilter) {
-      const minI = ageOrder.indexOf(d.ageMin||"U6");
-      const maxI = ageOrder.indexOf(d.ageMax||"Adult");
+      const minI = ageIndex(d.ageMin || "U6");
+      const maxI = d.ageMax ? ageIndex(d.ageMax) : AGES.length - 1;
       if (leagueIdx < minI || leagueIdx > maxI) return false;
     }
     if (search && !d.name.toLowerCase().includes(search.toLowerCase()) && !d.skills.join(" ").toLowerCase().includes(search.toLowerCase())) return false;
@@ -4177,8 +3829,8 @@ function TabPractice({ drills, league }) {
   const [swapDrill,  setSwapDrill]  = useState(null);
   const [modalDrill, setModalDrill] = useState(null);
 
-  const isYoung = LEAGUES.indexOf(league) <= 1; // U6, U8
-  const level = LEAGUES.indexOf(league) <= 2 ? "Beginner" : LEAGUES.indexOf(league) <= 4 ? "Intermediate" : "Advanced";
+  const isYoung = ageNumber(league) <= 8;
+  const level = ageNumber(league) <= 10 ? "Beginner" : ageNumber(league) <= 14 ? "Intermediate" : "Advanced";
 
   const generate = () => {
     const sections = generatePractice(league, focus, skills, duration, drills);
@@ -4197,8 +3849,8 @@ function TabPractice({ drills, league }) {
 
   const toggleSkill = s => setSkills(prev => prev.includes(s)?prev.filter(x=>x!==s):[...prev,s]);
 
-  const ageOrder = LEAGUES;
-  const leagueIdx = ageOrder.indexOf(league);
+  const ageOrder = AGES;
+  const leagueIdx = ageIndex(league);
 
   return (
     <div>
@@ -4290,8 +3942,8 @@ function TabPractice({ drills, league }) {
                         <div style={{fontSize:11,color:C.gold,marginBottom:6,fontWeight:700}}>Swap drill:</div>
                         <div style={{maxHeight:180,overflowY:"auto"}}>
                           {drills.filter(d=>{
-                            const minI=ageOrder.indexOf(d.ageMin||"U6");
-                            const maxI=ageOrder.indexOf(d.ageMax||"Adult");
+                            const minI=ageIndex(d.ageMin||"U6");
+                            const maxI=d.ageMax ? ageIndex(d.ageMax) : AGES.length - 1;
                             return leagueIdx>=minI && leagueIdx<=maxI && d.id!==sec.drill.id;
                           }).map(d=>(
                             <div key={d.id} onClick={()=>swapDrillInPlan(i,d)}
@@ -4452,12 +4104,17 @@ function CoachKitLoaded() {
   const pfx = user?.id ? `ck_${user.id}_` : "ck_guest_";
 
   const [tab,             setTab]             = useState("game");
-  const [league,          setLeague]          = usePersistedState(pfx+"league", "U8 / Passers");
+  const [league,          setLeague]          = usePersistedState(pfx+"league", "U8");
   const [subMode,         setSubMode]         = usePersistedState(pfx+"subMode", true);
   const [autoRegen,       setAutoRegen]       = usePersistedState(pfx+"autoRegen", true);
   const [quarterMinutes,  setQuarterMinutes]  = usePersistedState(pfx+"quarterMinutes", null);
+  const [org,             setOrg]             = usePersistedState(pfx+"org", null);
+  const [gkSetting,       setGkSetting]       = usePersistedState(pfx+"gk", null);
+  const [periodsSetting,  setPeriodsSetting]  = usePersistedState(pfx+"periods", null);
+  const [saySeason,       setSaySeason]       = usePersistedState(pfx+"saySeason", "fall");
+  const [customRule,      setCustomRule]      = usePersistedState(pfx+"customRule", null);
   const [settingsOpen,    setSettingsOpen]    = useState(false);
-  const [format,          setFormat]          = usePersistedState(pfx+"format", "6v6");
+  const [format,          setFormat]          = usePersistedState(pfx+"format", "4v4");
   const [lineupsByQuarter,setLineupsByQuarter]= usePersistedState(pfx+"lineups", {});
 
   const [teamName,           setTeamName]          = usePersistedState(pfx+"teamName",     "");
@@ -4499,10 +4156,15 @@ function CoachKitLoaded() {
       if (typeof snap.settings.subMode === "boolean") setSubMode(snap.settings.subMode);
       if (typeof snap.settings.autoRegen === "boolean") setAutoRegen(snap.settings.autoRegen);
       if ("quarterMinutes" in snap.settings) setQuarterMinutes(snap.settings.quarterMinutes);
+      if ("org" in snap.settings) setOrg(snap.settings.org || null);
+      if ("gk" in snap.settings) setGkSetting(typeof snap.settings.gk === "boolean" ? snap.settings.gk : null);
+      if ("periods" in snap.settings) setPeriodsSetting(snap.settings.periods || null);
+      if (snap.settings.saySeason === "spring" || snap.settings.saySeason === "fall") setSaySeason(snap.settings.saySeason);
+      if ("custom" in snap.settings) setCustomRule(snap.settings.custom || null);
     }
     if (snap.gameDay && typeof snap.gameDay === "object") setGameDay(normalizeGameDay(snap.gameDay));
     if (Array.isArray(snap.schedule)) setSchedule(snap.schedule);
-  }, [setTeamName, setLeague, setFormat, setPlayers, setLineupsByQuarter, setCustomDrills, setPlayerStats, setGames, setPracticeDates, setPracticeAttendance, setSubMode, setAutoRegen, setQuarterMinutes, setGameDay, setSchedule]);
+  }, [setTeamName, setLeague, setFormat, setPlayers, setLineupsByQuarter, setCustomDrills, setPlayerStats, setGames, setPracticeDates, setPracticeAttendance, setSubMode, setAutoRegen, setQuarterMinutes, setOrg, setGkSetting, setPeriodsSetting, setSaySeason, setCustomRule, setGameDay, setSchedule]);
 
   const snapshot = useMemo(() => ({
     teamName,
@@ -4515,10 +4177,10 @@ function CoachKitLoaded() {
     games,
     practiceDates,
     practiceAttendance,
-    settings: { subMode, autoRegen, quarterMinutes },
+    settings: { subMode, autoRegen, quarterMinutes, org, gk: gkSetting, periods: periodsSetting, saySeason, custom: customRule },
     gameDay,
     schedule,
-  }), [teamName, league, format, players, lineupsByQuarter, customDrills, playerStats, games, practiceDates, practiceAttendance, subMode, autoRegen, quarterMinutes, gameDay, schedule]);
+  }), [teamName, league, format, players, lineupsByQuarter, customDrills, playerStats, games, practiceDates, practiceAttendance, subMode, autoRegen, quarterMinutes, org, gkSetting, periodsSetting, saySeason, customRule, gameDay, schedule]);
 
   const cloud = useTeamCloud({
     userId: user?.id || "",
@@ -4541,12 +4203,82 @@ function CoachKitLoaded() {
   const addCustomDrill    = d => setCustomDrills(prev=>[...prev,{...d,id:uid(),custom:true,image:null}]);
   const removeCustomDrill = id=> setCustomDrills(prev=>prev.filter(d=>d.id!==id));
 
-  const handleLeagueChange = l => {
-    setLeague(l);
-    setFormat(leagueDefaultFormat(l));   // auto-apply SAY East default; coach can still override
+  const setup = resolveSetup({
+    league,
+    format,
+    settings: { subMode, autoRegen, quarterMinutes, org, gk: gkSetting, periods: periodsSetting, saySeason, custom: customRule },
+  });
+
+  const applyOrgAge = (nextOrg, nextAge, nextSeason) => {
+    const season = nextSeason === "spring" ? "spring" : "fall";
+    setOrg(nextOrg);
+    setLeague(nextAge);
+    setSaySeason(season);
+    setGkSetting(null);
+    setPeriodsSetting(null);
+    setQuarterMinutes(null);
+    if (nextOrg !== "custom") setFormat(formatFromCount(tableRule(nextOrg, nextAge, season).playersOnField));
     setLineupsByQuarter({});
   };
-  const handleFormatChange = f => { setFormat(f); setLineupsByQuarter({}); };
+  const handleOrgChange = next => {
+    if (!next) return;
+    if (next === "custom") {
+      setCustomRule({
+        playersOnField: setup.playersOnField,
+        gk: setup.gk,
+        periods: setup.periods,
+        periodMinutes: setup.periodMinutes,
+      });
+      setOrg("custom");
+      setLeague(canonicalAge(league));
+      return;
+    }
+    applyOrgAge(next, canonicalAge(league), saySeason);
+  };
+  const handleAgeChange = age => {
+    if ((org || setup.orgId) === "custom") {
+      setOrg("custom");
+      setLeague(age);
+      return;
+    }
+    applyOrgAge(org || "us-soccer", age, saySeason);
+  };
+  const handleFormatChange = nextFormat => {
+    setFormat(nextFormat);
+    setLineupsByQuarter({});
+    if (org === "custom") {
+      setCustomRule(prev => ({ ...(prev || {}), playersOnField: playersFromFormat(nextFormat) || setup.playersOnField }));
+    }
+  };
+  const handleGkChange = on => {
+    if (org === "custom") {
+      setCustomRule(prev => ({
+        ...(prev || {}),
+        playersOnField: setup.playersOnField,
+        periods: setup.periods,
+        periodMinutes: setup.periodMinutes,
+        gk: on,
+      }));
+    } else {
+      setGkSetting(on);
+    }
+    setLineupsByQuarter({});
+  };
+  const handlePeriodsChange = count => {
+    if (org === "custom") setCustomRule(prev => ({ ...(prev || {}), periods: count }));
+    else {
+      setPeriodsSetting(count);
+      setQuarterMinutes(null);
+    }
+    setLineupsByQuarter({});
+  };
+  const handleSeasonChange = season => applyOrgAge("say-east", canonicalAge(league), season);
+  const handleMinutes = value => {
+    setQuarterMinutes(value);
+    if (org === "custom") {
+      setCustomRule(prev => ({ ...(prev || {}), periodMinutes: value || setup.periodMinutes }));
+    }
+  };
 
   return (
     <div style={{
@@ -4653,26 +4385,28 @@ function CoachKitLoaded() {
             {cloud.error}
           </div>
         )}
-        {tab==="game"     && <TabGame     format={format} league={league} players={players} setPlayers={setPlayers} addPlayer={addPlayer} removePlayer={removePlayer} lineupsByQuarter={lineupsByQuarter} setLineupsByQuarter={setLineupsByQuarter} storagePrefix={pfx} setGames={setGames} subMode={subMode} autoRegen={autoRegen} quarterMinutes={quarterMinutes} gameDay={gameDay} setGameDay={setGameDay}/>}
+        {tab==="game"     && <TabGame     format={format} league={league} players={players} setPlayers={setPlayers} addPlayer={addPlayer} removePlayer={removePlayer} lineupsByQuarter={lineupsByQuarter} setLineupsByQuarter={setLineupsByQuarter} storagePrefix={pfx} setGames={setGames} subMode={subMode} autoRegen={autoRegen} quarterMinutes={quarterMinutes} gameDay={gameDay} setGameDay={setGameDay} setup={setup}/>}
         <GameSettings
           open={settingsOpen}
           onClose={() => setSettingsOpen(false)}
           subMode={subMode}
           onSubMode={setSubMode}
-          league={league}
-          onLeagueChange={handleLeagueChange}
-          format={format}
+          setup={setup}
+          onOrgChange={handleOrgChange}
+          onAgeChange={handleAgeChange}
           onFormatChange={handleFormatChange}
+          onGkChange={handleGkChange}
+          onPeriodsChange={handlePeriodsChange}
+          onSeasonChange={handleSeasonChange}
           autoRegen={autoRegen}
           onAutoRegen={setAutoRegen}
           quarterMinutes={quarterMinutes}
-          onQuarterMinutes={setQuarterMinutes}
-          leagueMinutes={(LEAGUE_RULES[league] || {}).periodMin || 10}
-          fairPlayLabel={`Fair-play target: ${minQuarters((PLAY_TIME_RULES[league] || {}).minFraction || 0, 4)} of 4 quarters (${minQuarters((PLAY_TIME_RULES[league] || {}).minFraction || 0, 4) * 2} halves).`}
+          onQuarterMinutes={handleMinutes}
+          fairPlayLabel={`Fair-play target: ${minQuarters(setup.minFraction, setup.periods)} of ${setup.periods} ${setup.periodNoun} (${minQuarters(setup.minFraction, setup.periods) * 2} halves).`}
         />
         {tab==="season"   && <TabSeason   players={players} playerStats={playerStats} setPlayerStats={setPlayerStats} games={games} setGames={setGames} practiceDates={practiceDates} setPracticeDates={setPracticeDates} practiceAttendance={practiceAttendance} setPracticeAttendance={setPracticeAttendance}/>}
         {tab==="team"     && <TabTeam     players={players} updatePlayer={updatePlayer} league={league} games={games} cloud={cloud} clerkUserId={user?.id || ""} schedule={schedule} setSchedule={setSchedule}/>}
-        {tab==="rules"    && <TabRules    league={league} setLeague={setLeague} setFormat={setFormat}/>}
+        {tab==="rules"    && <TabRules    setup={setup} onAgeChange={handleAgeChange}/>}
         {tab==="drills"   && <TabDrills   drills={allDrills} league={league} addCustomDrill={addCustomDrill} removeCustomDrill={removeCustomDrill}/>}
         {tab==="practice" && <TabPractice drills={allDrills} league={league}/>}
       </div>
@@ -4878,9 +4612,10 @@ function TabSeason({ players, playerStats, setPlayerStats, games, setGames, prac
                   )}
                   {!sheets && g.strategy?.lineups && (
                     <div style={{fontSize:11, color:C.muted, lineHeight:1.45, marginTop:4}}>
-                      {[1, 2, 3, 4].filter(q => g.strategy.lineups[q]).map(q => {
+                      {Object.keys(g.strategy.lineups).map(Number).filter(q => q >= 1).sort((a, b) => a - b).map(q => {
                         const names = (g.strategy.lineups[q].starters || []).map(slot => slot.player?.name?.split(" ")[0]).filter(Boolean);
-                        return <div key={q}>Q{q}: {names.join(", ") || "open spots"}</div>;
+                        const mark = g.strategy.periodType === "halves" ? "H" : g.strategy.periodType === "periods" ? "P" : "Q";
+                        return <div key={q}>{mark}{q}: {names.join(", ") || "open spots"}</div>;
                       })}
                     </div>
                   )}

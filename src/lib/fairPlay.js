@@ -25,9 +25,10 @@ export function feasibility({ activeCount, slotsPerPeriod, minQ, periods = TOTAL
   } else if (slotsPerPeriod <= 0) {
     reason = "Pick a format so the field has spots to fill.";
   } else if (demand > supply) {
+    const noun = periods === 2 ? "halves" : periods === 3 ? "periods" : "quarters";
     reason = subMode
       ? `${activeCount} active players × ${minQ * 2} halves = ${halfDemand}, but ${slotsPerPeriod} spots × ${periods * 2} halves = ${halfSupply}. Sit players out or use a larger format. Fair play cannot be guaranteed.`
-      : `${activeCount} active players × ${minQ} quarters = ${demand} required appearances, but ${slotsPerPeriod} spots × ${periods} quarters = ${supply}. Sit players out or use a larger format. Fair play cannot be guaranteed.`;
+      : `${activeCount} active players × ${minQ} ${noun} = ${demand} required appearances, but ${slotsPerPeriod} spots × ${periods} ${noun} = ${supply}. Sit players out or use a larger format. Fair play cannot be guaranteed.`;
   }
   return {
     ok: reason === "",

@@ -33,12 +33,12 @@ import {
   sharePlayTimeSheet,
   playerHalfMask,
   maxConsecutiveSits,
+  goalkeeperId,
   scheduleHalfRotation,
   gameLogFromStrategy,
   upsertGameLog,
   playerQuarterPresence,
   regenerateForAbsence,
-  goalkeeperId,
 } from "./gameDay.js";
 
 test("appearance credit stacks on lineup quarters and banked minutes are not replaced", () => {
@@ -551,4 +551,50 @@ test("full-quarter injury refills the open slot and stays blank until the return
   assert.equal(playerQuarterPresence(back.lineups[1], "gone"), "blank");
   assert.notEqual(playerQuarterPresence(back.lineups[3], "gone"), "blank");
   assert.equal(back.lineups[3].starters[0].player.id, "keep");
+});
+
+test("a two-period game keeps the goalkeeper for both halves of each period", () => {
+  const players = halfRoster(8);
+  const slots = ["GK", "LD", "RD", "LM", "RM", "CF"];
+  const { lineups, segments } = scheduleHalfRotation(players, slots, {
+    minHalves: 2,
+    totalQuarters: 2,
+    rate: player => 10 - Number(player.id.slice(1)),
+  });
+  [1, 2].forEach(q => {
+    const gk = goalkeeperId(lineups[q]);
+    assert.ok(gk, `period ${q} has a goalkeeper`);
+    assert.equal(segments[gk]?.[q], undefined, `period ${q} goalkeeper is not swapped at the half`);
+  });
+  assert.equal(lineups[3], undefined);
+});
+
+test("a lineup with no goalkeeper slot does not assign one", () => {
+  const players = halfRoster(6);
+  const slots = ["LD", "RD", "LM", "RM"];
+  const { lineups } = scheduleHalfRotation(players, slots, {
+    minHalves: 2,
+    totalQuarters: 2,
+    rate: () => 1,
+  });
+  [1, 2].forEach(q => {
+    assert.equal(goalkeeperId(lineups[q]), null);
+    assert.equal(lineups[q].starters.some(slot => slot.pos === "GK"), false);
+    assert.equal(lineups[q].starters.length, 4);
+  });
+});
+
+test("a three-period plan returns lineups for periods 1, 2, and 3", () => {
+  const players = halfRoster(7);
+  const slots = ["GK", "LD", "RD", "LM", "RM", "CF"];
+  const { lineups } = scheduleHalfRotation(players, slots, {
+    minHalves: 3,
+    totalQuarters: 3,
+    rate: () => 1,
+  });
+  assert.ok(lineups[1]);
+  assert.ok(lineups[2]);
+  assert.ok(lineups[3]);
+  assert.equal(lineups[4], undefined);
+  assert.equal(Object.keys(lineups).sort().join(","), "1,2,3");
 });

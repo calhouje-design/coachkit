@@ -44,14 +44,33 @@ function sortBy(arr, key) {
   return [...(arr || [])].sort((a, b) => String(a?.[key] || "").localeCompare(String(b?.[key] || "")));
 }
 
+const ORG_IDS = new Set(["us-soccer", "say-east", "ohio", "custom"]);
+
+function normalizeCustom(value) {
+  if (!value || typeof value !== "object") return null;
+  return {
+    playersOnField: value.playersOnField == null ? null : Number(value.playersOnField),
+    gk: typeof value.gk === "boolean" ? value.gk : null,
+    periods: value.periods == null ? null : Number(value.periods),
+    periodMinutes: value.periodMinutes == null ? null : Number(value.periodMinutes),
+  };
+}
+
 export function normalizeSettings(value) {
   const src = value && typeof value === "object" ? value : {};
   const minutes = src.quarterMinutes;
   const parsed = Number(minutes);
+  const periods = Number(src.periods);
   return {
     subMode: src.subMode === undefined ? true : Boolean(src.subMode),
     autoRegen: src.autoRegen === undefined ? true : Boolean(src.autoRegen),
     quarterMinutes: minutes == null || minutes === "" || Number.isNaN(parsed) ? null : parsed,
+    // Missing org stays missing so an older saved team is not rewritten on load.
+    org: ORG_IDS.has(src.org) ? src.org : null,
+    gk: typeof src.gk === "boolean" ? src.gk : null,
+    periods: periods === 2 || periods === 3 || periods === 4 ? periods : null,
+    saySeason: src.saySeason === "spring" ? "spring" : "fall",
+    custom: normalizeCustom(src.custom),
   };
 }
 
@@ -131,6 +150,11 @@ export function snapshotFromStorage(get) {
       subMode: read("subMode", true),
       autoRegen: read("autoRegen", true),
       quarterMinutes: read("quarterMinutes", null),
+      org: read("org", null),
+      gk: read("gk", null),
+      periods: read("periods", null),
+      saySeason: read("saySeason", null),
+      custom: read("customRule", null),
     },
     gameDay: blob && typeof blob === "object" ? blob : legacy,
     schedule: read("schedule", []) || [],

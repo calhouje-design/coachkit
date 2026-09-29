@@ -1,7 +1,10 @@
 /** Game Day helpers for Round Two. Quarter fair-play stays the rule; minutes are a live gap on top of it. */
 
-/** The goalkeeper plays the whole quarter. See HARD_RULES.md. */
-export const GK_FULL_QUARTER_REASON = "The goalkeeper plays the whole quarter. Change goalkeepers between quarters.";
+/**
+ * The goalkeeper plays the whole period (a quarter, a half, or a third).
+ * A different goalkeeper is allowed only between periods. See HARD_RULES.md.
+ */
+export const GK_FULL_QUARTER_REASON = "The goalkeeper plays the whole period. Change goalkeepers between periods.";
 
 export function isGkPosition(pos) {
   return String(pos || "").trim().toUpperCase() === "GK";
@@ -290,7 +293,7 @@ export function fieldMarker(pos, indexAmongSame = 0, totalSame = 1) {
  * Sheet 1. Four quarters, each with the pitch markers, the bench, and the
  * dotted sub pairs. Full-quarter mode stores the bench and leaves pairs empty.
  */
-export function shareFieldSheet({ lineups, pairPlan, subMode = true, quarters = [1, 2, 3, 4] } = {}) {
+export function shareFieldSheet({ lineups, pairPlan, subMode = true, quarters = [1, 2, 3, 4], periodAbbrev = "Q" } = {}) {
   const panels = quarters.map(q => {
     const lineup = lineups?.[q] || lineups?.[String(q)] || null;
     const counts = {};
@@ -328,7 +331,7 @@ export function shareFieldSheet({ lineups, pairPlan, subMode = true, quarters = 
         outId: pair.outId,
       }));
     }
-    return { quarter: q, starters, bench, pairs };
+    return { quarter: q, label: `${periodAbbrev}${q}`, starters, bench, pairs };
   });
   return { subMode: !!subMode, quarters: panels };
 }
@@ -337,14 +340,23 @@ export function shareFieldSheet({ lineups, pairPlan, subMode = true, quarters = 
  * Sheet 2. One row per active player, with the same full / split / bench cells
  * as the Play Time chart.
  */
-export function sharePlayTimeSheet({ players, lineups, segments, credit, minQ = 2 } = {}) {
+export function sharePlayTimeSheet({
+  players,
+  lineups,
+  segments,
+  credit,
+  minQ = 2,
+  quarters = [1, 2, 3, 4],
+  periodAbbrev = "Q",
+} = {}) {
+  const periodList = quarters.length ? quarters : [1, 2, 3, 4];
   const minHalves = (Number(minQ) || 0) * 2;
   const rows = (players || [])
     .filter(player => player && !player.injured && !player.out)
     .slice()
     .sort((a, b) => String(a.name || "").localeCompare(String(b.name || "")))
     .map(player => {
-      const cells = [1, 2, 3, 4].map(q => {
+      const cells = periodList.map(q => {
         const lineup = lineups?.[q] || lineups?.[String(q)];
         if (!lineup) return { quarter: q, kind: "unplanned", pos: "" };
         const on = (lineup.starters || []).some(slot => slot.player?.id === player.id);
@@ -355,7 +367,7 @@ export function sharePlayTimeSheet({ players, lineups, segments, credit, minQ = 
           pos: slot?.pos || "",
         };
       });
-      const halves = equityHalves(player.id, { lineups, segments, credit, quarters: [1, 2, 3, 4] });
+      const halves = equityHalves(player.id, { lineups, segments, credit, quarters: periodList });
       return {
         id: player.id,
         name: player.name || "",
@@ -367,7 +379,7 @@ export function sharePlayTimeSheet({ players, lineups, segments, credit, minQ = 
         met: minHalves <= 0 || halves >= minHalves,
       };
     });
-  return { minQ, minHalves, rows };
+  return { minQ, minHalves, rows, periods: periodList.length, periodAbbrev };
 }
 
 /** Point on the circle closest to (x1, y1), so a connector stops on the rim. */
@@ -778,6 +790,8 @@ export function gameLogFromStrategy({
   lineups,
   savedAt,
   sheets,
+  periods,
+  periodType,
 } = {}) {
   return {
     id,
@@ -792,6 +806,8 @@ export function gameLogFromStrategy({
       subMode: !!subMode,
       format: format || "",
       league: league || "",
+      periods: periods || null,
+      periodType: periodType || "",
       lineups: lineups || {},
       savedAt: savedAt || "",
       sheets: sheets || null,

@@ -6,7 +6,7 @@ SAY East youth soccer manager. Vite + React. Sign-in is Clerk. Team data is stor
 
 Non-negotiable rules for every programming update are in [HARD_RULES.md](HARD_RULES.md).
 
-The goalkeeper plays a full quarter. No mid-quarter substitution for the goalkeeper. A new goalkeeper is allowed only between quarters.
+The goalkeeper plays a full period (a quarter, a third, or a half). No mid-period substitution for the goalkeeper. A new goalkeeper is allowed only between periods.
 
 Live production: https://coachkit-ten.vercel.app
 
