@@ -34,6 +34,8 @@ import {
   playerHalfMask,
   maxConsecutiveSits,
   goalkeeperId,
+  planAvailability,
+  returnToGame,
   scheduleHalfRotation,
   gameLogFromStrategy,
   upsertGameLog,
@@ -597,4 +599,301 @@ test("a three-period plan returns lineups for periods 1, 2, and 3", () => {
   assert.ok(lineups[3]);
   assert.equal(lineups[4], undefined);
   assert.equal(Object.keys(lineups).sort().join(","), "1,2,3");
+});
+
+function sheetFor(total, slots = ["GK", "LD", "RD", "LM", "RM", "CF"]) {
+  const players = halfRoster(8).map(player => ({ ...player, positions: ["GK", "LD", "RD", "LM", "RM", "CF"] }));
+  const planned = scheduleHalfRotation(players, slots, {
+    minHalves: total,
+    totalQuarters: total,
+    rate: player => 10 - Number(player.id.slice(1)),
+  });
+  return { players, slots, ...planned };
+}
+
+test("a late arrival is planned from that period forward and earlier periods stay", () => {
+  for (const total of [2, 3, 4]) {
+    const { players, slots, lineups } = sheetFor(total);
+    const gone = pullFromPlan(lineups, "p8", 1, total);
+    for (let boundary = 1; boundary <= total; boundary++) {
+      const arrived = planAvailability({
+        autoRegen: true,
+        kind: "return",
+        players: players.map(player => player.id === "p8" ? { ...player, out: false, injured: false } : player),
+        absentId: "p8",
+        quarter: boundary,
+        totalQuarters: total,
+        lineups: gone,
+        slots,
+        subMode: true,
+        minHalves: total,
+        livePeriod: false,
+      });
+      for (let q = 1; q < boundary; q++) {
+        assert.equal(arrived.lineups[q], gone[q], `${total} periods, before ${boundary}`);
+        assert.equal(playerQuarterPresence(arrived.lineups[q], "p8"), "blank");
+      }
+      assert.notEqual(playerQuarterPresence(arrived.lineups[boundary], "p8"), "blank", `p8 missing at ${boundary} of ${total}`);
+      assert.ok(arrived.lineups[total]);
+      assert.equal(arrived.lineups[total + 1], undefined);
+    }
+  }
+});
+
+test("marking a player out rebuilds from the current period and leaves completed periods", () => {
+  const { players, slots, lineups } = sheetFor(4);
+  const out = planAvailability({
+    autoRegen: true,
+    kind: "absent",
+    players: players.map(player => player.id === "p3" ? { ...player, out: true } : player),
+    absentId: "p3",
+    quarter: 3,
+    totalQuarters: 4,
+    lineups,
+    slots,
+    subMode: true,
+    minHalves: 4,
+    livePeriod: true,
+  });
+  assert.equal(out.lineups[1], lineups[1]);
+  assert.equal(out.lineups[2], lineups[2]);
+  assert.equal(playerQuarterPresence(out.lineups[3], "p3"), "blank");
+  assert.equal(playerQuarterPresence(out.lineups[4], "p3"), "blank");
+});
+
+test("an injured player who returns is restored from the current period only", () => {
+  const { players, slots, lineups } = sheetFor(4);
+  const hurt = planAvailability({
+    autoRegen: true,
+    kind: "absent",
+    players: players.map(player => player.id === "p4" ? { ...player, injured: true } : player),
+    absentId: "p4",
+    quarter: 2,
+    totalQuarters: 4,
+    lineups,
+    slots,
+    subMode: true,
+    minHalves: 4,
+  });
+  assert.equal(hurt.lineups[1], lineups[1]);
+  assert.equal(playerQuarterPresence(hurt.lineups[2], "p4"), "blank");
+  const back = planAvailability({
+    autoRegen: true,
+    kind: "return",
+    players,
+    absentId: "p4",
+    quarter: 3,
+    totalQuarters: 4,
+    lineups: hurt.lineups,
+    segments: hurt.segments,
+    slots,
+    subMode: true,
+    minHalves: 4,
+    livePeriod: false,
+  });
+  assert.equal(back.lineups[1], hurt.lineups[1]);
+  assert.equal(back.lineups[2], hurt.lineups[2]);
+  assert.notEqual(playerQuarterPresence(back.lineups[3], "p4"), "blank");
+});
+
+test("a goalkeeper returning mid-period does not take the gloves", () => {
+  const { players, slots, lineups } = sheetFor(3);
+  const gk = goalkeeperId(lineups[2]);
+  assert.ok(gk);
+  const hurt = planAvailability({
+    autoRegen: true,
+    kind: "absent",
+    players: players.map(player => player.id === gk ? { ...player, injured: true } : player),
+    absentId: gk,
+    quarter: 2,
+    totalQuarters: 3,
+    lineups,
+    slots,
+    subMode: true,
+    minHalves: 3,
+    livePeriod: true,
+  });
+  const replacement = goalkeeperId(hurt.lineups[2]);
+  assert.ok(replacement);
+  assert.notEqual(replacement, gk);
+  const back = planAvailability({
+    autoRegen: true,
+    kind: "return",
+    players,
+    absentId: gk,
+    quarter: 2,
+    totalQuarters: 3,
+    lineups: hurt.lineups,
+    segments: hurt.segments,
+    slots,
+    subMode: true,
+    minHalves: 3,
+    livePeriod: true,
+  });
+  assert.equal(goalkeeperId(back.lineups[2]), replacement);
+  assert.equal(back.lineups[1], hurt.lineups[1]);
+});
+
+test("auto-regenerate off does not rebuild the other players", () => {
+  const { players, slots, lineups } = sheetFor(2);
+  const keeper = goalkeeperId(lineups[2]);
+  const out = planAvailability({
+    autoRegen: false,
+    kind: "absent",
+    players,
+    absentId: "p5",
+    quarter: 2,
+    totalQuarters: 2,
+    lineups,
+    slots,
+  });
+  assert.equal(out.lineups[1], lineups[1]);
+  assert.equal(goalkeeperId(out.lineups[2]), keeper === "p5" ? goalkeeperId(out.lineups[2]) : keeper);
+  const before = lineups[2].starters.filter(slot => slot.player?.id && slot.player.id !== "p5").map(slot => slot.player.id);
+  const after = out.lineups[2].starters.filter(slot => slot.player?.id && slot.player.id !== "p5").map(slot => slot.player.id);
+  before.forEach(id => assert.ok(after.includes(id), `${id} was rebuilt while auto-regenerate was off`));
+  const back = planAvailability({
+    autoRegen: false,
+    kind: "return",
+    players,
+    absentId: "p5",
+    quarter: 2,
+    totalQuarters: 2,
+    lineups: out.lineups,
+    slots,
+  });
+  assert.equal(back.lineups[1], out.lineups[1]);
+  assert.equal(back.lineups[2], out.lineups[2]);
+});
+
+test("return to the game uses one path from the top control and the roster button", () => {
+  for (const total of [2, 3, 4]) {
+    const { players, slots, lineups } = sheetFor(total);
+    const gone = pullFromPlan(lineups, "p6", 1, total);
+    const markedOut = players.map(player => player.id === "p6" ? { ...player, out: true, injured: false } : player);
+    for (const source of ["top", "roster"]) {
+      const back = returnToGame({
+        source,
+        autoRegen: true,
+        players: markedOut,
+        playerId: "p6",
+        quarter: total,
+        totalQuarters: total,
+        lineups: gone,
+        slots,
+        subMode: true,
+        minHalves: total,
+        livePeriod: false,
+      });
+      assert.equal(back.source, source);
+      assert.equal(back.regenerated, true);
+      assert.equal(back.players.find(player => player.id === "p6").out, false);
+      assert.equal(back.players.find(player => player.id === "p6").injured, false);
+      for (let q = 1; q < total; q++) assert.equal(back.lineups[q], gone[q]);
+      assert.notEqual(playerQuarterPresence(back.lineups[total], "p6"), "blank");
+    }
+    const hurt = players.map(player => player.id === "p6" ? { ...player, injured: true, out: false, midGameInjury: true } : player);
+    const fromRoster = returnToGame({
+      source: "roster",
+      autoRegen: true,
+      players: hurt,
+      playerId: "p6",
+      quarter: total,
+      totalQuarters: total,
+      lineups: gone,
+      slots,
+      subMode: true,
+      minHalves: total,
+      livePeriod: false,
+    });
+    assert.equal(fromRoster.players.find(player => player.id === "p6").injured, false);
+    assert.equal(fromRoster.lineups[1], total === 1 ? gone[1] : gone[1]);
+    for (let q = 1; q < total; q++) assert.equal(fromRoster.lineups[q], gone[q]);
+
+    const quiet = returnToGame({
+      source: "top",
+      autoRegen: false,
+      players: markedOut,
+      playerId: "p6",
+      quarter: 2,
+      totalQuarters: total,
+      lineups: gone,
+      slots,
+    });
+    assert.equal(quiet.regenerated, false);
+    assert.equal(quiet.lineups, gone);
+    assert.equal(quiet.players.find(player => player.id === "p6").out, false);
+  }
+});
+
+test("a goalkeeper returning from the roster does not take the gloves mid-period", () => {
+  const { players, slots, lineups } = sheetFor(4);
+  const gk = goalkeeperId(lineups[3]);
+  const hurt = planAvailability({
+    autoRegen: true,
+    kind: "absent",
+    players: players.map(player => player.id === gk ? { ...player, injured: true } : player),
+    absentId: gk,
+    quarter: 3,
+    totalQuarters: 4,
+    lineups,
+    slots,
+    subMode: true,
+    minHalves: 4,
+    livePeriod: true,
+  });
+  const replacement = goalkeeperId(hurt.lineups[3]);
+  assert.notEqual(replacement, gk);
+  const back = returnToGame({
+    source: "roster",
+    autoRegen: true,
+    players,
+    playerId: gk,
+    quarter: 3,
+    totalQuarters: 4,
+    lineups: hurt.lineups,
+    segments: hurt.segments,
+    slots,
+    subMode: true,
+    minHalves: 4,
+    livePeriod: true,
+  });
+  assert.equal(goalkeeperId(back.lineups[3]), replacement);
+  assert.equal(back.lineups[1], hurt.lineups[1]);
+  assert.equal(back.lineups[2], hurt.lineups[2]);
+});
+
+test("a no-goalkeeper sheet stays without a goalkeeper after an absence", () => {
+  const slots = ["LD", "RD", "LM", "RM"];
+  const { players, lineups } = sheetFor(2, slots);
+  const out = planAvailability({
+    autoRegen: true,
+    kind: "absent",
+    players: players.map(player => player.id === "p2" ? { ...player, out: true } : player),
+    absentId: "p2",
+    quarter: 1,
+    totalQuarters: 2,
+    lineups,
+    slots,
+    subMode: true,
+    minHalves: 2,
+  });
+  [1, 2].forEach(q => {
+    assert.equal(goalkeeperId(out.lineups[q]), null);
+    assert.equal(out.lineups[q].starters.some(slot => slot.pos === "GK"), false);
+  });
+});
+
+test("an override shape is used for that period only", () => {
+  const players = halfRoster(8);
+  const base = ["GK", "LD", "RD", "LM", "RM", "CF"];
+  const wide = ["GK", "LB", "RB", "LW", "RW", "ST"];
+  const { lineups } = scheduleHalfRotation(players, base, {
+    minHalves: 2,
+    totalQuarters: 2,
+    slotsByQuarter: { 2: wide },
+    rate: () => 1,
+  });
+  assert.deepEqual(lineups[1].starters.map(slot => slot.pos), base);
+  assert.deepEqual(lineups[2].starters.map(slot => slot.pos), wide);
 });

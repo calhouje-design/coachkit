@@ -158,14 +158,14 @@ const SAY_EAST = {
   }),
   // GK at 6v6 is optional in the national laws and SAY East does not say which it uses.
   U7: cell({
-    playersOnField: 6, gk: false, periods: 4, periodMinutes: 10, halvesMinutes: 20, ballSize: 3,
+    playersOnField: 6, gk: true, periods: 4, periodMinutes: 10, halvesMinutes: 20, ballSize: 3,
     verified: false, source: SOURCES.sayEast,
-    note: "Passers are 6v6. Goalkeeper use is unverified, so GK is off. Quarters default; halves are 2×20.",
+    note: "Passers are 6v6. Goalkeeper use is unverified, so GK defaults on. Quarters default; halves are 2×20.",
   }),
   U8: cell({
-    playersOnField: 6, gk: false, periods: 4, periodMinutes: 10, halvesMinutes: 20, ballSize: 3,
+    playersOnField: 6, gk: true, periods: 4, periodMinutes: 10, halvesMinutes: 20, ballSize: 3,
     verified: false, source: SOURCES.sayEast,
-    note: "Passers are 6v6. Goalkeeper use is unverified, so GK is off. Quarters default; halves are 2×20.",
+    note: "Passers are 6v6. Goalkeeper use is unverified, so GK defaults on. Quarters default; halves are 2×20.",
   }),
   U9: cell({
     playersOnField: 8, gk: true, periods: 4, periodMinutes: 12, halvesMinutes: 24, ballSize: 4,
@@ -238,11 +238,13 @@ const OHIO = {
   }),
   U11: cell({
     playersOnField: 9, gk: true, periods: 2, periodMinutes: 30, ballSize: 4,
-    verified: true, source: SOURCES.ossl, note: "9v9 with a goalkeeper, two 30-minute halves.",
+    verified: true, source: SOURCES.osdl,
+    note: "9v9 with a goalkeeper. The 30-minute halves are from the Ohio Soccer Developmental League rules.",
   }),
   U12: cell({
     playersOnField: 9, gk: true, periods: 2, periodMinutes: 30, ballSize: 4,
-    verified: true, source: SOURCES.ossl, note: "9v9 with a goalkeeper, two 30-minute halves.",
+    verified: true, source: SOURCES.osdl,
+    note: "9v9 with a goalkeeper. The 30-minute halves are from the Ohio Soccer Developmental League rules.",
   }),
   U13: cell({
     playersOnField: 11, gk: true, periods: 2, periodMinutes: 35, ballSize: 5,
@@ -376,8 +378,9 @@ function minutesFor(rule, periods, explicitMinutes) {
     const parsed = Number(explicitMinutes);
     if (Number.isFinite(parsed) && parsed > 0) return clampMinutes(parsed);
   }
+  // No typed length: two periods use the halves card when the org publishes one,
+  // otherwise the org/age default (a 2-period age already stores that length).
   if (periods === 2 && rule.halvesMinutes) return rule.halvesMinutes;
-  if (periods === rule.periods) return rule.periodMinutes;
   return rule.periodMinutes;
 }
 

@@ -18,6 +18,8 @@ function player(id) {
 
 test("SAY East 50% is 2 of 4 quarters", () => {
   assert.equal(minQuarters(0.5, 4), 2);
+  assert.equal(minQuarters(0.5, 3), 2);
+  assert.equal(minQuarters(0.5, 2), 1);
   assert.equal(minQuarters(1, 4), 4);
 });
 

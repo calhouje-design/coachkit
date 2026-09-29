@@ -553,6 +553,7 @@ export function scheduleHalfRotation(players, slots, {
   lockedSegments = {},
   totalQuarters = 4,
   rate = () => 0,
+  slotsByQuarter = null,
 } = {}) {
   const slotNames = slots?.length ? slots : ["GK", "LD", "RD", "LM", "RM", "CF"];
   const active = (players || []).filter(p => !p.injured && !p.out);
@@ -640,12 +641,17 @@ export function scheduleHalfRotation(players, slots, {
   });
 
   const lineups = { ...lockedLineups };
+  const namesFor = (q) => {
+    const custom = slotsByQuarter?.[q] || slotsByQuarter?.[String(q)];
+    if (Array.isArray(custom) && custom.length === slotNames.length) return custom;
+    return slotNames;
+  };
   remainingQs.forEach(q => {
     const first = new Set(onHalf[q][1]);
     const second = new Set(onHalf[q][2]);
     const startersPool = active.filter(p => second.has(p.id));
     const bench = active.filter(p => !second.has(p.id));
-    lineups[q] = { starters: assignHalfSlots(startersPool, slotNames, gkByQuarter[q] || []), bench };
+    lineups[q] = { starters: assignHalfSlots(startersPool, namesFor(q), gkByQuarter[q] || []), bench };
     active.forEach(p => {
       const early = first.has(p.id);
       const late = second.has(p.id);
@@ -679,7 +685,9 @@ function pinNamedGoalkeeper(lineup, gkId, roster) {
  * player (blank — not left on the bench) and the remaining players refill the field.
  * A return quarter replans from then on and leaves the unavailable quarters as they are.
  * Sub mode uses the half-quarter planner. Full quarters refill the open slot.
- * The goalkeeper stays in goal for the injury quarter unless they are the one hurt.
+ * The goalkeeper stays in goal for the in-progress period unless they are the one hurt.
+ * Periods before fromQuarter are copied through and not rebuilt.
+ * lockGoalkeeperId pins that keeper on the live period after a replan (a returning keeper does not take the gloves mid-period).
  */
 export function regenerateForAbsence({
   players,
@@ -693,6 +701,8 @@ export function regenerateForAbsence({
   subMode = true,
   rate = () => 0,
   totalQuarters = 4,
+  slotsByQuarter = null,
+  lockGoalkeeperId = null,
 } = {}) {
   const start = Math.max(1, Number(fromQuarter) || 1);
   const back = returnQuarter == null ? null : Number(returnQuarter);
@@ -741,12 +751,13 @@ export function regenerateForAbsence({
     lockedSegments: clearSubSegmentsFrom(segments, start),
     totalQuarters: Math.max(start, absentEnd),
     rate,
+    slotsByQuarter,
   });
   const shaped = { ...absentPlan.lineups };
   for (let q = start; q <= absentEnd; q++) {
     if (shaped[q]) shaped[q] = pullFromQuarter(shaped[q], absentId);
   }
-  const prevGk = goalkeeperId(lineups?.[start]);
+  const prevGk = lockGoalkeeperId || goalkeeperId(lineups?.[start]);
   if (prevGk && prevGk !== absentId && shaped[start]) {
     shaped[start] = pinNamedGoalkeeper(shaped[start], prevGk, roster);
     shaped[start] = pullFromQuarter(shaped[start], absentId);
@@ -766,12 +777,125 @@ export function regenerateForAbsence({
     lockedSegments: absentPlan.segments,
     totalQuarters,
     rate,
+    slotsByQuarter,
   });
   const returned = { ...returnPlan.lineups };
   for (let q = start; q <= absentEnd; q++) {
     if (returned[q]) returned[q] = pullFromQuarter(returned[q], absentId);
   }
+  if (lockGoalkeeperId && returned[back]) {
+    returned[back] = pinNamedGoalkeeper(returned[back], lockGoalkeeperId, withBack);
+  }
   return { lineups: returned, segments: returnPlan.segments };
+}
+
+/**
+ * Top-of-screen and roster Return buttons both use this.
+ * The player becomes available. When auto-regenerate is on, the sheet rebuilds
+ * from the current period forward. When it is off, only the status changes.
+ */
+export function returnToGame({
+  source = "roster",
+  autoRegen = true,
+  players = [],
+  playerId,
+  quarter = 1,
+  lineups = {},
+  segments = {},
+  totalQuarters = 4,
+  slots,
+  slotsByQuarter = null,
+  subMode = true,
+  minHalves = 4,
+  rate = () => 0,
+  livePeriod = false,
+} = {}) {
+  const q = Math.max(1, Number(quarter) || 1);
+  const nextPlayers = (players || []).map(player => {
+    if (player?.id !== playerId) return player;
+    return {
+      ...player,
+      injured: false,
+      midGameInjury: false,
+      out: false,
+      returnQuarter: q,
+      injuredInQuarter: player.injuredInQuarter || player.returnQuarter || q,
+    };
+  });
+  if (!autoRegen) {
+    return { source, players: nextPlayers, lineups, segments, regenerated: false };
+  }
+  const planned = planAvailability({
+    autoRegen: true,
+    kind: "return",
+    players: nextPlayers,
+    absentId: playerId,
+    quarter: q,
+    totalQuarters,
+    lineups,
+    segments,
+    slots,
+    slotsByQuarter,
+    subMode,
+    minHalves,
+    rate,
+    livePeriod,
+  });
+  return {
+    source,
+    players: nextPlayers,
+    lineups: planned.lineups,
+    segments: planned.segments,
+    regenerated: true,
+  };
+}
+
+/**
+ * Injury, out, or a return. With auto-regenerate on, rebuild from the current period forward.
+ * With it off, an absence only pulls that player. A return only updates status and leaves the sheet.
+ * A live period keeps its current goalkeeper unless that goalkeeper is the one leaving.
+ */
+export function planAvailability({
+  autoRegen = true,
+  kind = "absent",
+  players,
+  absentId,
+  quarter = 1,
+  totalQuarters = 4,
+  lineups = {},
+  segments = {},
+  slots,
+  slotsByQuarter = null,
+  subMode = true,
+  minHalves = 4,
+  rate = () => 0,
+  livePeriod = false,
+} = {}) {
+  const start = Math.max(1, Number(quarter) || 1);
+  if (!autoRegen) {
+    if (kind === "return") return { lineups, segments };
+    return {
+      lineups: pullFromPlan(lineups, absentId, start, totalQuarters),
+      segments,
+    };
+  }
+  const currentGk = goalkeeperId(lineups?.[start]);
+  const lockGoalkeeperId = livePeriod && currentGk && currentGk !== absentId ? currentGk : null;
+  return regenerateForAbsence({
+    players,
+    slots,
+    slotsByQuarter,
+    lineups,
+    segments,
+    absentId,
+    fromQuarter: start,
+    returnQuarter: kind === "return" ? start : null,
+    minHalves,
+    subMode,
+    rate,
+    totalQuarters,
+    lockGoalkeeperId,
+  });
 }
 
 /** One Season game-log row. Strategy rides on the game the app already stores. */
@@ -792,6 +916,7 @@ export function gameLogFromStrategy({
   sheets,
   periods,
   periodType,
+  formationOverrides,
 } = {}) {
   return {
     id,
@@ -808,6 +933,7 @@ export function gameLogFromStrategy({
       league: league || "",
       periods: periods || null,
       periodType: periodType || "",
+      formationOverrides: formationOverrides || null,
       lineups: lineups || {},
       savedAt: savedAt || "",
       sheets: sheets || null,

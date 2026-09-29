@@ -1,5 +1,7 @@
 /** Pure team snapshot shape. Cloud rows and localStorage both use this. */
 
+import { normalizeFormationOverrides } from "./formations.js";
+
 export function defaultSettings() {
   return {
     subMode: true,
@@ -87,6 +89,7 @@ export function normalizeGameDay(value) {
     subSegments: base.subSegments && typeof base.subSegments === "object" ? base.subSegments : {},
     pairPlan: base.pairPlan && typeof base.pairPlan === "object" ? base.pairPlan : {},
     subQueue: Array.isArray(base.subQueue) ? base.subQueue : [],
+    formationOverrides: normalizeFormationOverrides(base.formationOverrides),
   };
 }
 

@@ -18,7 +18,6 @@ import {
   parseDrop,
   resolveDragDrop,
   pullFromPlan,
-  addLateArrival,
   setAppearanceCreditFor,
   noteSubSegment,
   segmentAt,
@@ -42,8 +41,11 @@ import {
   gameLogFromStrategy,
   upsertGameLog,
   playerQuarterPresence,
-  regenerateForAbsence,
+  planAvailability,
+  returnToGame,
 } from "./lib/gameDay.js";
+import { clampPeriod, formationNameForPeriod, reapplyBase, reshapeLineup, withPeriodOverride, withoutPeriodOverride, normalizeFormationOverrides } from "./lib/formations.js";
+import { SAY_PLAY_TIME, sayDivision, sayDivisionKey } from "./lib/sayEastGuide.js";
 import { downloadCanvas, paintFieldSheet, paintPlayTimeSheet } from "./lib/sharePaint.js";
 import { useTeamCloud } from "./lib/teamCloud.js";
 import { bindField, normalizeGameDay, snapshotFromStorage } from "./lib/teamSnapshot.js";
@@ -57,6 +59,7 @@ import {
   playersFromFormat,
   resolveSetup,
   tableRule,
+  gkFullPeriodReason,
 } from "./lib/leagueRules.js";
 
 // -- localStorage persistence helper --
@@ -516,7 +519,7 @@ function uid() { return Math.random().toString(36).slice(2,9); }
  * 5. Within each quarter, players are sorted to best-fit positions.
  * 6. Players who sat last quarter get priority for the next one (rotation).
  */
-function scheduleWholeGame(players, format, league, lockedLineups = {}, fromQuarter = 1, segments = {}, credit = {}, slotOverride = null, totalPeriods = 4, minFraction = 0.5) {
+function scheduleWholeGame(players, format, league, lockedLineups = {}, fromQuarter = 1, segments = {}, credit = {}, slotOverride = null, totalPeriods = 4, minFraction = 0.5, slotsByQuarter = null) {
   const TOTAL_Q  = totalPeriods;
   const fallback = defaultSlots(playersFromFormat(format) || 7, true);
   const slots    = slotOverride?.length ? slotOverride : fallback;
@@ -703,7 +706,11 @@ function scheduleWholeGame(players, format, league, lockedLineups = {}, fromQuar
     // Shuffle starters_pool so tie-breaking is random (not roster-order biased)
     const shuffledPool = [...starters_pool].sort(() => Math.random() - 0.5);
 
-    const starters = slots.map(slotPos => {
+    const quarterSlots = (() => {
+      const custom = slotsByQuarter?.[q] || slotsByQuarter?.[String(q)];
+      return Array.isArray(custom) && custom.length === slots.length ? custom : slots;
+    })();
+    const starters = quarterSlots.map(slotPos => {
       // Pass 1: player whose randomly chosen position matches this slot exactly
       let pick = shuffledPool.find(p => !assigned.has(p.id) && playerPosThisQ[p.id] === slotPos);
       // Pass 2: player whose allowed positions include this slot
@@ -1340,7 +1347,7 @@ function GameSettings({
         <div style={{fontSize: 12, color: C.text, lineHeight: 1.45, marginBottom: 14}}>{fairPlayLabel}</div>
         <label style={{display: "flex", alignItems: "center", gap: 10, marginBottom: 16, fontSize: 13, color: C.text}}>
           <input type="checkbox" checked={!!autoRegen} onChange={e => onAutoRegen(e.target.checked)} style={{width: 18, height: 18}} />
-          Auto-regenerate the lineup when a player is marked injured
+          Auto-regenerate lineup when a player is marked injured, out, or returns
         </label>
         <div style={{marginBottom: 16}}>
           <label style={{...lbl, marginBottom: 4}}>{setup.periodNounOne[0].toUpperCase() + setup.periodNounOne.slice(1)} length (minutes)</label>
@@ -1405,6 +1412,7 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
   const [queueNote, setQueueNote] = useState(null);
   const [running, setRunning] = useState(false);
   const [stintStart, setStintStart] = useState({});
+  const [shapeOnly, setShapeOnly] = useState(false);
   const applyDragRef = useRef(() => {});
   const drag = usePitchDrag(result => applyDragRef.current(result));
 
@@ -1557,7 +1565,8 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
   };
 
   const setQuarter = (value) => {
-    const next = typeof value === "function" ? value(quarterRef.current) : value;
+    const requested = typeof value === "function" ? value(quarterRef.current) : value;
+    const next = clampPeriod(quarterRef.current, requested, totalQuarters);
     if (next === quarterRef.current) return;
     commitOnFieldMinutes();
     setRunning(false);
@@ -1653,8 +1662,20 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
     const nextSegments = fromQ === 1 ? {} : clearSubSegmentsFrom(subSegments, fromQ);
     if (fromQ > 1) setSubSegments(nextSegments);
     const formatSlots = planSlotsNow;
-    const chosenShape = shapesFor(format, !!setup?.gk, formatSlots).find(t => t.name === activeFormation);
-    const planSlots = chosenShape?.slots?.length === formatSlots.length ? chosenShape.slots : formatSlots;
+    const templates = shapesFor(format, !!setup?.gk, formatSlots);
+    const overridesNow = fromQ === 1 ? {} : normalizeFormationOverrides(normalizeGameDay(gameDay).formationOverrides);
+    if (fromQ === 1) {
+      setGameDay(prev => ({ ...normalizeGameDay(prev), formationOverrides: {} }));
+    }
+    const slotsForName = (name) => {
+      const shape = templates.find(item => item.name === name);
+      return shape?.slots?.length === formatSlots.length ? shape.slots : formatSlots;
+    };
+    const planSlots = slotsForName(activeFormation);
+    const slotsByQuarter = {};
+    for (let q = fromQ; q <= totalQuarters; q++) {
+      slotsByQuarter[q] = slotsForName(formationNameForPeriod(activeFormation, overridesNow, q));
+    }
     const creditForPlan = fromQ === 1 ? {} : appearanceCredit;
     if (subMode) {
       const planned = scheduleHalfRotation(players, planSlots, {
@@ -1664,6 +1685,7 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
         lockedSegments: nextSegments,
         totalQuarters,
         rate: getOverallRating,
+        slotsByQuarter,
       });
       setSubSegments(planned.segments);
       notePlanResult(planned.lineups, players, creditForPlan, planned.segments);
@@ -1684,6 +1706,7 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
       planSlots,
       totalQuarters,
       setup?.minFraction ?? 0.5,
+      slotsByQuarter,
     );
     notePlanResult(result, players, creditForPlan, nextSegments);
     if (fromQ !== 1 && fromQ === quarter && running) {
@@ -1700,11 +1723,20 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
     setSubQueue(prev => (prev || []).filter(row => row.outId !== playerId && row.inId !== playerId));
   };
 
-  const planSlotsFor = () => {
-    const formatSlots = planSlotsNow;
-    const chosenShape = shapesFor(format, !!setup?.gk, formatSlots).find(t => t.name === activeFormation);
-    return chosenShape?.slots?.length === formatSlots.length ? chosenShape.slots : formatSlots;
+  const formationBundle = () => {
+    const overrides = normalizeFormationOverrides(normalizeGameDay(gameDay).formationOverrides);
+    const templates = shapesFor(format, !!setup?.gk, planSlotsNow);
+    const slotsForName = (name) => {
+      const shape = templates.find(item => item.name === name);
+      return shape?.slots?.length === planSlotsNow.length ? shape.slots : planSlotsNow;
+    };
+    const slotsByQuarter = {};
+    periodList.forEach(q => {
+      slotsByQuarter[q] = slotsForName(formationNameForPeriod(activeFormation, overrides, q));
+    });
+    return { overrides, slotsForName, slotsByQuarter };
   };
+  const planSlotsFor = () => formationBundle().slotsByQuarter[quarter] || planSlotsNow;
 
   const syncStints = (lineup) => {
     if (!running) return;
@@ -1737,18 +1769,21 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
     let credit = appearanceCredit;
     if (wasOn) credit = setAppearanceCreditFor(credit, playerId, quarter, true);
     if (autoRegen) {
-      const planned = regenerateForAbsence({
+      const planned = planAvailability({
+        autoRegen: true,
+        kind: "absent",
         players: updatedPlayers,
-        slots: planSlotsFor(),
+        slots: planSlotsNow,
+        slotsByQuarter: formationBundle().slotsByQuarter,
         lineups: lineupsByQuarter,
         segments: subSegments,
         absentId: playerId,
-        fromQuarter: quarter,
-        returnQuarter: null,
+        quarter,
         minHalves,
         subMode,
         rate: getOverallRating,
         totalQuarters,
+        livePeriod: live,
       });
       let segments = planned.segments;
       if (wasOn && live) segments = noteSubSegment(segments, playerId, quarter, "left");
@@ -1779,39 +1814,30 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
     setFairWarn(null);
   };
 
-  const restorePlayer = (playerId) => {
-    const existing = players.find(p => p.id === playerId);
-    const fromQuarter = existing?.injuredInQuarter || existing?.returnQuarter || quarter;
-    const updatedPlayers = players.map(p =>
-      p.id === playerId
-        ? { ...p, injured: false, midGameInjury: false, injuredInQuarter: fromQuarter, out: false, returnQuarter: quarter }
-        : p
-    );
-    setPlayers(updatedPlayers);
-    const player = updatedPlayers.find(p => p.id === playerId);
-    if (autoRegen && Object.keys(lineupsByQuarter).length > 0 && player) {
-      const planned = regenerateForAbsence({
-        players: updatedPlayers,
-        slots: planSlotsFor(),
-        lineups: lineupsByQuarter,
-        segments: subSegments,
-        absentId: playerId,
-        fromQuarter,
-        returnQuarter: quarter,
-        minHalves,
-        subMode,
-        rate: getOverallRating,
-        totalQuarters,
-      });
-      setSubSegments(planned.segments);
-      notePlanResult(planned.lineups, updatedPlayers, appearanceCredit, planned.segments);
-      syncStints(planned.lineups[quarter]);
-      return;
-    }
-    setLineupsByQuarter(prev => {
-      if (!prev?.[quarter] || !player) return prev;
-      return { ...prev, [quarter]: addLateArrival(prev[quarter], player) };
+  const restorePlayer = (playerId, source = "roster") => {
+    const liveReturn = running || (clockRef.current || 0) > 0;
+    const hasSheet = Object.keys(lineupsByQuarter).length > 0;
+    const result = returnToGame({
+      source,
+      autoRegen: !!autoRegen && hasSheet,
+      players,
+      playerId,
+      quarter,
+      totalQuarters,
+      lineups: lineupsByQuarter,
+      segments: subSegments,
+      slots: planSlotsNow,
+      slotsByQuarter: formationBundle().slotsByQuarter,
+      subMode,
+      minHalves,
+      rate: getOverallRating,
+      livePeriod: liveReturn,
     });
+    setPlayers(result.players);
+    if (!result.regenerated) return;
+    setSubSegments(result.segments);
+    notePlanResult(result.lineups, result.players, appearanceCredit, result.segments);
+    syncStints(result.lineups[quarter]);
   };
 
   const gkLocked = () => subMode || running || (clockRef.current || 0) > 0;
@@ -2204,31 +2230,49 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
   };
 
   const formationTemplates = shapesFor(format, !!setup?.gk, planSlotsNow);
+  const formationOverrides = normalizeFormationOverrides(normalizeGameDay(gameDay).formationOverrides);
   const activeStrategy = formationTemplates.find(t => t.name === activeFormation) || formationTemplates[0] || null;
+  const periodShapeName = formationNameForPeriod(activeStrategy?.name || activeFormation, formationOverrides, quarter);
+  const writeOverrides = (next) => {
+    setGameDay(prev => ({ ...normalizeGameDay(prev), formationOverrides: next }));
+  };
   const applyFormation = (name) => {
     const tmpl = formationTemplates.find(t => t.name === name) || formationTemplates[0];
     if (!tmpl) return;
+    const hasSheet = periodList.some(q => lineupsByQuarter[q]);
+    if (shapeOnly && hasSheet) {
+      const nextOverrides = withPeriodOverride(formationOverrides, quarter, tmpl.name, activeStrategy?.name || activeFormation);
+      writeOverrides(nextOverrides);
+      if (lineupsByQuarter[quarter]) {
+        setLineupsByQuarter(prev => ({ ...prev, [quarter]: reshapeLineup(prev[quarter], tmpl.slots) }));
+      }
+      setSwapSel(null);
+      setFairWarn(null);
+      return;
+    }
     setActiveFormation(tmpl.name);
-    if (!lineupsByQuarter[quarter]) return;
-    const allAvail = [
-      ...(lineupsByQuarter[quarter].starters || []).filter(s => s.player).map(s => s.player),
-      ...(lineupsByQuarter[quarter].bench || []),
-    ];
-    const assigned = new Set();
-    const newStarters = tmpl.slots.map(pos => {
-      let best = allAvail.find(p => !assigned.has(p.id) && (p.positions || []).includes(pos));
-      if (!best) best = allAvail.find(p => !assigned.has(p.id));
-      if (best) assigned.add(best.id);
-      return { pos, player: best || null };
+    const cleaned = withoutPeriodOverride(formationOverrides, quarter);
+    Object.keys(cleaned).forEach(key => {
+      if (cleaned[key] === tmpl.name) delete cleaned[key];
     });
-    const newBench = allAvail.filter(p => !assigned.has(p.id));
-    const beforeIds = new Set((lineupsByQuarter[quarter].starters || []).filter(s => s.player).map(s => s.player.id));
-    const afterIds = new Set(newStarters.filter(s => s.player).map(s => s.player.id));
-    const nextAll = { ...lineupsByQuarter, [quarter]: { starters: newStarters, bench: newBench } };
-    setLineupsByQuarter(nextAll);
+    writeOverrides(cleaned);
+    if (hasSheet) {
+      setLineupsByQuarter(reapplyBase(lineupsByQuarter, {
+        periods: totalQuarters,
+        baseSlots: tmpl.slots,
+        overrides: cleaned,
+      }));
+    }
     setSwapSel(null);
-    if (beforeIds.size !== afterIds.size || [...beforeIds].some(id => !afterIds.has(id))) warnIfShort(nextAll);
-    else setFairWarn(null);
+    setFairWarn(null);
+  };
+  const resetPeriodShape = () => {
+    const base = formationTemplates.find(t => t.name === (activeStrategy?.name || activeFormation)) || formationTemplates[0];
+    if (!base) return;
+    writeOverrides(withoutPeriodOverride(formationOverrides, quarter));
+    if (lineupsByQuarter[quarter]) {
+      setLineupsByQuarter(prev => ({ ...prev, [quarter]: reshapeLineup(prev[quarter], base.slots) }));
+    }
   };
   const modeNoted = useRef(false);
   useEffect(() => {
@@ -2264,6 +2308,7 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
       oppScore: awayScore,
       formation: activeStrategy?.name || activeFormation,
       formationLabel: activeStrategy?.label || "",
+      formationOverrides,
       subMode,
       format,
       league,
@@ -2305,6 +2350,33 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
         margin: "0 0 12px", padding: "8px 0 10px",
         background: C.bg,
       }}>
+        {players.some(p => p.out || p.injured) && (
+          <div style={{
+            marginBottom:10, padding:"8px 10px", borderRadius:10, maxWidth:"100%", boxSizing:"border-box",
+            background:"rgba(120,0,0,0.2)", border:"1px solid rgba(231,76,60,0.4)",
+          }}>
+            <div style={{fontSize:11, color:"#e74c3c", fontWeight:800, marginBottom:8, textTransform:"uppercase", letterSpacing:"0.05em"}}>
+              Return to the game
+            </div>
+            {players.filter(p => p.out || p.injured).map(p => (
+              <div key={p.id} style={{display:"flex", alignItems:"center", gap:8, marginBottom:6, minWidth:0, flexWrap:"wrap"}}>
+                <div style={{flex:"1 1 140px", minWidth:0}}>
+                  <div style={{fontSize:13, fontWeight:700, color:C.text, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap"}}>
+                    #{p.number} {p.name}
+                  </div>
+                  <div style={{fontSize:11, color:p.out ? "#e67e22" : "#e74c3c"}}>
+                    {p.out ? "Out" : `Injured ${abbr}${p.injuredInQuarter || quarter}`}
+                  </div>
+                </div>
+                <button type="button" onClick={() => restorePlayer(p.id, "top")} style={{
+                  minWidth:44, minHeight:44, padding:"0 14px", flexShrink:0,
+                  borderRadius:8, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:800,
+                  border:"1px solid rgba(39,174,96,0.45)", background:"rgba(39,174,96,0.15)", color:"#2ecc71",
+                }}>Return</button>
+              </div>
+            ))}
+          </div>
+        )}
         <div style={{fontSize:10, color:C.muted, fontWeight:800, letterSpacing:"0.06em", textTransform:"uppercase", marginBottom:6}}>{nounOne}</div>
         <div style={{display:"flex", border:`1px solid ${C.border}`, borderRadius:10, overflow:"hidden", background:"rgba(255,255,255,0.02)"}}>
           {periodList.map(q => {
@@ -2322,8 +2394,8 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
               }}>
                 {abbr}{q}
                 {hasLineup && (
-                  <span style={{display:"block", fontSize:9, lineHeight:1.1, marginTop:2, color:hasInjury?"#e74c3c":C.muted, fontWeight:700}}>
-                    {hasInjury ? "inj" : "set"}
+                  <span style={{display:"block", fontSize:9, lineHeight:1.1, marginTop:2, color:hasInjury?"#e74c3c":formationOverrides[q]?C.gold:C.muted, fontWeight:700}}>
+                    {hasInjury ? "inj" : formationOverrides[q] ? "shape" : "set"}
                   </span>
                 )}
               </button>
@@ -2331,9 +2403,10 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
           })}
         </div>
         {formationTemplates.length > 0 && (
+          <>
           <div style={{display:"flex", gap:6, overflowX:"auto", marginTop:8, paddingBottom:2}}>
             {formationTemplates.map(t => {
-              const selected = t.name === activeStrategy?.name;
+              const selected = t.name === periodShapeName;
               return (
                 <button key={t.name} onClick={() => applyFormation(t.name)} style={{
                   flex:"0 0 auto", minHeight:40, padding:"0 12px", borderRadius:10, cursor:"pointer",
@@ -2345,6 +2418,23 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
               );
             })}
           </div>
+          <div style={{display:"flex", alignItems:"center", gap:8, flexWrap:"wrap", marginTop:6}}>
+            <label style={{display:"flex", alignItems:"center", gap:6, fontSize:11, color:C.muted}}>
+              <input type="checkbox" checked={shapeOnly} onChange={e => setShapeOnly(e.target.checked)} />
+              Only {abbr}{quarter}
+            </label>
+            <span style={{fontSize:11, color:C.muted}}>Base {activeStrategy?.name || "shape"}</span>
+            {formationOverrides[quarter] && (
+              <>
+                <span style={{fontSize:11, color:C.gold, fontWeight:800}}>{abbr}{quarter} override</span>
+                <button type="button" onClick={resetPeriodShape} style={{
+                  minHeight:28, padding:"2px 8px", borderRadius:6, cursor:"pointer", fontFamily:"inherit",
+                  border:`1px solid ${C.border}`, background:"transparent", color:C.text, fontSize:11, fontWeight:700,
+                }}>Reset to base</button>
+              </>
+            )}
+          </div>
+          </>
         )}
       </div>
       {/* Injury alerts */}
@@ -2454,7 +2544,7 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
           background:"rgba(192,57,43,0.12)", border:"1px solid rgba(192,57,43,0.45)",
           borderRadius:9, padding:"10px 14px", marginBottom:14, fontSize:12, color:"#f5b7b1", lineHeight:1.5,
         }}>
-          <b>Can’t plan yet.</b> {gate.reason} {subMode ? "Sub mode counts halves. 50% is 4 of 8." : "Quarters on the field are the unit — not clock minutes."}
+          <b>Can’t plan yet.</b> {gate.reason} {subMode ? `Sub mode counts halves. The minimum is ${minHalves} of ${totalQuarters * 2}.` : `${noun} on the field are the unit — not clock minutes.`}
         </div>
       )}
 
@@ -2475,32 +2565,6 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
           borderRadius:9, padding:"10px 14px", marginBottom:14, fontSize:12, color:C.gold, lineHeight:1.45,
         }}>
           <b>Fair-play warning.</b> {fairWarn} The change was kept.
-        </div>
-      )}
-
-      {/* Mid-game injury strip */}
-      {midGameInjured.length > 0 && (
-        <div style={{
-          background:"rgba(120,0,0,0.2)", border:"1px solid rgba(231,76,60,0.4)",
-          borderRadius:10, padding:"10px 14px", marginBottom:14,
-        }}>
-          <div style={{fontSize:11,color:"#e74c3c",fontWeight:700,marginBottom:8,textTransform:"uppercase",letterSpacing:"0.05em"}}>
-             Mid-Game Injuries
-          </div>
-          {midGameInjured.map(p => (
-            <div key={p.id} style={{display:"flex",alignItems:"center",gap:10,padding:"5px 0",borderBottom:"1px solid rgba(231,76,60,0.12)"}}>
-              <div style={{width:24,height:24,borderRadius:"50%",background:"#7b0000",display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,color:"#fff",fontWeight:700,flexShrink:0}}>{p.number}</div>
-              <div style={{flex:1}}>
-                <div style={{fontSize:12,color:"#e74c3c",fontWeight:600}}>{p.name}</div>
-                <div style={{fontSize:10,color:"rgba(231,76,60,0.65)"}}>Injured Q{p.injuredInQuarter}. Later quarters stay blank until you return them.</div>
-              </div>
-              <button onClick={() => restorePlayer(p.id)} style={{
-                background:"rgba(39,174,96,0.15)",border:"1px solid rgba(39,174,96,0.35)",
-                borderRadius:6,cursor:"pointer",fontSize:11,color:"#2ecc71",
-                padding:"3px 9px",fontWeight:600,fontFamily:"inherit",
-              }}> Return</button>
-            </div>
-          ))}
         </div>
       )}
 
@@ -2655,26 +2719,35 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
                     border: focused ? "1px solid rgba(46,204,113,0.28)" : "1px solid transparent",
                   }}>
                     {/* Name + status row */}
-                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",fontSize:12,marginBottom:4,gap:6}}>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",fontSize:12,marginBottom:4,gap:6,flexWrap:"wrap",minWidth:0}}>
                       <button onClick={()=>setChartFocusId(focused?null:p.id)} style={{
                         background:"none", border:"none", padding:0, cursor:"pointer", fontFamily:"inherit",
                         color:nameColor, fontSize:12, fontWeight:700, textAlign:"left",
-                        overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", flex:"1 1 auto", minWidth:0,
+                        overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", flex:"1 1 120px", minWidth:0,
                       }}>
                         {p.name} <span style={{color:C.muted,fontWeight:600}}>#{p.number}</span>
                       </button>
-                      {isInjured ? (
-                        <span style={{fontSize:9,fontWeight:800,color:"#e74c3c",background:"rgba(231,76,60,0.15)",padding:"2px 6px",borderRadius:3}}>INJ</span>
-                      ) : isOut ? (
-                        <span style={{fontSize:9,fontWeight:800,color:"#e67e22",background:"rgba(230,126,34,0.15)",padding:"2px 6px",borderRadius:3}}>OUT</span>
-                      ) : (
-                        <span style={{display:"flex",alignItems:"center",gap:6,flexShrink:0}}>
-                          {onNow && <span style={{fontSize:9,fontWeight:800,color:"#0a0d0f",background:"#2ecc71",borderRadius:3,padding:"2px 5px"}}>IN</span>}
-                          <span style={{fontSize:10,color:ok?"#2ecc71":C.gold,fontWeight:700}}>
-                            {allPlanned ? `${formatQuarterEquity(plannedHalves)}/${target}Q` : ""}
+                      <div style={{display:"flex",alignItems:"center",gap:6,flexShrink:0}}>
+                        {isInjured ? (
+                          <span style={{fontSize:9,fontWeight:800,color:"#e74c3c",background:"rgba(231,76,60,0.15)",padding:"2px 6px",borderRadius:3}}>INJ</span>
+                        ) : isOut ? (
+                          <span style={{fontSize:9,fontWeight:800,color:"#e67e22",background:"rgba(230,126,34,0.15)",padding:"2px 6px",borderRadius:3}}>OUT</span>
+                        ) : (
+                          <span style={{display:"flex",alignItems:"center",gap:6,flexShrink:0}}>
+                            {onNow && <span style={{fontSize:9,fontWeight:800,color:"#0a0d0f",background:"#2ecc71",borderRadius:3,padding:"2px 5px"}}>IN</span>}
+                            <span style={{fontSize:10,color:ok?"#2ecc71":C.gold,fontWeight:700}}>
+                              {allPlanned ? `${formatQuarterEquity(plannedHalves)}/${target}Q` : ""}
+                            </span>
                           </span>
-                        </span>
-                      )}
+                        )}
+                        {(isInjured || isOut) && (
+                          <button type="button" onClick={() => restorePlayer(p.id, "roster")} style={{
+                            minWidth:44, minHeight:44, padding:"0 12px", flexShrink:0,
+                            borderRadius:8, cursor:"pointer", fontFamily:"inherit", fontSize:13, fontWeight:800,
+                            border:"1px solid rgba(39,174,96,0.45)", background:"rgba(39,174,96,0.15)", color:"#2ecc71",
+                          }}>Return</button>
+                        )}
+                      </div>
                     </div>
 
                     {/* Action buttons */}
@@ -2823,7 +2896,7 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
                   <div style={{fontSize:13,fontWeight:800,color:C.text,marginBottom:4}}>Subs go in for who?</div>
                   <div style={{fontSize:11,color:C.muted,lineHeight:1.4,marginBottom:8}}>
                     {shownPairs.every(pair => pair.fromPlan)
-                      ? `Everyone on the bench comes on, matching Q${Math.min(quarter + 1, totalQuarters)}.`
+                      ? `Everyone on the bench comes on, matching ${abbr}${Math.min(quarter + 1, totalQuarters)}.`
                       : "Dotted lines on the field show the same pairs. Tap a bench player, then a field player, to move a line."}
                   </div>
                   {shownPairs.map(pair => (
@@ -2882,7 +2955,7 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
               {pendingSwaps.map(row => (
                 <div key={row.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,marginBottom:8,flexWrap:"wrap",padding:"8px",borderRadius:8,background:"rgba(0,0,0,0.18)"}}>
                   <div style={{fontSize:13,color:C.text,lineHeight:1.35}}>
-                    <div style={{fontSize:10,color:C.muted,fontWeight:700,marginBottom:2}}>Q{row.quarter}</div>
+                    <div style={{fontSize:10,color:C.muted,fontWeight:700,marginBottom:2}}>{abbr}{row.quarter}</div>
                     <span style={{fontWeight:800,color:"#2ecc71"}}>{playerName(row.inId)}</span>
                     <span style={{fontSize:10,fontWeight:800,color:"#2ecc71"}}> ON </span>
                     <span style={{color:C.muted}}>→</span>
@@ -2906,10 +2979,10 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
                 <div style={{marginTop:10}}>
                   <div style={{fontSize:11,color:C.gold,fontWeight:700,marginBottom:6}}>Late arrival</div>
                   {players.filter(p => p.out).map(p => (
-                    <button key={p.id} onClick={() => restorePlayer(p.id)} style={{
-                      marginRight:6, marginBottom:6, padding:"6px 10px", borderRadius:6, cursor:"pointer",
+                    <button key={p.id} onClick={() => restorePlayer(p.id, "top")} style={{
+                      marginRight:6, marginBottom:6, minHeight:44, minWidth:44, padding:"8px 12px", borderRadius:8, cursor:"pointer",
                       border:`1px solid ${C.border}`, background:"rgba(255,255,255,0.04)", color:C.text,
-                      fontSize:11, fontWeight:700, fontFamily:"inherit",
+                      fontSize:13, fontWeight:700, fontFamily:"inherit",
                     }}>#{p.number} {p.name} arrived</button>
                   ))}
                 </div>
@@ -2920,7 +2993,7 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
           )}
           <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,marginBottom:10,flexWrap:"wrap"}}>
             <div style={{fontSize:11,color:C.gold,fontWeight:700,textTransform:"uppercase",letterSpacing:"0.07em"}}>
-              Q{quarter} field
+              {abbr}{quarter} field
             </div>
             <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
               <button onClick={saveStrategyToGameDay} style={{
@@ -2945,10 +3018,10 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
               alignItems:"center", justifyContent:"center", gap:12, padding:24,
             }}>
               <div style={{fontSize:13,color:C.muted,textAlign:"center",lineHeight:1.6}}>
-                Hit <b style={{color:C.gold}}>Plan Full Game</b> to schedule all 4 quarters.<br/>
+                Hit <b style={{color:C.gold}}>Plan Full Game</b> to schedule all {totalQuarters} {noun}.<br/>
                 {subMode
-                  ? `Sub mode targets ${minHalves} of 8 halves and spreads sit time.`
-                  : `Full quarters target ${minQ} of ${totalQuarters} on the field.`}
+                  ? `Sub mode targets ${minHalves} of ${totalQuarters * 2} halves and spreads sit time.`
+                  : `Full periods target ${minQ} of ${totalQuarters} on the field.`}
               </div>
               <Btn primary disabled={!gate.ok} onClick={() => planWholeGame(1)}>Plan full game</Btn>
             </div>
@@ -2960,17 +3033,17 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
                 color:quarter===1?"rgba(255,255,255,0.1)":C.gold,fontSize:22,padding:"0 6px",lineHeight:1,
               }}>‹</button>
               <div style={{fontSize:11,color:C.muted,fontWeight:600}}>
-                Q{quarter} Field View <span style={{opacity:0.4}}> tap arrows</span>
+                {abbr}{quarter} Field View <span style={{opacity:0.4}}> tap arrows</span>
               </div>
-              <button onClick={()=>setQuarter(q=>Math.min(4,q+1))} disabled={quarter===4} style={{
-                background:"none",border:"none",cursor:quarter===4?"default":"pointer",
-                color:quarter===4?"rgba(255,255,255,0.1)":C.gold,fontSize:22,padding:"0 6px",lineHeight:1,
+              <button onClick={()=>setQuarter(q=>clampPeriod(q, q+1, totalQuarters))} disabled={quarter>=totalQuarters} style={{
+                background:"none",border:"none",cursor:quarter>=totalQuarters?"default":"pointer",
+                color:quarter>=totalQuarters?"rgba(255,255,255,0.1)":C.gold,fontSize:22,padding:"0 6px",lineHeight:1,
               }}>›</button>
             </div>
             {currentLineup && (
               <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:8}}>
                 <Btn sm secondary onClick={scramblePositions}>Scramble positions</Btn>
-                <Btn sm secondary onClick={scrambleMembership}>Redraw who plays Q{quarter}</Btn>
+                <Btn sm secondary onClick={scrambleMembership}>Redraw who plays {abbr}{quarter}</Btn>
               </div>
             )}
             {swapSel && (
@@ -3194,7 +3267,7 @@ const sheetSaveBtn = {
   fontFamily: "inherit",
 };
 
-function SheetCanvases({ field, playTime, league, opponent, homeScore, awayScore }) {
+function SheetCanvases({ field, playTime, league, opponent, homeScore, awayScore, periodAbbrev = "Q", periodCount = 4 }) {
   const fieldRef = useRef(null);
   const playRef = useRef(null);
   useEffect(() => {
@@ -3207,7 +3280,7 @@ function SheetCanvases({ field, playTime, league, opponent, homeScore, awayScore
       <div style={{borderRadius:8,overflow:"hidden",marginBottom:8,border:"1px solid rgba(255,255,255,0.08)",background:"#0c1409"}}>
         <canvas ref={fieldRef} style={{width:"100%",height:"auto",display:"block"}} />
       </div>
-      <button type="button" onClick={() => downloadCanvas(fieldRef.current, "CoachKit_Field_Q1-Q4.png")} style={{...sheetSaveBtn, width:"100%", marginBottom:16}}>
+      <button type="button" onClick={() => downloadCanvas(fieldRef.current, `CoachKit_Field_${periodAbbrev}1-${periodAbbrev}${periodCount}.png`)} style={{...sheetSaveBtn, width:"100%", marginBottom:16}}>
         Save field image
       </button>
       <div style={{fontSize:12,fontWeight:800,color:"#2ecc71",marginBottom:6}}>Sheet 2 · Play time</div>
@@ -3256,6 +3329,8 @@ function ShareLineupModal({ players, lineupsByQuarter, pairPlan, subMode, segmen
             opponent={opponent}
             homeScore={homeScore}
             awayScore={awayScore}
+            periodAbbrev={periodAbbrev}
+            periodCount={quarters.length || 4}
           />
         </div>
       </div>
@@ -3425,7 +3500,14 @@ function PlayerRow({ player, onUpdate, onRemove }) {
 // 
 // TAB: RULES
 // 
-function TabRules({ setup, onAgeChange }) {
+function TabRules({ setup }) {
+  const [viewAge, setViewAge] = useState(setup.age);
+  const [view, setView] = useState("quick");
+  useEffect(() => { setViewAge(setup.age); }, [setup.age]);
+  const preview = tableRule(setup.orgId || "us-soccer", viewAge, setup.saySeason);
+  const say = setup.orgId === "say-east";
+  const division = say ? sayDivision(viewAge) : null;
+  const divisionKey = say ? sayDivisionKey(viewAge) : "";
   return (
     <div>
       <div style={{
@@ -3434,47 +3516,178 @@ function TabRules({ setup, onAgeChange }) {
         borderRadius:10,padding:"10px 14px",
       }}>
         <div>
-          <div style={{fontSize:12,fontWeight:800,color:C.gold,letterSpacing:"0.06em"}}>{setup.orgLabel.toUpperCase()}</div>
-          <div style={{fontSize:11,color:C.muted}}>{setup.age} · {setup.durationLabel}{setup.gk ? " · goalkeeper" : " · no goalkeeper"}</div>
+          <div style={{fontSize:12,fontWeight:800,color:C.gold,letterSpacing:"0.06em"}}>
+            {say ? "SAY EAST CINCINNATI - OFFICIAL RULES" : setup.orgLabel.toUpperCase()}
+          </div>
+          <div style={{fontSize:11,color:C.muted}}>
+            {say
+              ? "Source: SAY East Playing Laws Rulebook (Updated Jan 2026) - Silver Matrix age chart"
+              : `${viewAge} · ${preview.periods} × ${preview.periodMinutes} min${preview.gk ? " · goalkeeper" : " · no goalkeeper"}`}
+          </div>
         </div>
       </div>
-      <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:16}}>
+      <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:8}}>
         {AGES.map(age => (
-          <button key={age} onClick={() => onAgeChange(age)} style={{
+          <button key={age} type="button" onClick={() => setViewAge(age)} style={{
             padding:"5px 13px",borderRadius:7,border:"none",cursor:"pointer",fontSize:12,fontWeight:600,fontFamily:"inherit",
-            background:setup.age===age?`linear-gradient(135deg,${C.gold},${C.goldDark})`:C.surface,
-            color:setup.age===age?"#0a0d0f":C.muted,
+            background:viewAge===age?`linear-gradient(135deg,${C.gold},${C.goldDark})`:C.surface,
+            color:viewAge===age?"#0a0d0f":C.muted,
           }}>{age}</button>
         ))}
+      </div>
+      <div style={{fontSize:11,color:C.muted,marginBottom:12,lineHeight:1.4}}>
+        Browsing ages here does not change the Game Day lineup.
       </div>
       <div style={{
         background:`linear-gradient(135deg,rgba(232,160,32,0.12),rgba(184,120,24,0.06))`,
         border:`1px solid rgba(232,160,32,0.25)`,
         borderRadius:12,padding:"14px 18px",marginBottom:16,
       }}>
+        {division && (
+          <>
+            <div style={{fontSize:18,fontWeight:800,color:C.gold,marginBottom:2}}>
+              {viewAge}{division.divisionName ? `  ${division.divisionName}` : ""}
+            </div>
+            {division.ageRange && <div style={{fontSize:11,color:C.muted,marginBottom:10}}>{division.ageRange}</div>}
+          </>
+        )}
         <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
           {[
-            ["Players", `${setup.playersOnField} (${setup.format})`],
-            ["Goalkeeper", setup.gk ? "Yes" : "No"],
-            ["Clock", setup.durationLabel],
-            ["Ball", setup.ballSize ? `Size ${setup.ballSize}` : "Coach's choice"],
+            ["Players", `${preview.playersOnField}v${preview.playersOnField}`],
+            ["Goalkeeper", preview.gk ? "Yes" : "No"],
+            ["Clock", `${preview.periods} × ${preview.periodMinutes} min`],
+            ["Ball", preview.ballSize ? `Size ${preview.ballSize}` : "Coach's choice"],
+            ...(division ? [
+              ["Format", division.format || ""],
+              ["Field", division.fieldLength ? `${division.fieldLength} x ${division.fieldWidth}` : ""],
+              ["Goals", division.goalSize || ""],
+            ] : []),
           ].map(([k,v]) => (
             <div key={k} style={{background:"rgba(0,0,0,0.35)",borderRadius:7,padding:"5px 11px",fontSize:11}}>
               <span style={{color:C.muted}}>{k}: </span><span style={{color:C.text,fontWeight:700}}>{v}</span>
             </div>
           ))}
         </div>
-        {setup.verified === false && (
+        {division && (
+          <div style={{display:"flex",gap:8,flexWrap:"wrap",marginTop:8}}>
+            {[
+              ["Heading", division.heading ? "Allowed" : "Banned"],
+              ["Offside", division.offside ? "Full rule" : "None"],
+              ["Build-Out", division.buildOut ? "Active" : "Not used"],
+              ["Slide Tackle", division.slideTackle ? "Allowed" : "Restricted"],
+              ["GK Punt", division.gkPunt ? "Allowed (SAY East)" : "Not allowed"],
+              ["Cards", division.yellowRedCards ? "Full system" : "No cards"],
+            ].map(([k,v]) => (
+              <div key={k} style={{background:"rgba(0,0,0,0.25)",borderRadius:6,padding:"4px 9px",fontSize:11}}>
+                <span style={{color:C.muted}}>{k}: </span><span style={{color:C.text,fontWeight:600}}>{v}</span>
+              </div>
+            ))}
+          </div>
+        )}
+        {preview.verified === false && (
           <div style={{fontSize:12,color:C.gold,marginTop:10}}>Unverified default. The note says what the rulebook did not settle.</div>
         )}
-        <div style={{fontSize:13,color:C.text,lineHeight:1.5,marginTop:12}}>{setup.note}</div>
-        {setup.gk && <div style={{fontSize:12,color:C.muted,lineHeight:1.45,marginTop:8}}>{setup.gkReason}</div>}
-        {setup.source && (
-          <a href={setup.source} target="_blank" rel="noreferrer" style={{display:"inline-block",marginTop:12,fontSize:12,color:C.gold}}>
+        <div style={{fontSize:13,color:C.text,lineHeight:1.5,marginTop:12}}>{preview.note}</div>
+        {preview.gk && <div style={{fontSize:12,color:C.muted,lineHeight:1.45,marginTop:8}}>{gkFullPeriodReason(preview.periodType)}</div>}
+        {preview.source && (
+          <a href={preview.source} target="_blank" rel="noreferrer" style={{display:"inline-block",marginTop:12,fontSize:12,color:C.gold}}>
             Source
           </a>
         )}
       </div>
+      {division && (
+        <>
+          <div style={{display:"flex",gap:4,marginBottom:14,flexWrap:"wrap"}}>
+            {[["quick","Quick Reference"],["unknown","Easily Missed Rules"],["links","Official Links"]].map(([k,l]) => (
+              <button key={k} type="button" onClick={() => setView(k)} style={{
+                padding:"6px 14px",borderRadius:7,border:"none",cursor:"pointer",fontSize:12,fontWeight:600,fontFamily:"inherit",
+                background:view===k?`linear-gradient(135deg,${C.gold},${C.goldDark})`:C.surface,
+                color:view===k?"#0a0d0f":C.muted,
+              }}>{l}</button>
+            ))}
+          </div>
+          {view==="quick" && (
+            <div>
+              {division.quickRules.map((rule,i) => (
+                <div key={i} style={{
+                  display:"flex",alignItems:"flex-start",gap:12,padding:"10px 14px",
+                  marginBottom:6,borderRadius:9,
+                  background: rule.important?"rgba(232,160,32,0.08)":C.surface,
+                  border:`1px solid ${rule.important?"rgba(232,160,32,0.25)":C.border}`,
+                }}>
+                  {rule.icon && <span style={{fontSize:18,lineHeight:1,flexShrink:0}}>{rule.icon}</span>}
+                  <div style={{fontSize:13,color:rule.important?C.text:C.muted,fontWeight:rule.important?600:400}}>{rule.text}</div>
+                  {rule.important && <div style={{marginLeft:"auto",fontSize:9,color:C.gold,fontWeight:700,flexShrink:0}}>KEY</div>}
+                </div>
+              ))}
+              <div style={{
+                display:"flex",alignItems:"flex-start",gap:12,padding:"10px 14px",
+                marginBottom:6,borderRadius:9,
+                background:"rgba(39,174,96,0.08)",border:"1px solid rgba(39,174,96,0.2)",
+              }}>
+                <div>
+                  <div style={{fontSize:13,color:C.text,fontWeight:600}}>Min Play Time (SAY Rule 12)</div>
+                  <div style={{fontSize:12,color:C.muted}}>{SAY_PLAY_TIME[divisionKey]?.note || "Check local rules"}</div>
+                </div>
+              </div>
+              <div style={{
+                display:"flex",alignItems:"flex-start",gap:12,padding:"10px 14px",
+                borderRadius:9,background:"rgba(211,84,0,0.06)",border:"1px solid rgba(211,84,0,0.2)",
+              }}>
+                <div>
+                  <div style={{fontSize:13,color:C.text,fontWeight:600}}>No Blowout Rule (SAY East)</div>
+                  <div style={{fontSize:12,color:C.muted}}>Winning by more than 5 goals is a violation. Coaches must have a plan to manage score - rotate, adjust tactics, avoid running up the score.</div>
+                </div>
+                <div style={{marginLeft:"auto",fontSize:9,color:C.warn,fontWeight:700,flexShrink:0}}>KEY</div>
+              </div>
+            </div>
+          )}
+          {view==="unknown" && (
+            <div>
+              <div style={{fontSize:12,color:C.muted,marginBottom:12,lineHeight:1.6}}>
+                Rules frequently misunderstood by coaches and parents in SAY East.
+              </div>
+              {(division.unknownRules || []).map((rule,i) => (
+                <div key={i} style={{
+                  display:"flex",alignItems:"flex-start",gap:12,padding:"12px 14px",
+                  marginBottom:8,borderRadius:9,background:C.surface,border:`1px solid ${C.border}`,
+                }}>
+                  <div style={{
+                    width:22,height:22,borderRadius:"50%",flexShrink:0,
+                    background:`linear-gradient(135deg,${C.gold},${C.goldDark})`,
+                    display:"flex",alignItems:"center",justifyContent:"center",
+                    fontSize:11,fontWeight:700,color:"#0a0d0f",
+                  }}>{i+1}</div>
+                  <div style={{fontSize:13,color:C.text,lineHeight:1.6}}>{rule}</div>
+                </div>
+              ))}
+            </div>
+          )}
+          {view==="links" && (
+            <div>
+              <div style={{fontSize:12,color:C.muted,marginBottom:12}}>
+                Official SAY East and SAY National rulebooks for {divisionKey}:
+              </div>
+              {(division.officialLinks || []).map((link,i) => (
+                <a key={i} href={link.url} target="_blank" rel="noopener noreferrer" style={{
+                  display:"flex",alignItems:"center",gap:12,padding:"12px 16px",
+                  marginBottom:8,borderRadius:9,
+                  background:C.surface,border:`1px solid ${C.border}`,
+                  textDecoration:"none",
+                }}>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{fontSize:13,color:C.text,fontWeight:600}}>{link.label}</div>
+                    <div style={{fontSize:11,color:C.muted,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{link.url}</div>
+                  </div>
+                </a>
+              ))}
+              <div style={{fontSize:11,color:C.muted,marginTop:12,lineHeight:1.6,padding:"10px 14px",background:C.surface,borderRadius:8,border:`1px solid ${C.border}`}}>
+                Rules may vary by local league, state association, or competition. Always verify with your specific league administrator.
+              </div>
+            </div>
+          )}
+        </>
+      )}
     </div>
   );
 }
@@ -4637,6 +4850,8 @@ function TabSeason({ players, playerStats, setPlayerStats, games, setGames, prac
                         opponent={g.opponent}
                         homeScore={g.homeScore}
                         awayScore={g.oppScore}
+                        periodAbbrev={g.strategy.periodType === "halves" ? "H" : g.strategy.periodType === "periods" ? "P" : "Q"}
+                        periodCount={g.strategy.periods || sheets.field.quarters?.length || 4}
                       />
                     </div>
                   </details>

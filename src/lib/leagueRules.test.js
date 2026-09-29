@@ -49,7 +49,7 @@ test("SAY East keeps Cincinnati sizes and flags the unverified cells", () => {
   for (const age of ["U7", "U8"]) {
     const row = tableRule("say-east", age);
     assert.equal(row.playersOnField, 6);
-    assert.equal(row.gk, false);
+    assert.equal(row.gk, true);
     assert.equal(row.periodMinutes, 10);
     assert.equal(row.verified, false);
   }
@@ -83,6 +83,8 @@ test("Ohio uses US Soccer only where the state card is missing", () => {
   assert.equal(tableRule("ohio", "U10").periods, 2);
   assert.equal(tableRule("ohio", "U10").periodMinutes, 25);
   assert.equal(tableRule("ohio", "U12").playersOnField, 9);
+  assert.equal(tableRule("ohio", "U11").source.includes("OSDLRules"), true);
+  assert.equal(tableRule("ohio", "U12").periodMinutes, 30);
   assert.equal(tableRule("ohio", "U14").periodMinutes, 35);
   assert.equal(tableRule("ohio", "U16").periodMinutes, 40);
   assert.equal(tableRule("ohio", "U18").periodMinutes, 45);
