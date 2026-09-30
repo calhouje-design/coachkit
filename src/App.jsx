@@ -38,8 +38,11 @@ import {
   shareFieldSheet,
   sharePlayTimeSheet,
   scheduleHalfRotation,
+  scheduleWholeGame,
   firstDifferentPlan,
-  seededRandom,
+  planHistoryKey,
+  sheetMeetsMinimum,
+  liveReplanGoalkeeper,
   gameLogFromStrategy,
   upsertGameLog,
   playerQuarterPresence,
@@ -508,232 +511,6 @@ function generatePractice(league, focus, skills, duration, allDrills) {
 // 
 function uid() { return Math.random().toString(36).slice(2,9); }
 
-/**
- * WHOLE-GAME SCHEDULER
- * Plans all 4 quarters at once so every eligible player is targeted for
- * their minimum quarter count before higher-rated players get extra time.
- * Callers must run `feasibility` first. This does not block an impossible roster.
- *
- * Algorithm:
- * 1. Each quarter needs `slotsPerQuarter` players on the field.
- * 2. Total field-slots across 4 quarters = slotsPerQuarter  4.
- * 3. Each active player gets at least `minQ` quarters guaranteed.
- * 4. Remaining slots are distributed to highest-rated players.
- * 5. Within each quarter, players are sorted to best-fit positions.
- * 6. Players who sat last quarter get priority for the next one (rotation).
- */
-function scheduleWholeGame(players, format, league, lockedLineups = {}, fromQuarter = 1, segments = {}, credit = {}, slotOverride = null, totalPeriods = 4, minFraction = 0.5, slotsByQuarter = null, seed = null) {
-  const TOTAL_Q  = totalPeriods;
-  const fallback = defaultSlots(playersFromFormat(format) || 7, true);
-  const slots    = slotOverride?.length ? slotOverride : fallback;
-  const slotsPerQ = slots.length;
-  const minQ     = Math.ceil(minFraction * TOTAL_Q);
-
-  // Shuffle active players so bonus-slot distribution isn't biased
-  // by roster order. A seed makes that shuffle repeatable.
-  const rng = seed == null ? Math.random : seededRandom(seed);
-  const shuffle = arr => {
-    const a = [...arr];
-    for (let i = a.length - 1; i > 0; i--) {
-      const j = Math.floor(rng() * (i + 1));
-      [a[i], a[j]] = [a[j], a[i]];
-    }
-    return a;
-  };
-  const active = shuffle(players.filter(p => !p.injured && !p.out));
-
-  // Locked quarters count in halves so a mid-quarter split still owes time.
-  const minHalves = minQ * 2;
-  const lockedQuarters = [];
-  for (let q = 1; q < fromQuarter; q++) if (lockedLineups[q]) lockedQuarters.push(q);
-  const alreadyHalves = {};
-  active.forEach(p => {
-    alreadyHalves[p.id] = equityHalves(p.id, {
-      lineups: lockedLineups,
-      segments,
-      credit,
-      quarters: lockedQuarters,
-    });
-  });
-
-  // Quarters remaining to schedule
-  const remainingQs = [];
-  for (let q = fromQuarter; q <= TOTAL_Q; q++) remainingQs.push(q);
-  const R = remainingQs.length; // number of quarters we're planning
-
-  // Total field-slots to fill across remaining quarters
-  const totalSlots = slotsPerQ * R;
-
-  // Assign each player a quota for the REMAINING quarters
-  // minQ total  but subtract what they've already played
-  const quota = {};
-  active.forEach(p => {
-    const remainingHalves = Math.max(0, minHalves - (alreadyHalves[p.id] || 0));
-    const remaining = Math.ceil(remainingHalves / 2);
-    quota[p.id] = Math.min(remaining, R); // can't exceed remaining quarters
-  });
-
-  // How many total guaranteed slots are spoken for?
-  const guaranteedTotal = Object.values(quota).reduce((a, b) => a + b, 0);
-  // Remaining free slots go to top-rated players
-  const freeSlots = Math.max(0, totalSlots - guaranteedTotal);
-
-  // Rate players
-  const rated = [...active].sort((a, b) => getOverallRating(b) - getOverallRating(a));
-
-  // Distribute free slots to highest rated players (round-robin from top)
-  const bonusQ = {};
-  active.forEach(p => { bonusQ[p.id] = 0; });
-  let remaining = freeSlots;
-  let round = 0;
-  while (remaining > 0) {
-    let distributed = false;
-    for (const p of rated) {
-      const totalAssigned = quota[p.id] + bonusQ[p.id];
-      if (totalAssigned < R) {
-        bonusQ[p.id]++;
-        remaining--;
-        distributed = true;
-        if (remaining === 0) break;
-      }
-    }
-    if (!distributed) break; // all players maxed out
-    round++;
-    if (round > 100) break; // safety
-  }
-
-  // Final quarters-per-player for remaining schedule
-  const qCount = {};
-  active.forEach(p => { qCount[p.id] = quota[p.id] + bonusQ[p.id]; });
-
-  // -- QUARTER-BY-QUARTER ASSIGNMENT --
-  // Build each quarter's field one slot at a time, quarter in order.
-  // Key rule: a player who sat the PREVIOUS quarter is picked FIRST
-  // (they have the highest "bench debt"). This guarantees no one
-  // sits back-to-back unless every other eligible player is already
-  // used up for that quarter.
-
-  const quarterId = {}; // playerId  Set of quarters they play
-  active.forEach(p => { quarterId[p.id] = new Set(); });
-
-  // Track how many quarters each player still NEEDS to play
-  const qRemaining = {};
-  active.forEach(p => { qRemaining[p.id] = qCount[p.id]; });
-
-  // For each quarter, who sat the immediately previous quarter?
-  // Seed with locked lineups context for the quarter before fromQuarter.
-  const prevQ0 = fromQuarter - 1;
-  let sLastQ = new Set( // players benched in the quarter just before we start
-    prevQ0 >= 1 && lockedLineups[prevQ0]
-      ? active
-          .filter(p => !lockedLineups[prevQ0].starters.some(s => s.player?.id === p.id))
-          .map(p => p.id)
-      : []
-  );
-
-  for (const q of remainingQs) {
-    const spotsLeft = slotsPerQ;
-    const chosen = []; // player ids picked for this quarter
-
-    // Eligible = still has remaining quota > 0 AND hasn't been assigned this quarter
-    const eligible = () => active.filter(p =>
-      qRemaining[p.id] > 0 && !chosen.includes(p.id)
-    );
-
-    // -- Pass 1: fill from players who sat LAST quarter first --
-    // Sort bench-debtors by remaining quota desc (highest need first),
-    // then by rating desc as tiebreaker
-    const debtors = eligible()
-      .filter(p => sLastQ.has(p.id))
-      .sort((a, b) => qRemaining[b.id] - qRemaining[a.id] || getOverallRating(b) - getOverallRating(a));
-
-    for (const p of debtors) {
-      if (chosen.length >= spotsLeft) break;
-      chosen.push(p.id);
-    }
-
-    // -- Pass 2: fill remaining spots with players who have most quota left 
-    const others = eligible()
-      .sort((a, b) => qRemaining[b.id] - qRemaining[a.id] || getOverallRating(b) - getOverallRating(a));
-
-    for (const p of others) {
-      if (chosen.length >= spotsLeft) break;
-      chosen.push(p.id);
-    }
-
-    // Commit chosen players to this quarter
-    chosen.forEach(id => {
-      quarterId[id].add(q);
-      qRemaining[id]--;
-    });
-
-    // Who sat this quarter? They get priority next quarter.
-    sLastQ = new Set(active.filter(p => !chosen.includes(p.id)).map(p => p.id));
-  }
-
-  // Build lineups for each remaining quarter
-  const result = { ...lockedLineups };
-
-  // Track the last position each player was assigned (to avoid back-to-back repeats)
-  // Seed from the last locked quarter if replanning mid-game
-  const lastPos = {}; // playerId -> position string they played most recently
-  const prevLockedQ = fromQuarter - 1;
-  if (prevLockedQ >= 1 && lockedLineups[prevLockedQ]) {
-    lockedLineups[prevLockedQ].starters.forEach(s => {
-      if (s.player) lastPos[s.player.id] = s.pos;
-    });
-  }
-
-  for (const q of remainingQs) {
-    const starters_pool = active.filter(p => quarterId[p.id].has(q));
-    const bench_pool    = active.filter(p => !quarterId[p.id].has(q));
-
-    // For each player starting this quarter, pick a random allowed position
-    // that differs from their last position (if they have other options).
-    const playerPosThisQ = {}; // playerId -> chosen position for this quarter
-    for (const p of starters_pool) {
-      const allowed = p.positions && p.positions.length > 0
-        ? p.positions
-        : ["CM"]; // fallback if somehow empty
-      // Prefer positions that aren't the same as last quarter
-      const fresh = allowed.filter(pos => pos !== lastPos[p.id]);
-      const pool  = fresh.length > 0 ? fresh : allowed;
-      playerPosThisQ[p.id] = pool[Math.floor(rng() * pool.length)];
-    }
-
-    // Now assign players to the formation slots.
-    // Slots are defined by the formation (e.g. GK, LD, RD, LM, RM, CF).
-    // For each slot, find the best unassigned player whose chosen position
-    // matches that slot. Fallback to any unassigned player.
-    const assigned = new Set();
-
-    // Shuffle starters_pool so tie-breaking is random (not roster-order biased)
-    const shuffledPool = shuffle(starters_pool);
-
-    const quarterSlots = (() => {
-      const custom = slotsByQuarter?.[q] || slotsByQuarter?.[String(q)];
-      return Array.isArray(custom) && custom.length === slots.length ? custom : slots;
-    })();
-    const starters = quarterSlots.map(slotPos => {
-      // Pass 1: player whose randomly chosen position matches this slot exactly
-      let pick = shuffledPool.find(p => !assigned.has(p.id) && playerPosThisQ[p.id] === slotPos);
-      // Pass 2: player whose allowed positions include this slot
-      if (!pick) pick = shuffledPool.find(p => !assigned.has(p.id) && (p.positions||[]).includes(slotPos));
-      // Pass 3: any unassigned player (guaranteed fill)
-      if (!pick) pick = shuffledPool.find(p => !assigned.has(p.id));
-      if (pick) {
-        assigned.add(pick.id);
-        // Record the actual slot position they ended up in (not just their chosen one)
-        lastPos[pick.id] = slotPos;
-      }
-      return { pos: slotPos, player: pick || null };
-    });
-
-    result[q] = { starters, bench: bench_pool };
-  }
-
-  return result;
-}
 
 // Single-quarter changes live in src/lib/fairPlay.js (scrambleQuarterPositions,
 // redrawQuarterMembership). Do not call scheduleWholeGame to "redo one quarter"
@@ -1410,6 +1187,8 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
   const [swapSel, setSwapSel] = useState(null);
   const [fairWarn, setFairWarn] = useState(null);
   const [scrambleNote, setScrambleNote] = useState(null);
+  const [planNote, setPlanNote] = useState(null);
+  const recentPlanKeys = useRef([]);
   const [planSub, setPlanSub] = useState(false);
   const [subsOpen, setSubsOpen] = useState(false);
   const [halfFlash, setHalfFlash] = useState(false);
@@ -1599,11 +1378,18 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
     return () => window.removeEventListener("pagehide", onLeave);
   }, []);
 
+  const rememberSheet = (lineups) => {
+    if (!lineups || !Object.keys(lineups).some(key => lineups[key]?.starters)) return;
+    const key = planHistoryKey(lineups, 1);
+    recentPlanKeys.current = [key, ...recentPlanKeys.current.filter(item => item !== key)].slice(0, 5);
+  };
+
   const notePlanResult = (nextLineups, roster = players, credit = appearanceCredit, segments = subSegments) => {
     setLineupsByQuarter(nextLineups);
     setFairWarn(null);
     setScrambleNote(null);
     setSwapSel(null);
+    setPlanNote(null);
     const viol = roster.filter(p => !p.injured && !p.out && !p.midGameInjury && minQ > 0 && halvesFor(p.id, nextLineups, credit, segments) < minHalves);
     const complete = periodList.every(q => nextLineups?.[q]);
     if (viol.length === 0 && complete) {
@@ -1612,6 +1398,13 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
     } else {
       setJustRegenned(false);
     }
+  };
+
+  const noteOnlyLineup = () => {
+    setJustRegenned(false);
+    setFairWarn(null);
+    setScrambleNote(null);
+    setPlanNote("Only one valid lineup for this roster.");
   };
 
   const warnIfShort = (nextLineups, roster = players, credit = appearanceCredit, segments = subSegments) => {
@@ -1664,7 +1457,6 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
       }
     }
     const nextSegments = fromQ === 1 ? {} : clearSubSegmentsFrom(subSegments, fromQ);
-    if (fromQ > 1) setSubSegments(nextSegments);
     const formatSlots = planSlotsNow;
     const templates = shapesFor(format, !!setup?.gk, formatSlots);
     const overridesNow = fromQ === 1 ? {} : normalizeFormationOverrides(normalizeGameDay(gameDay).formationOverrides);
@@ -1681,10 +1473,23 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
       slotsByQuarter[q] = slotsForName(formationNameForPeriod(activeFormation, overridesNow, q, totalQuarters));
     }
     const creditForPlan = fromQ === 1 ? {} : appearanceCredit;
+    const clockStarted = fromQ > 1 && (running || (clockRef.current || 0) > 0);
+    const liveGk = fromQ === quarter
+      ? liveReplanGoalkeeper(lineupsByQuarter, fromQ, clockStarted)
+      : null;
+    rememberSheet(lineupsByQuarter);
+    const meets = (lineups, segments) => sheetMeetsMinimum(players, lineups, segments, {
+      minHalves,
+      totalQuarters,
+      credit: creditForPlan,
+    });
     if (subMode) {
-      const planned = firstDifferentPlan({
+      const chosen = firstDifferentPlan({
         currentLineups: lineupsByQuarter,
+        currentPlan: { lineups: lineupsByQuarter, segments: subSegments },
         fromQuarter: fromQ,
+        recentKeys: recentPlanKeys.current,
+        fairPlay: (result) => meets(result?.lineups, result?.segments),
         plan: (seed) => scheduleHalfRotation(players, planSlots, {
           minHalves,
           fromQuarter: fromQ,
@@ -1694,8 +1499,15 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
           rate: getOverallRating,
           slotsByQuarter,
           seed,
+          lockGoalkeeperId: liveGk,
         }),
       });
+      if (chosen.unchanged) {
+        noteOnlyLineup();
+        return;
+      }
+      const planned = chosen.plan;
+      rememberSheet(planned.lineups);
       setSubSegments(planned.segments);
       notePlanResult(planned.lineups, players, creditForPlan, planned.segments);
       if (fromQ !== 1 && fromQ === quarter && running) {
@@ -1708,20 +1520,34 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
       }
       return;
     }
-    const result = firstDifferentPlan({
+    const chosen = firstDifferentPlan({
       currentLineups: lineupsByQuarter,
+      currentPlan: lineupsByQuarter,
       fromQuarter: fromQ,
-      plan: (seed) => scheduleWholeGame(
-        players, format, league, locked, fromQ,
-        nextSegments,
-        creditForPlan,
-        planSlots,
-        totalQuarters,
-        setup?.minFraction ?? 0.5,
+      recentKeys: recentPlanKeys.current,
+      fairPlay: (result) => meets(result, nextSegments),
+      plan: (seed) => scheduleWholeGame({
+        players,
+        format,
+        lockedLineups: locked,
+        fromQuarter: fromQ,
+        segments: nextSegments,
+        credit: creditForPlan,
+        slotOverride: planSlots,
+        totalPeriods: totalQuarters,
+        minFraction: setup?.minFraction ?? 0.5,
         slotsByQuarter,
         seed,
-      ),
+        lockGoalkeeperId: liveGk,
+        rate: getOverallRating,
+      }),
     });
+    if (chosen.unchanged) {
+      noteOnlyLineup();
+      return;
+    }
+    const result = chosen.plan;
+    rememberSheet(result);
     notePlanResult(result, players, creditForPlan, nextSegments);
     if (fromQ !== 1 && fromQ === quarter && running) {
       const next = {};
@@ -2550,6 +2376,16 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
       </div>
 
       {/* Success flash — only when the plan actually meets the quarter minimum */}
+      {planNote && !justRegenned && (
+        <div style={{
+          background:"rgba(255,255,255,0.04)", border:`1px solid ${C.border}`,
+          borderRadius:9, padding:"10px 14px", marginBottom:14,
+          fontSize:12, color:C.muted, fontWeight:600,
+        }}>
+          {planNote}
+        </div>
+      )}
+
       {justRegenned && violations.length === 0 && (
         <div style={{
           background:"rgba(39,174,96,0.12)", border:"1px solid rgba(39,174,96,0.35)",

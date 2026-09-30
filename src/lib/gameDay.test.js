@@ -39,8 +39,12 @@ import {
   planAvailability,
   returnToGame,
   scheduleHalfRotation,
+  scheduleWholeGame,
   firstDifferentPlan,
   plansDiffer,
+  planHistoryKey,
+  sheetMeetsMinimum,
+  liveReplanGoalkeeper,
   gameLogFromStrategy,
   upsertGameLog,
   playerQuarterPresence,
@@ -1254,4 +1258,215 @@ test("replan after injury and return keeps played periods and varies the rest", 
   assert.equal(shifted.lineups[2], back.lineups[2]);
   assert.equal(plansDiffer(kept.lineups, shifted.lineups, 3), true);
   assert.equal(playerQuarterPresence(kept.lineups[3], hurtId) === "blank", false);
+});
+
+test("a bench reorder is not a new sheet", () => {
+  const left = {
+    1: {
+      starters: [{ pos: "GK", player: { id: "a" } }, { pos: "CF", player: { id: "b" } }],
+      bench: [{ id: "c" }, { id: "d" }],
+    },
+  };
+  const right = {
+    1: {
+      starters: left[1].starters,
+      bench: [{ id: "d" }, { id: "c" }],
+    },
+  };
+  assert.equal(plansDiffer(left, right, 1), false);
+  const moved = {
+    1: {
+      starters: [{ pos: "GK", player: { id: "a" } }, { pos: "CF", player: { id: "c" } }],
+      bench: [{ id: "b" }, { id: "d" }],
+    },
+  };
+  assert.equal(plansDiffer(left, moved, 1), true);
+});
+
+test("plan selection prefers a fair sheet, skips recent ones, and caps attempts", () => {
+  const sheet = (id) => ({
+    1: { starters: [{ pos: "CF", player: { id } }], bench: [] },
+  });
+  const current = sheet("a");
+  let cursor = 0;
+  const seeds = [1, 2, 3];
+  const chosen = firstDifferentPlan({
+    currentLineups: current,
+    attempts: 5,
+    nextSeed: () => seeds[cursor++] ?? 3,
+    fairPlay: (result) => result.fair,
+    plan: (seed) => ({ lineups: sheet(seed === 1 ? "b" : "c"), fair: seed !== 1, seed }),
+  });
+  assert.equal(chosen.plan.seed, 2);
+  assert.equal(chosen.meetsMinimum, true);
+  assert.equal(chosen.unchanged, false);
+
+  const shortOnly = firstDifferentPlan({
+    currentLineups: current,
+    attempts: 2,
+    nextSeed: () => 1,
+    fairPlay: () => false,
+    plan: () => ({ lineups: sheet("z"), seed: 1 }),
+  });
+  assert.equal(shortOnly.meetsMinimum, false);
+  assert.equal(shortOnly.lineups[1].starters[0].player.id, "z");
+
+  const same = firstDifferentPlan({
+    currentLineups: current,
+    currentPlan: { lineups: current, kept: true },
+    attempts: 4,
+    nextSeed: () => 4,
+    plan: () => ({ lineups: current }),
+  });
+  assert.equal(same.unchanged, true);
+  assert.equal(same.plan.kept, true);
+
+  const recent = firstDifferentPlan({
+    currentLineups: current,
+    recentKeys: [planHistoryKey(sheet("b"), 1)],
+    attempts: 3,
+    nextSeed: (() => {
+      const order = [1, 2];
+      let i = 0;
+      return () => order[i++] ?? 2;
+    })(),
+    plan: (seed) => ({ lineups: sheet(seed === 1 ? "b" : "c"), seed }),
+  });
+  assert.equal(recent.plan.seed, 2);
+
+  let calls = 0;
+  firstDifferentPlan({
+    currentLineups: current,
+    attempts: Infinity,
+    nextSeed: () => 1,
+    plan: () => {
+      calls += 1;
+      return { lineups: current };
+    },
+  });
+  assert.equal(calls, 24);
+});
+
+test("a live replan keeps the goalkeeper in half-period and full-period modes", () => {
+  const slots = ["GK", "LD", "RD", "LM", "RM", "CF"];
+  const players = variedRoster(8);
+  assert.equal(liveReplanGoalkeeper({ 2: { starters: [{ pos: "GK", player: { id: "p1" } }], bench: [] } }, 2, false), null);
+  const halfBase = scheduleHalfRotation(players, slots, { minHalves: 4, seed: 1 });
+  const halfGk = goalkeeperId(halfBase.lineups[2]);
+  assert.equal(liveReplanGoalkeeper(halfBase.lineups, 2, true), halfGk);
+  const halfKeys = new Set();
+  for (let seed = 1; seed <= 40; seed++) {
+    const planned = scheduleHalfRotation(players, slots, {
+      minHalves: 4,
+      fromQuarter: 2,
+      lockedLineups: { 1: halfBase.lineups[1] },
+      lockedSegments: halfBase.segments,
+      seed,
+      lockGoalkeeperId: halfGk,
+    });
+    assert.equal(planned.lineups[1], halfBase.lineups[1]);
+    assert.equal(goalkeeperId(planned.lineups[2]), halfGk, `half seed ${seed}`);
+    const onField = planned.lineups[2].starters.some(slot => slot.player?.id === halfGk);
+    assert.equal(playCellKind({ onField, segment: segmentAt(planned.segments, halfGk, 2) }), "full");
+    assert.equal(segmentAt(planned.segments, halfGk, 2), null);
+    halfKeys.add(planHistoryKey(planned.lineups, 2));
+  }
+  assert.ok(halfKeys.size > 1, "half-period replan still has another legal sheet");
+
+  const fullBase = scheduleWholeGame({
+    players,
+    format: "6v6",
+    slotOverride: slots,
+    totalPeriods: 4,
+    minFraction: 0.5,
+    seed: 1,
+  });
+  const fullGk = goalkeeperId(fullBase[2]);
+  assert.ok(fullGk);
+  const fullKeys = new Set();
+  for (let seed = 1; seed <= 40; seed++) {
+    const planned = scheduleWholeGame({
+      players,
+      format: "6v6",
+      slotOverride: slots,
+      totalPeriods: 4,
+      minFraction: 0.5,
+      fromQuarter: 2,
+      lockedLineups: { 1: fullBase[1] },
+      seed,
+      lockGoalkeeperId: fullGk,
+    });
+    assert.equal(planned[1], fullBase[1]);
+    assert.equal(goalkeeperId(planned[2]), fullGk, `full seed ${seed}`);
+    fullKeys.add(planHistoryKey(planned, 2));
+  }
+  assert.ok(fullKeys.size > 1, "full-period replan still has another legal sheet");
+});
+
+test("the same on-field group can change positions when the seed changes", () => {
+  const slots = ["GK", "LD", "RD", "LM", "RM", "CF"];
+  const players = variedRoster(6);
+  const first = scheduleHalfRotation(players, slots, { minHalves: 4, seed: 1 });
+  const second = scheduleHalfRotation(players, slots, { minHalves: 4, seed: 2 });
+  [first, second].forEach(planned => {
+    [1, 2, 3, 4].forEach(q => assert.equal(planned.lineups[q].bench.length, 0));
+  });
+  assert.equal(plansDiffer(first.lineups, second.lineups, 1), true);
+});
+
+test("a 3-period plan prefers a seed that meets the fair-play minimum", () => {
+  const players = variedRoster(8);
+  const slots = ["GK", "LD", "RD", "LM", "RM", "CF"];
+  const minHalves = 4;
+  let seedCursor = 1;
+  const chosen = firstDifferentPlan({
+    attempts: 24,
+    nextSeed: () => seedCursor++,
+    fairPlay: (result) => sheetMeetsMinimum(players, result.lineups, result.segments, {
+      minHalves,
+      totalQuarters: 3,
+    }),
+    plan: (seed) => scheduleHalfRotation(players, slots, { minHalves, totalQuarters: 3, seed }),
+  });
+  assert.equal(chosen.meetsMinimum, true);
+  assert.equal(sheetMeetsMinimum(players, chosen.lineups, chosen.segments, { minHalves, totalQuarters: 3 }), true);
+});
+
+test("a full-period return is started often enough to reach the minimum", () => {
+  const keep = { id: "keep", name: "Keep", positions: ["GK"], injured: false, out: false };
+  const back = { id: "back", name: "Back", positions: ["CF"], injured: true, out: false };
+  const sub = { id: "sub", name: "Sub", positions: ["CF"], injured: false, out: false };
+  const on = (field, bench) => ({
+    starters: [{ pos: "GK", player: keep }, { pos: "CF", player: field }],
+    bench,
+  });
+  const lineups = {
+    1: on(back, [sub]),
+    2: on(sub, []),
+    3: on(sub, []),
+    4: on(sub, []),
+  };
+  const returned = returnToGame({
+    source: "roster",
+    autoRegen: true,
+    players: [keep, back, sub],
+    playerId: "back",
+    quarter: 3,
+    totalQuarters: 4,
+    lineups,
+    slots: ["GK", "CF"],
+    subMode: false,
+    minHalves: 4,
+    livePeriod: false,
+  });
+  const halves = equityHalves("back", {
+    lineups: returned.lineups,
+    segments: returned.segments,
+    credit: {},
+    quarters: [1, 2, 3, 4],
+  });
+  assert.ok(halves >= 4, `returning player has ${halves} halves`);
+  [3, 4].forEach(q => assert.equal(goalkeeperId(returned.lineups[q]), "keep"));
+  assert.equal(returned.lineups[1], lineups[1]);
+  assert.equal(returned.lineups[2], lineups[2]);
 });

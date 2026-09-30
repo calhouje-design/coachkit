@@ -1,5 +1,7 @@
 /** Game Day helpers for Round Two. Quarter fair-play stays the rule; minutes are a live gap on top of it. */
 
+import { defaultSlots, playersFromFormat } from "./leagueRules.js";
+
 /**
  * The goalkeeper plays the whole period (a quarter, a half, or a third).
  * A different goalkeeper is allowed only between periods. See HARD_RULES.md.
@@ -509,6 +511,16 @@ export function maxConsecutiveSits(masks) {
   return max;
 }
 
+function shufflePlayers(list, seed, salt) {
+  const copy = [...(list || [])];
+  const rng = seededRandom(mixSeed(seed, salt));
+  for (let i = copy.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    [copy[i], copy[j]] = [copy[j], copy[i]];
+  }
+  return copy;
+}
+
 function assignHalfSlots(startersPool, slotNames, lockedGk = []) {
   const assigned = new Set(lockedGk.filter(Boolean).map(player => player.id));
   const pool = [...startersPool];
@@ -571,8 +583,42 @@ export function seededRandom(seed) {
 export function periodPlanKey(lineup) {
   if (!lineup) return "";
   const starters = (lineup.starters || []).map(slot => `${slot.pos}:${slot.player?.id || ""}`).join(",");
-  const bench = (lineup.bench || []).map(player => player?.id || "").join(",");
+  const bench = (lineup.bench || []).map(player => player?.id || "").filter(Boolean).sort().join(",");
   return `${starters}|${bench}`;
+}
+
+/** Identity of the periods being planned. Bench order is ignored. */
+export function planHistoryKey(lineups, fromQuarter = 1) {
+  const start = Math.max(1, Number(fromQuarter) || 1);
+  return Object.keys(lineups || {})
+    .map(Number)
+    .filter(q => Number.isInteger(q) && q >= start)
+    .sort((a, b) => a - b)
+    .map(q => `${q}:${periodPlanKey(lineups[q] ?? lineups[String(q)])}`)
+    .join("||");
+}
+
+/** The keeper already in goal, once the period clock has started. Otherwise null. */
+export function liveReplanGoalkeeper(lineups, quarter, clockStarted) {
+  if (!clockStarted) return null;
+  return goalkeeperId(lineups?.[quarter] ?? lineups?.[String(quarter)]) || null;
+}
+
+export function sheetMeetsMinimum(players, lineups, segments, {
+  minHalves = 0,
+  totalQuarters = 4,
+  credit = {},
+} = {}) {
+  const quarters = [];
+  for (let q = 1; q <= totalQuarters; q++) quarters.push(q);
+  if (!quarters.every(q => lineups?.[q] || lineups?.[String(q)])) return false;
+  const active = (players || []).filter(player => player && !player.injured && !player.out && !player.midGameInjury);
+  return active.every(player => equityHalves(player.id, {
+    lineups,
+    segments,
+    credit,
+    quarters,
+  }) >= minHalves);
 }
 
 /** True when any period at or after fromQuarter shows different players or positions. */
@@ -594,28 +640,66 @@ function lineupsOf(result) {
   return result;
 }
 
+const MAX_PLAN_ATTEMPTS = 48;
+
+function resolveAttempts(attempts) {
+  const n = Number(attempts);
+  if (!Number.isFinite(n)) return PLAN_VARIETY_ATTEMPTS;
+  return Math.max(1, Math.min(MAX_PLAN_ATTEMPTS, Math.floor(n)));
+}
+
+function wrapPlan(result, { unchanged, meetsMinimum }) {
+  return {
+    plan: result,
+    lineups: lineupsOf(result),
+    segments: result?.segments,
+    unchanged: !!unchanged,
+    meetsMinimum: meetsMinimum == null ? null : !!meetsMinimum,
+  };
+}
+
 /**
- * Call `plan(seed)` up to N times and keep the first sheet that differs from
- * the one on screen. One valid lineup comes back as-is. This does not loop forever.
+ * Call `plan(seed)` up to N times. Prefer the first sheet that differs from the
+ * one on screen (and from the last few shown) and still meets fair play.
+ * A shortfall is used only when every different sheet is short. If nothing
+ * differs, the current sheet is returned. Non-finite attempt counts cannot spin.
  */
 export function firstDifferentPlan({
   plan,
   currentLineups = null,
+  currentPlan = null,
   fromQuarter = 1,
   attempts = PLAN_VARIETY_ATTEMPTS,
   nextSeed = freshPlanSeed,
+  fairPlay = null,
+  recentKeys = null,
+  historyFromQuarter = 1,
 } = {}) {
   if (typeof plan !== "function") throw new TypeError("firstDifferentPlan requires plan");
-  const tries = Math.max(1, Number(attempts) || 1);
+  const tries = resolveAttempts(attempts);
   const draw = typeof nextSeed === "function" ? nextSeed : freshPlanSeed;
-  let fallback = null;
+  const seen = new Set((recentKeys || []).filter(Boolean));
+  const judge = typeof fairPlay === "function" ? fairPlay : null;
+  let first = null;
+  let shortHit = null;
   for (let i = 0; i < tries; i++) {
     const seed = Number(draw()) >>> 0;
     const result = plan(seed);
-    if (!fallback) fallback = result;
-    if (plansDiffer(currentLineups, lineupsOf(result), fromQuarter)) return result;
+    if (!first) first = result;
+    const lineups = lineupsOf(result);
+    const repeat = !plansDiffer(currentLineups, lineups, fromQuarter)
+      || seen.has(planHistoryKey(lineups, historyFromQuarter));
+    if (repeat) continue;
+    const meets = judge ? judge(result) : true;
+    if (meets) return wrapPlan(result, { unchanged: false, meetsMinimum: true });
+    if (!shortHit) shortHit = result;
   }
-  return fallback;
+  if (shortHit) return wrapPlan(shortHit, { unchanged: false, meetsMinimum: false });
+  if (currentPlan) return wrapPlan(currentPlan, { unchanged: true, meetsMinimum: null });
+  if (currentLineups && planHistoryKey(currentLineups, fromQuarter)) {
+    return wrapPlan({ lineups: currentLineups }, { unchanged: true, meetsMinimum: null });
+  }
+  return wrapPlan(first, { unchanged: false, meetsMinimum: judge && first ? judge(first) : null });
 }
 
 function pickQuarterGoalkeepers(active, slotNames, remaining, satLast, seed = null) {
@@ -650,6 +734,7 @@ export function scheduleHalfRotation(players, slots, {
   rate = () => 0,
   slotsByQuarter = null,
   seed = null,
+  lockGoalkeeperId = null,
 } = {}) {
   const slotNames = slots?.length ? slots : ["GK", "LD", "RD", "LM", "RM", "CF"];
   const active = (players || []).filter(p => !p.injured && !p.out);
@@ -706,8 +791,17 @@ export function scheduleHalfRotation(players, slots, {
   remainingQs.forEach(q => { onHalf[q] = { 1: [], 2: [] }; });
 
   const gkByQuarter = {};
+  const lockedKeeper = lockGoalkeeperId
+    ? active.find(player => player.id === lockGoalkeeperId) || null
+    : null;
   remainingQs.forEach(q => {
-    const keepers = pickQuarterGoalkeepers(active, slotNames, remaining, satLast, seed);
+    let keepers = pickQuarterGoalkeepers(active, slotNames, remaining, satLast, seed);
+    if (q === fromQuarter && lockedKeeper) {
+      const count = slotNames.filter(isGkPosition).length;
+      keepers = count
+        ? [lockedKeeper, ...keepers.filter(player => player.id !== lockedKeeper.id)].slice(0, count)
+        : [];
+    }
     gkByQuarter[q] = keepers;
     [1, 2].forEach(half => {
       const chosen = keepers.map(player => player.id);
@@ -747,7 +841,8 @@ export function scheduleHalfRotation(players, slots, {
     const second = new Set(onHalf[q][2]);
     const startersPool = active.filter(p => second.has(p.id));
     const bench = active.filter(p => !second.has(p.id));
-    lineups[q] = { starters: assignHalfSlots(startersPool, namesFor(q), gkByQuarter[q] || []), bench };
+    const ordered = seed == null ? startersPool : shufflePlayers(startersPool, seed, `pos-${q}`);
+    lineups[q] = { starters: assignHalfSlots(ordered, namesFor(q), gkByQuarter[q] || []), bench };
     active.forEach(p => {
       const early = first.has(p.id);
       const late = second.has(p.id);
@@ -788,6 +883,38 @@ function pinNamedGoalkeeper(lineup, gkId, roster) {
   else if (displaced) bench = [...bench, displaced];
   starters[gkIdx] = { ...starters[gkIdx], player: gkPlayer };
   return { starters, bench };
+}
+
+function countedHalves(playerId, lineups, segments, totalQuarters) {
+  const quarters = [];
+  for (let q = 1; q <= totalQuarters; q++) quarters.push(q);
+  return equityHalves(playerId, { lineups, segments, credit: {}, quarters });
+}
+
+/** In full-period mode, start a returning player when a teammate can spare a period. */
+function giveReturnerFieldTime(lineups, segments, returning, fromQuarter, totalQuarters, minHalves) {
+  if (!returning) return lineups;
+  const next = { ...(lineups || {}) };
+  const id = returning.id;
+  for (let q = fromQuarter; q <= totalQuarters; q++) {
+    if (countedHalves(id, next, segments, totalQuarters) >= minHalves) break;
+    const lineup = next[q];
+    if (!lineup?.starters) continue;
+    if (lineup.starters.some(slot => slot.player?.id === id)) continue;
+    const donorIdx = lineup.starters.findIndex(slot => {
+      if (!slot.player || isGkPosition(slot.pos) || slot.player.id === id) return false;
+      return countedHalves(slot.player.id, next, segments, totalQuarters) - 2 >= minHalves;
+    });
+    if (donorIdx < 0) continue;
+    const donor = lineup.starters[donorIdx].player;
+    const starters = lineup.starters.map((slot, index) => (
+      index === donorIdx ? { ...slot, player: returning } : slot
+    ));
+    const bench = (lineup.bench || []).filter(player => player?.id !== id);
+    if (!bench.some(player => player?.id === donor.id)) bench.push(donor);
+    next[q] = { starters, bench };
+  }
+  return next;
 }
 
 /**
@@ -847,6 +974,10 @@ export function regenerateForAbsence({
           next[q] = addLateArrival(next[q], returning);
         }
       }
+      return {
+        lineups: giveReturnerFieldTime(next, nextSegments, returning, back, totalQuarters, minHalves),
+        segments: nextSegments,
+      };
     }
     return { lineups: next, segments: nextSegments };
   }
@@ -1086,4 +1217,158 @@ export function applyBenchRotation(lineup, pairs) {
     bench = bench.map((player, i) => (i === bIdx ? outgoing : player));
   });
   return { starters, bench };
+}
+
+function overallRating(player) {
+  if (!player?.ratings) return 0;
+  const vals = Object.values(player.ratings).filter(value => value > 0);
+  return vals.length ? vals.reduce((sum, value) => sum + value, 0) / vals.length : 0;
+}
+
+/**
+ * Full-period plan. Every eligible player is targeted for the minimum before
+ * extra periods go to higher-rated players. `lockGoalkeeperId` keeps that
+ * keeper in goal for the first period being rebuilt (a live replan).
+ */
+export function scheduleWholeGame({
+  players = [],
+  format,
+  lockedLineups = {},
+  fromQuarter = 1,
+  segments = {},
+  credit = {},
+  slotOverride = null,
+  totalPeriods = 4,
+  minFraction = 0.5,
+  slotsByQuarter = null,
+  seed = null,
+  lockGoalkeeperId = null,
+  rate = overallRating,
+} = {}) {
+  const totalQ = totalPeriods;
+  const fallback = defaultSlots(playersFromFormat(format) || 7, true);
+  const slots = slotOverride?.length ? slotOverride : fallback;
+  const slotsPerQ = slots.length;
+  const minQ = Math.ceil(minFraction * totalQ);
+  const score = typeof rate === "function" ? rate : overallRating;
+  const rng = seed == null ? Math.random : seededRandom(seed);
+  const shuffle = (arr) => {
+    const copy = [...arr];
+    for (let i = copy.length - 1; i > 0; i--) {
+      const j = Math.floor(rng() * (i + 1));
+      [copy[i], copy[j]] = [copy[j], copy[i]];
+    }
+    return copy;
+  };
+  const active = shuffle((players || []).filter(player => !player.injured && !player.out));
+  const minHalves = minQ * 2;
+  const lockedQuarters = [];
+  for (let q = 1; q < fromQuarter; q++) if (lockedLineups[q]) lockedQuarters.push(q);
+  const alreadyHalves = {};
+  active.forEach(player => {
+    alreadyHalves[player.id] = equityHalves(player.id, {
+      lineups: lockedLineups,
+      segments,
+      credit,
+      quarters: lockedQuarters,
+    });
+  });
+  const remainingQs = [];
+  for (let q = fromQuarter; q <= totalQ; q++) remainingQs.push(q);
+  const periodsLeft = remainingQs.length;
+  const totalSlots = slotsPerQ * periodsLeft;
+  const quota = {};
+  active.forEach(player => {
+    const remainingHalves = Math.max(0, minHalves - (alreadyHalves[player.id] || 0));
+    quota[player.id] = Math.min(Math.ceil(remainingHalves / 2), periodsLeft);
+  });
+  let freeSlots = Math.max(0, totalSlots - Object.values(quota).reduce((sum, n) => sum + n, 0));
+  const rated = [...active].sort((a, b) => score(b) - score(a));
+  const bonusQ = {};
+  active.forEach(player => { bonusQ[player.id] = 0; });
+  let round = 0;
+  while (freeSlots > 0 && round < 100) {
+    let distributed = false;
+    for (const player of rated) {
+      if (quota[player.id] + bonusQ[player.id] < periodsLeft) {
+        bonusQ[player.id] += 1;
+        freeSlots -= 1;
+        distributed = true;
+        if (freeSlots === 0) break;
+      }
+    }
+    if (!distributed) break;
+    round += 1;
+  }
+  const qCount = {};
+  active.forEach(player => { qCount[player.id] = quota[player.id] + bonusQ[player.id]; });
+  const quarterId = {};
+  active.forEach(player => { quarterId[player.id] = new Set(); });
+  const qRemaining = { ...qCount };
+  const prevQ0 = fromQuarter - 1;
+  let satLast = new Set(
+    prevQ0 >= 1 && lockedLineups[prevQ0]
+      ? active
+        .filter(player => !(lockedLineups[prevQ0].starters || []).some(slot => slot.player?.id === player.id))
+        .map(player => player.id)
+      : []
+  );
+  remainingQs.forEach(q => {
+    const chosen = [];
+    const eligible = () => active.filter(player => qRemaining[player.id] > 0 && !chosen.includes(player.id));
+    eligible()
+      .filter(player => satLast.has(player.id))
+      .sort((a, b) => qRemaining[b.id] - qRemaining[a.id] || score(b) - score(a))
+      .forEach(player => {
+        if (chosen.length < slotsPerQ) chosen.push(player.id);
+      });
+    eligible()
+      .sort((a, b) => qRemaining[b.id] - qRemaining[a.id] || score(b) - score(a))
+      .forEach(player => {
+        if (chosen.length < slotsPerQ) chosen.push(player.id);
+      });
+    chosen.forEach(id => {
+      quarterId[id].add(q);
+      qRemaining[id] -= 1;
+    });
+    satLast = new Set(active.filter(player => !chosen.includes(player.id)).map(player => player.id));
+  });
+
+  const result = { ...lockedLineups };
+  const lastPos = {};
+  if (prevQ0 >= 1 && lockedLineups[prevQ0]) {
+    (lockedLineups[prevQ0].starters || []).forEach(slot => {
+      if (slot.player) lastPos[slot.player.id] = slot.pos;
+    });
+  }
+  remainingQs.forEach(q => {
+    const startersPool = active.filter(player => quarterId[player.id].has(q));
+    const bench = active.filter(player => !quarterId[player.id].has(q));
+    const chosenPos = {};
+    startersPool.forEach(player => {
+      const allowed = player.positions?.length ? player.positions : ["CM"];
+      const fresh = allowed.filter(pos => pos !== lastPos[player.id]);
+      const pool = fresh.length ? fresh : allowed;
+      chosenPos[player.id] = pool[Math.floor(rng() * pool.length)];
+    });
+    const assigned = new Set();
+    const shuffledPool = shuffle(startersPool);
+    const custom = slotsByQuarter?.[q] || slotsByQuarter?.[String(q)];
+    const quarterSlots = Array.isArray(custom) && custom.length === slots.length ? custom : slots;
+    const starters = quarterSlots.map(slotPos => {
+      let pick = shuffledPool.find(player => !assigned.has(player.id) && chosenPos[player.id] === slotPos);
+      if (!pick) pick = shuffledPool.find(player => !assigned.has(player.id) && (player.positions || []).includes(slotPos));
+      if (!pick) pick = shuffledPool.find(player => !assigned.has(player.id));
+      if (pick) {
+        assigned.add(pick.id);
+        lastPos[pick.id] = slotPos;
+      }
+      return { pos: slotPos, player: pick || null };
+    });
+    result[q] = { starters, bench };
+    if (lockGoalkeeperId && q === fromQuarter) {
+      result[q] = pinNamedGoalkeeper(result[q], lockGoalkeeperId, players);
+    }
+  });
+  return result;
 }
