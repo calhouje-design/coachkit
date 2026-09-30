@@ -526,7 +526,99 @@ function assignHalfSlots(startersPool, slotNames, lockedGk = []) {
   });
 }
 
-function pickQuarterGoalkeepers(active, slotNames, remaining, satLast) {
+/** How many fresh seeds Plan / Replan may try before keeping the only valid sheet. */
+export const PLAN_VARIETY_ATTEMPTS = 24;
+
+function mixSeed(seed, id) {
+  let h = Number(seed) >>> 0;
+  const text = String(id);
+  for (let i = 0; i < text.length; i++) {
+    h ^= text.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h;
+}
+
+/** Id order when no seed is passed. A seed only reorders players who are otherwise tied. */
+function tieCompare(seed, aId, bId) {
+  if (seed == null) return String(aId).localeCompare(String(bId));
+  const diff = mixSeed(seed, aId) - mixSeed(seed, bId);
+  if (diff !== 0) return diff;
+  return String(aId).localeCompare(String(bId));
+}
+
+/** One unsigned seed. Crypto when the runtime has it, otherwise Math.random. */
+export function freshPlanSeed() {
+  if (typeof crypto !== "undefined" && typeof crypto.getRandomValues === "function") {
+    const buf = new Uint32Array(1);
+    crypto.getRandomValues(buf);
+    return buf[0];
+  }
+  return Math.floor(Math.random() * 0x100000000);
+}
+
+/** Mulberry32. The same seed always yields the same sequence. */
+export function seededRandom(seed) {
+  let a = Number(seed) >>> 0;
+  return function random() {
+    a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+export function periodPlanKey(lineup) {
+  if (!lineup) return "";
+  const starters = (lineup.starters || []).map(slot => `${slot.pos}:${slot.player?.id || ""}`).join(",");
+  const bench = (lineup.bench || []).map(player => player?.id || "").join(",");
+  return `${starters}|${bench}`;
+}
+
+/** True when any period at or after fromQuarter shows different players or positions. */
+export function plansDiffer(current, next, fromQuarter = 1) {
+  const start = Math.max(1, Number(fromQuarter) || 1);
+  const keys = new Set([...Object.keys(current || {}), ...Object.keys(next || {})]);
+  for (const key of keys) {
+    const q = Number(key);
+    if (!Number.isInteger(q) || q < start) continue;
+    const left = current?.[q] ?? current?.[key];
+    const right = next?.[q] ?? next?.[key];
+    if (periodPlanKey(left) !== periodPlanKey(right)) return true;
+  }
+  return false;
+}
+
+function lineupsOf(result) {
+  if (result && Object.prototype.hasOwnProperty.call(result, "lineups")) return result.lineups;
+  return result;
+}
+
+/**
+ * Call `plan(seed)` up to N times and keep the first sheet that differs from
+ * the one on screen. One valid lineup comes back as-is. This does not loop forever.
+ */
+export function firstDifferentPlan({
+  plan,
+  currentLineups = null,
+  fromQuarter = 1,
+  attempts = PLAN_VARIETY_ATTEMPTS,
+  nextSeed = freshPlanSeed,
+} = {}) {
+  if (typeof plan !== "function") throw new TypeError("firstDifferentPlan requires plan");
+  const tries = Math.max(1, Number(attempts) || 1);
+  const draw = typeof nextSeed === "function" ? nextSeed : freshPlanSeed;
+  let fallback = null;
+  for (let i = 0; i < tries; i++) {
+    const seed = Number(draw()) >>> 0;
+    const result = plan(seed);
+    if (!fallback) fallback = result;
+    if (plansDiffer(currentLineups, lineupsOf(result), fromQuarter)) return result;
+  }
+  return fallback;
+}
+
+function pickQuarterGoalkeepers(active, slotNames, remaining, satLast, seed = null) {
   const count = slotNames.filter(isGkPosition).length;
   if (!count) return [];
   const listed = active.filter(player => (player.positions || []).some(isGkPosition));
@@ -535,7 +627,9 @@ function pickQuarterGoalkeepers(active, slotNames, remaining, satLast) {
     const aSat = satLast.has(a.id) ? 1 : 0;
     const bSat = satLast.has(b.id) ? 1 : 0;
     if (aSat !== bSat) return bSat - aSat;
-    return (remaining[b.id] || 0) - (remaining[a.id] || 0) || String(a.id).localeCompare(String(b.id));
+    const need = (remaining[b.id] || 0) - (remaining[a.id] || 0);
+    if (need !== 0) return need;
+    return tieCompare(seed, a.id, b.id);
   };
   return [...pool].sort(rank).slice(0, count);
 }
@@ -545,6 +639,7 @@ function pickQuarterGoalkeepers(active, slotNames, remaining, satLast) {
  * come on next when they still owe time, so two bench halves in a row are
  * avoided when the bench fits back on the field. Everyone still targets minHalves
  * (4 of 8 at 50%). The stored lineup is who is on at the end of the quarter.
+ * `seed` only breaks ties. The same seed rebuilds the same sheet. Omit it for id order.
  */
 export function scheduleHalfRotation(players, slots, {
   minHalves = 4,
@@ -554,6 +649,7 @@ export function scheduleHalfRotation(players, slots, {
   totalQuarters = 4,
   rate = () => 0,
   slotsByQuarter = null,
+  seed = null,
 } = {}) {
   const slotNames = slots?.length ? slots : ["GK", "LD", "RD", "LM", "RM", "CF"];
   const active = (players || []).filter(p => !p.injured && !p.out);
@@ -579,7 +675,7 @@ export function scheduleHalfRotation(players, slots, {
     quota[p.id] = Math.min(halfCap, Math.max(0, minHalves - (already[p.id] || 0)));
   });
   let free = Math.max(0, totalHalfSlots - Object.values(quota).reduce((sum, n) => sum + n, 0));
-  const rated = [...active].sort((a, b) => rate(b) - rate(a) || String(a.id).localeCompare(String(b.id)));
+  const rated = [...active].sort((a, b) => rate(b) - rate(a) || tieCompare(seed, a.id, b.id));
   let guard = 0;
   while (free > 0 && guard < 10000) {
     let gave = false;
@@ -596,7 +692,7 @@ export function scheduleHalfRotation(players, slots, {
   }
 
   const remaining = { ...quota };
-  const byNeed = (a, b) => remaining[b.id] - remaining[a.id] || String(a.id).localeCompare(String(b.id));
+  const byNeed = (a, b) => remaining[b.id] - remaining[a.id] || tieCompare(seed, a.id, b.id);
   const prevQ = fromQuarter - 1;
   let satLast = new Set();
   if (prevQ >= 1 && lockedLineups[prevQ]) {
@@ -611,7 +707,7 @@ export function scheduleHalfRotation(players, slots, {
 
   const gkByQuarter = {};
   remainingQs.forEach(q => {
-    const keepers = pickQuarterGoalkeepers(active, slotNames, remaining, satLast);
+    const keepers = pickQuarterGoalkeepers(active, slotNames, remaining, satLast, seed);
     gkByQuarter[q] = keepers;
     [1, 2].forEach(half => {
       const chosen = keepers.map(player => player.id);

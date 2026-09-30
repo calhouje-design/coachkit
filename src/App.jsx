@@ -38,6 +38,8 @@ import {
   shareFieldSheet,
   sharePlayTimeSheet,
   scheduleHalfRotation,
+  firstDifferentPlan,
+  seededRandom,
   gameLogFromStrategy,
   upsertGameLog,
   playerQuarterPresence,
@@ -520,7 +522,7 @@ function uid() { return Math.random().toString(36).slice(2,9); }
  * 5. Within each quarter, players are sorted to best-fit positions.
  * 6. Players who sat last quarter get priority for the next one (rotation).
  */
-function scheduleWholeGame(players, format, league, lockedLineups = {}, fromQuarter = 1, segments = {}, credit = {}, slotOverride = null, totalPeriods = 4, minFraction = 0.5, slotsByQuarter = null) {
+function scheduleWholeGame(players, format, league, lockedLineups = {}, fromQuarter = 1, segments = {}, credit = {}, slotOverride = null, totalPeriods = 4, minFraction = 0.5, slotsByQuarter = null, seed = null) {
   const TOTAL_Q  = totalPeriods;
   const fallback = defaultSlots(playersFromFormat(format) || 7, true);
   const slots    = slotOverride?.length ? slotOverride : fallback;
@@ -528,11 +530,12 @@ function scheduleWholeGame(players, format, league, lockedLineups = {}, fromQuar
   const minQ     = Math.ceil(minFraction * TOTAL_Q);
 
   // Shuffle active players so bonus-slot distribution isn't biased
-  // by roster order  every fresh plan gives a different player the extra quarter
+  // by roster order. A seed makes that shuffle repeatable.
+  const rng = seed == null ? Math.random : seededRandom(seed);
   const shuffle = arr => {
     const a = [...arr];
     for (let i = a.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
+      const j = Math.floor(rng() * (i + 1));
       [a[i], a[j]] = [a[j], a[i]];
     }
     return a;
@@ -695,7 +698,7 @@ function scheduleWholeGame(players, format, league, lockedLineups = {}, fromQuar
       // Prefer positions that aren't the same as last quarter
       const fresh = allowed.filter(pos => pos !== lastPos[p.id]);
       const pool  = fresh.length > 0 ? fresh : allowed;
-      playerPosThisQ[p.id] = pool[Math.floor(Math.random() * pool.length)];
+      playerPosThisQ[p.id] = pool[Math.floor(rng() * pool.length)];
     }
 
     // Now assign players to the formation slots.
@@ -705,7 +708,7 @@ function scheduleWholeGame(players, format, league, lockedLineups = {}, fromQuar
     const assigned = new Set();
 
     // Shuffle starters_pool so tie-breaking is random (not roster-order biased)
-    const shuffledPool = [...starters_pool].sort(() => Math.random() - 0.5);
+    const shuffledPool = shuffle(starters_pool);
 
     const quarterSlots = (() => {
       const custom = slotsByQuarter?.[q] || slotsByQuarter?.[String(q)];
@@ -1679,14 +1682,19 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
     }
     const creditForPlan = fromQ === 1 ? {} : appearanceCredit;
     if (subMode) {
-      const planned = scheduleHalfRotation(players, planSlots, {
-        minHalves,
+      const planned = firstDifferentPlan({
+        currentLineups: lineupsByQuarter,
         fromQuarter: fromQ,
-        lockedLineups: locked,
-        lockedSegments: nextSegments,
-        totalQuarters,
-        rate: getOverallRating,
-        slotsByQuarter,
+        plan: (seed) => scheduleHalfRotation(players, planSlots, {
+          minHalves,
+          fromQuarter: fromQ,
+          lockedLineups: locked,
+          lockedSegments: nextSegments,
+          totalQuarters,
+          rate: getOverallRating,
+          slotsByQuarter,
+          seed,
+        }),
       });
       setSubSegments(planned.segments);
       notePlanResult(planned.lineups, players, creditForPlan, planned.segments);
@@ -1700,15 +1708,20 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
       }
       return;
     }
-    const result = scheduleWholeGame(
-      players, format, league, locked, fromQ,
-      nextSegments,
-      creditForPlan,
-      planSlots,
-      totalQuarters,
-      setup?.minFraction ?? 0.5,
-      slotsByQuarter,
-    );
+    const result = firstDifferentPlan({
+      currentLineups: lineupsByQuarter,
+      fromQuarter: fromQ,
+      plan: (seed) => scheduleWholeGame(
+        players, format, league, locked, fromQ,
+        nextSegments,
+        creditForPlan,
+        planSlots,
+        totalQuarters,
+        setup?.minFraction ?? 0.5,
+        slotsByQuarter,
+        seed,
+      ),
+    });
     notePlanResult(result, players, creditForPlan, nextSegments);
     if (fromQ !== 1 && fromQ === quarter && running) {
       const next = {};

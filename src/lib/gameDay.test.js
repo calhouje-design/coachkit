@@ -1,5 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { minQuarters } from "./fairPlay.js";
+import { resolveSetup } from "./leagueRules.js";
 import {
   effectiveQuarters,
   addMinutes,
@@ -37,6 +39,8 @@ import {
   planAvailability,
   returnToGame,
   scheduleHalfRotation,
+  firstDifferentPlan,
+  plansDiffer,
   gameLogFromStrategy,
   upsertGameLog,
   playerQuarterPresence,
@@ -1019,4 +1023,235 @@ test("an override shape is used for that period only", () => {
   });
   assert.deepEqual(lineups[1].starters.map(slot => slot.pos), base);
   assert.deepEqual(lineups[2].starters.map(slot => slot.pos), wide);
+});
+
+function variedRoster(count, { gk = true, injuredId = null, outId = null } = {}) {
+  const positions = gk
+    ? ["GK", "LD", "RD", "LM", "RM", "CM", "CF", "LW", "RW", "ST", "LB", "RB", "CDM", "CAM"]
+    : ["LD", "RD", "LM", "RM", "CM", "CF", "LW", "RW", "ST", "LB", "RB"];
+  return Array.from({ length: count }, (_, i) => ({
+    id: `p${i + 1}`,
+    name: `P${i + 1}`,
+    positions,
+    injured: injuredId === `p${i + 1}`,
+    out: outId === `p${i + 1}`,
+  }));
+}
+
+function assertVariedPlan(players, slots, planned, { minHalves, total, gk, fromQuarter = 1, locked = null }) {
+  const active = players.filter(player => !player.injured && !player.out);
+  const absent = players.filter(player => player.injured || player.out);
+  const quarters = Array.from({ length: total }, (_, i) => i + 1);
+  for (let q = 1; q < fromQuarter; q++) {
+    if (locked?.[q]) assert.equal(planned.lineups[q], locked[q], `period ${q} was rebuilt`);
+  }
+  for (let q = fromQuarter; q <= total; q++) {
+    const lineup = planned.lineups[q];
+    assert.ok(lineup, `period ${q} is missing`);
+    assert.equal(lineup.starters.length, slots.length, `period ${q} slot count`);
+    const ids = lineup.starters.map(slot => slot.player?.id);
+    assert.equal(ids.every(Boolean), true, `period ${q} has an empty spot`);
+    assert.equal(new Set(ids).size, ids.length, `period ${q} repeats a player`);
+    absent.forEach(player => {
+      assert.equal(playerQuarterPresence(lineup, player.id), "blank", `${player.id} is still on period ${q}`);
+    });
+    if (gk) {
+      const gkId = goalkeeperId(lineup);
+      assert.ok(gkId, `period ${q} has no goalkeeper`);
+      const onField = lineup.starters.some(slot => slot.player?.id === gkId);
+      const segment = segmentAt(planned.segments, gkId, q);
+      assert.equal(playCellKind({ onField, segment }), "full", `period ${q} goalkeeper is not full`);
+      assert.equal(cellHalves({ onField, segment }), 2);
+    } else {
+      assert.equal(goalkeeperId(lineup), null);
+      assert.equal(lineup.starters.some(slot => slot.pos === "GK"), false);
+    }
+  }
+  active.forEach(player => {
+    const halves = equityHalves(player.id, {
+      lineups: planned.lineups,
+      segments: planned.segments,
+      credit: {},
+      quarters,
+    });
+    assert.ok(halves >= minHalves, `${player.id} has ${halves} halves, minimum is ${minHalves}`);
+  });
+}
+
+test("consecutive plan presses with different seeds produce different lineups", () => {
+  const slots = ["GK", "LD", "RD", "LM", "RM", "CF"];
+  const players = variedRoster(9);
+  const options = { minHalves: 4, totalQuarters: 4, rate: () => 0 };
+  const first = scheduleHalfRotation(players, slots, { ...options, seed: 1 });
+  const second = scheduleHalfRotation(players, slots, { ...options, seed: 2 });
+  assert.equal(plansDiffer(first.lineups, second.lineups, 1), true);
+  let step = 0;
+  const seeds = [1, 2];
+  const pressed = firstDifferentPlan({
+    currentLineups: first.lineups,
+    fromQuarter: 1,
+    nextSeed: () => seeds[Math.min(step++, seeds.length - 1)],
+    plan: (seed) => scheduleHalfRotation(players, slots, { ...options, seed }),
+  });
+  assert.equal(plansDiffer(first.lineups, pressed.lineups, 1), true);
+  assert.ok(step >= 2);
+});
+
+test("the same seed rebuilds the same lineup", () => {
+  const slots = ["GK", "LD", "RD", "LM", "RM", "CF"];
+  const players = variedRoster(9);
+  const once = scheduleHalfRotation(players, slots, { minHalves: 4, seed: 42, rate: () => 3 });
+  const twice = scheduleHalfRotation(players, slots, { minHalves: 4, seed: 42, rate: () => 3 });
+  assert.deepEqual(once.lineups, twice.lineups);
+  assert.deepEqual(once.segments, twice.segments);
+  assert.equal(plansDiffer(once.lineups, twice.lineups, 1), false);
+});
+
+test("a roster that fits the field returns its only lineup without error", () => {
+  const slots = ["GK", "LD", "RD", "LM", "RM", "CF"];
+  const players = slots.map(pos => ({
+    id: pos.toLowerCase(),
+    name: pos,
+    positions: [pos],
+    injured: false,
+    out: false,
+  }));
+  const seeds = [1, 7, 99, 1000, 0];
+  const plans = seeds.map(seed => scheduleHalfRotation(players, slots, { minHalves: 4, seed }));
+  plans.forEach(planned => {
+    assertVariedPlan(players, slots, planned, { minHalves: 4, total: 4, gk: true });
+    [1, 2, 3, 4].forEach(q => {
+      assert.equal(planned.lineups[q].bench.length, 0);
+      assert.equal(goalkeeperId(planned.lineups[q]), "gk");
+    });
+  });
+  for (let i = 1; i < plans.length; i++) {
+    assert.equal(plansDiffer(plans[0].lineups, plans[i].lineups, 1), false);
+  }
+  const only = firstDifferentPlan({
+    currentLineups: plans[0].lineups,
+    attempts: 5,
+    nextSeed: () => 7,
+    plan: (seed) => scheduleHalfRotation(players, slots, { minHalves: 4, seed }),
+  });
+  assert.equal(plansDiffer(plans[0].lineups, only.lineups, 1), false);
+  assert.equal(only.lineups[1].starters.length, 6);
+});
+
+test("every seed keeps fair play, the goalkeeper, and absent players off the sheet", () => {
+  const configs = [
+    { league: "U8", settings: { org: "say-east" }, extras: 3, absent: "injured" },
+    { league: "U10", settings: { org: "say-east" }, extras: 3, absent: null },
+    { league: "U6", settings: { org: "us-soccer" }, extras: 2, absent: "out" },
+    { league: "U11", settings: { org: "ohio" }, extras: 3, absent: null },
+    { league: "U13", settings: { org: "custom", custom: { playersOnField: 7, gk: true, periods: 3, periodMinutes: 25 } }, extras: 3, absent: "injured" },
+  ];
+  let checks = 0;
+  configs.forEach(config => {
+    const setup = resolveSetup({ league: config.league, settings: config.settings });
+    const slots = setup.slots;
+    const minHalves = minQuarters(setup.minFraction, setup.periods) * 2;
+    const absentId = config.absent ? "p1" : null;
+    const players = variedRoster(setup.playersOnField + config.extras, {
+      gk: setup.gk,
+      injuredId: config.absent === "injured" ? absentId : null,
+      outId: config.absent === "out" ? absentId : null,
+    });
+    for (let seed = 1; seed <= 40; seed++) {
+      const planned = scheduleHalfRotation(players, slots, {
+        minHalves,
+        totalQuarters: setup.periods,
+        seed,
+        rate: () => 0,
+      });
+      assertVariedPlan(players, slots, planned, {
+        minHalves,
+        total: setup.periods,
+        gk: setup.gk,
+      });
+      checks += 1;
+    }
+  });
+  assert.ok(checks >= 200, `checked ${checks} seeds`);
+});
+
+test("replan after injury and return keeps played periods and varies the rest", () => {
+  const slots = ["GK", "LD", "RD", "LM", "RM", "CF"];
+  const players = variedRoster(9);
+  const before = scheduleHalfRotation(players, slots, { minHalves: 4, seed: 4 });
+  const hurtId = "p9";
+  const injuredPlayers = players.map(player => player.id === hurtId ? { ...player, injured: true } : player);
+  const hurt = planAvailability({
+    autoRegen: true,
+    kind: "absent",
+    players: injuredPlayers,
+    absentId: hurtId,
+    quarter: 2,
+    totalQuarters: 4,
+    lineups: before.lineups,
+    segments: before.segments,
+    slots,
+    subMode: true,
+    minHalves: 4,
+    livePeriod: false,
+  });
+  assert.equal(hurt.lineups[1], before.lineups[1]);
+  assert.equal(playerQuarterPresence(hurt.lineups[2], hurtId), "blank");
+
+  const replanFrom = (seed) => scheduleHalfRotation(injuredPlayers, slots, {
+    minHalves: 4,
+    fromQuarter: 2,
+    lockedLineups: { 1: hurt.lineups[1] },
+    lockedSegments: hurt.segments,
+    totalQuarters: 4,
+    seed,
+  });
+  const again = replanFrom(11);
+  const other = replanFrom(19);
+  assert.equal(again.lineups[1], hurt.lineups[1]);
+  assert.equal(other.lineups[1], hurt.lineups[1]);
+  [2, 3, 4].forEach(q => assert.equal(playerQuarterPresence(again.lineups[q], hurtId), "blank"));
+  assert.equal(plansDiffer(again.lineups, other.lineups, 2), true);
+  assertVariedPlan(injuredPlayers, slots, again, {
+    minHalves: 4,
+    total: 4,
+    gk: true,
+    fromQuarter: 2,
+    locked: { 1: hurt.lineups[1] },
+  });
+
+  const back = returnToGame({
+    source: "top",
+    autoRegen: true,
+    players: injuredPlayers,
+    playerId: hurtId,
+    quarter: 3,
+    totalQuarters: 4,
+    lineups: hurt.lineups,
+    segments: hurt.segments,
+    slots,
+    subMode: true,
+    minHalves: 4,
+    livePeriod: false,
+  });
+  assert.equal(back.lineups[1], hurt.lineups[1]);
+  assert.equal(back.lineups[2], hurt.lineups[2]);
+  assert.notEqual(playerQuarterPresence(back.lineups[3], hurtId), "blank");
+
+  const afterReturn = (seed) => scheduleHalfRotation(back.players, slots, {
+    minHalves: 4,
+    fromQuarter: 3,
+    lockedLineups: { 1: back.lineups[1], 2: back.lineups[2] },
+    lockedSegments: back.segments,
+    totalQuarters: 4,
+    seed,
+  });
+  const kept = afterReturn(6);
+  const shifted = afterReturn(21);
+  assert.equal(kept.lineups[1], back.lineups[1]);
+  assert.equal(kept.lineups[2], back.lineups[2]);
+  assert.equal(shifted.lineups[1], back.lineups[1]);
+  assert.equal(shifted.lineups[2], back.lineups[2]);
+  assert.equal(plansDiffer(kept.lineups, shifted.lineups, 3), true);
+  assert.equal(playerQuarterPresence(kept.lineups[3], hurtId) === "blank", false);
 });
