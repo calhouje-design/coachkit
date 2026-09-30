@@ -4,6 +4,7 @@ import {
   AGES,
   LEAGUE_RULES,
   resolveSetup,
+  rulesTabView,
   tableRule,
   unverifiedCells,
   defaultSlots,
@@ -134,6 +135,27 @@ test("custom settings win and a legacy team without an org keeps its old game", 
   assert.equal(legacy.periodMinutes, 12);
   assert.equal(legacy.slots[0], "GK");
 
+  const legacyHalves = resolveSetup({
+    league: "U8 / Passers",
+    format: "6v6",
+    settings: { periods: 2, quarterMinutes: null },
+  });
+  assert.equal(legacyHalves.legacy, true);
+  assert.equal(legacyHalves.periods, 2);
+  assert.equal(legacyHalves.periodMinutes, 20);
+
+  const ownAge = rulesTabView(legacy, "U8");
+  assert.equal(ownAge.say, true);
+  assert.equal(ownAge.orgId, "say-east");
+  assert.equal(ownAge.badges.playersOnField, 6);
+  assert.equal(ownAge.badges.gk, true);
+  assert.equal(ownAge.badges.periods, 4);
+  assert.equal(ownAge.badges.periodMinutes, 12);
+  const browsed = rulesTabView(legacy, "U10");
+  assert.equal(browsed.say, true);
+  assert.equal(browsed.badges.playersOnField, 8);
+  assert.equal(browsed.badges.periodMinutes, 12);
+
   const fresh = resolveSetup({
     league: "U8",
     format: "4v4",
@@ -144,6 +166,10 @@ test("custom settings win and a legacy team without an org keeps its old game", 
   assert.equal(fresh.gk, false);
   assert.equal(fresh.playersOnField, 4);
   assert.equal(fresh.periodMinutes, 10);
+  const usCard = rulesTabView(fresh, "U8");
+  assert.equal(usCard.say, false);
+  assert.equal(usCard.badges.playersOnField, 4);
+  assert.equal(usCard.badges.gk, false);
 
   const sayHalves = resolveSetup({
     league: "U10",

@@ -826,6 +826,129 @@ test("return to the game uses one path from the top control and the roster butto
   }
 });
 
+function gkCredit(lineups, segments, playerId, quarter) {
+  const lineup = lineups[quarter];
+  const onField = (lineup?.starters || []).some(slot => slot.player?.id === playerId);
+  const segment = segmentAt(segments, playerId, quarter);
+  return {
+    onField,
+    segment,
+    kind: playCellKind({ onField, segment }),
+    halves: equityHalves(playerId, { lineups, segments, quarters: [quarter] }),
+  };
+}
+
+test("a live injury keeps full-period credit for the goalkeeper who stays in goal", () => {
+  const roster = ["keep", "alt", "a", "b", "c", "hurt"].map(id => ({
+    id,
+    name: id,
+    positions: id === "keep" || id === "alt" ? ["GK", "CM", "CF"] : ["CM", "CF"],
+    injured: false,
+    out: false,
+  }));
+  const byId = Object.fromEntries(roster.map(player => [player.id, player]));
+  const slots = ["GK", "CM", "CF"];
+  const lineups = {
+    1: {
+      starters: [
+        { pos: "GK", player: byId.keep },
+        { pos: "CM", player: byId.a },
+        { pos: "CF", player: byId.b },
+      ],
+      bench: [byId.alt, byId.c, byId.hurt],
+    },
+    2: {
+      starters: [
+        { pos: "GK", player: byId.keep },
+        { pos: "CM", player: byId.a },
+        { pos: "CF", player: byId.c },
+      ],
+      bench: [byId.alt, byId.b, byId.hurt],
+    },
+  };
+  for (const total of [2, 3, 4]) {
+    const sheet = {};
+    for (let q = 1; q <= total; q++) sheet[q] = lineups[q] || lineups[2];
+    const hurt = planAvailability({
+      autoRegen: true,
+      kind: "absent",
+      players: roster.map(player => player.id === "hurt" ? { ...player, injured: true } : player),
+      absentId: "hurt",
+      quarter: 2,
+      totalQuarters: total,
+      lineups: sheet,
+      segments: { keep: { 1: "entered" } },
+      slots,
+      subMode: true,
+      minHalves: Math.max(2, total),
+      livePeriod: true,
+    });
+    assert.equal(goalkeeperId(hurt.lineups[2]), "keep", `${total} periods`);
+    const credit = gkCredit(hurt.lineups, hurt.segments, "keep", 2);
+    assert.equal(credit.segment, null, `${total} periods`);
+    assert.equal(credit.kind, "full", `${total} periods`);
+    assert.equal(credit.halves, 2, `${total} periods`);
+    assert.equal(hurt.lineups[1], sheet[1]);
+  }
+});
+
+test("a live return leaves the goalkeeper who stays in goal with a full period", () => {
+  for (const total of [2, 3, 4]) {
+    const players = Array.from({ length: 8 }, (_, i) => ({
+      id: `p${i + 1}`,
+      name: `P${i + 1}`,
+      positions: ["GK", "LD", "RD", "LM", "RM", "CF"],
+      injured: false,
+      out: false,
+    }));
+    const slots = ["GK", "LD", "RD", "LM", "RM", "CF"];
+    const planned = scheduleHalfRotation(players, slots, {
+      minHalves: 1,
+      totalQuarters: total,
+      rate: player => 10 - Number(player.id.slice(1)),
+    });
+    const quarter = Math.min(2, total);
+    const gk = goalkeeperId(planned.lineups[quarter]);
+    const hurt = planAvailability({
+      autoRegen: true,
+      kind: "absent",
+      players: players.map(player => player.id === gk ? { ...player, injured: true } : player),
+      absentId: gk,
+      quarter,
+      totalQuarters: total,
+      lineups: planned.lineups,
+      segments: planned.segments,
+      slots,
+      subMode: true,
+      minHalves: 1,
+      livePeriod: true,
+    });
+    const replacement = goalkeeperId(hurt.lineups[quarter]);
+    assert.ok(replacement);
+    assert.notEqual(replacement, gk);
+    const back = returnToGame({
+      source: "top",
+      autoRegen: true,
+      players: players.map(player => player.id === gk ? { ...player, injured: true } : player),
+      playerId: gk,
+      quarter,
+      totalQuarters: total,
+      lineups: hurt.lineups,
+      segments: hurt.segments,
+      slots,
+      subMode: true,
+      minHalves: 1,
+      livePeriod: true,
+    });
+    assert.equal(goalkeeperId(back.lineups[quarter]), replacement, `${total} periods`);
+    const credit = gkCredit(back.lineups, back.segments, replacement, quarter);
+    assert.equal(credit.segment, null, `${total} periods`);
+    assert.equal(credit.kind, "full", `${total} periods`);
+    assert.equal(credit.halves, 2, `${total} periods`);
+    for (let q = 1; q < quarter; q++) assert.equal(back.lineups[q], hurt.lineups[q]);
+  }
+});
+
 test("a goalkeeper returning from the roster does not take the gloves mid-period", () => {
   const { players, slots, lineups } = sheetFor(4);
   const gk = goalkeeperId(lineups[3]);

@@ -58,6 +58,7 @@ import {
   formatFromCount,
   playersFromFormat,
   resolveSetup,
+  rulesTabView,
   tableRule,
   gkFullPeriodReason,
 } from "./lib/leagueRules.js";
@@ -900,7 +901,7 @@ function usePitchDrag(onResolve) {
   return { pointerDown, pointerMove, pointerUp, ghost, hover, activeSource };
 }
 
-function SoccerField({ lineup, onTap, selectedIdx, quarter, drag, hoverToken, activeSource }) {
+function SoccerField({ lineup, onTap, selectedIdx, quarter, periodAbbrev = "Q", drag, hoverToken, activeSource }) {
 
   if (!lineup) return (
     <div style={{
@@ -961,7 +962,7 @@ function SoccerField({ lineup, onTap, selectedIdx, quarter, drag, hoverToken, ac
             <rect x="12" y="12" width="62" height="34" rx="8" fill="none" stroke="rgba(0,0,0,0.55)" strokeWidth="1.5"/>
             <rect x="12" y="12" width="62" height="34" rx="8" fill="none" stroke="rgba(255,255,255,0.35)" strokeWidth="0.6" transform="translate(0,1)"/>
             <text x="43" y="36" textAnchor="middle" fill="#0a0d0f"
-              fontFamily="Arial, sans-serif" fontWeight="900" fontSize="20" letterSpacing="0.5">Q{quarter}</text>
+              fontFamily="Arial, sans-serif" fontWeight="900" fontSize="20" letterSpacing="0.5">{periodAbbrev}{quarter}</text>
           </g>
         )}
       </svg>
@@ -1050,7 +1051,7 @@ function SoccerField({ lineup, onTap, selectedIdx, quarter, drag, hoverToken, ac
 // 
 // MID-GAME INJURY BANNER
 // 
-function InjuryAlert({ player, quarter, onDismiss }) {
+function InjuryAlert({ player, quarter, periodAbbrev = "Q", periodNoun = "quarters", onDismiss }) {
   const [visible, setVisible] = useState(true);
   useEffect(() => {
     const t = setTimeout(() => setVisible(false), 8000);
@@ -1073,8 +1074,8 @@ function InjuryAlert({ player, quarter, onDismiss }) {
         <div style={{flex:1}}>
           <div style={{fontWeight:800,fontSize:14,color:"#fff",marginBottom:2}}>Mid-Game Injury</div>
           <div style={{fontSize:12,color:"rgba(255,255,255,0.85)"}}>
-            <b>#{player.number} {player.name}</b> marked injured in Q{quarter}.<br/>
-            Minutes already played stay counted. Later quarters only lose this player.
+            <b>#{player.number} {player.name}</b> marked injured in {periodAbbrev}{quarter}.<br/>
+            Minutes already played stay counted. Later {periodNoun} only lose this player.
           </div>
         </div>
         <button onClick={()=>{setVisible(false);onDismiss();}} style={{
@@ -1674,7 +1675,7 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
     const planSlots = slotsForName(activeFormation);
     const slotsByQuarter = {};
     for (let q = fromQ; q <= totalQuarters; q++) {
-      slotsByQuarter[q] = slotsForName(formationNameForPeriod(activeFormation, overridesNow, q));
+      slotsByQuarter[q] = slotsForName(formationNameForPeriod(activeFormation, overridesNow, q, totalQuarters));
     }
     const creditForPlan = fromQ === 1 ? {} : appearanceCredit;
     if (subMode) {
@@ -1732,7 +1733,7 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
     };
     const slotsByQuarter = {};
     periodList.forEach(q => {
-      slotsByQuarter[q] = slotsForName(formationNameForPeriod(activeFormation, overrides, q));
+      slotsByQuarter[q] = slotsForName(formationNameForPeriod(activeFormation, overrides, q, totalQuarters));
     });
     return { overrides, slotsForName, slotsByQuarter };
   };
@@ -1922,15 +1923,15 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
 
   const executeSwap = (row) => {
     if (!subMode) {
-      setQueueNote("Full quarters. Turn on sub mode to run a half swap.");
+      setQueueNote(`Full ${noun}. Turn on sub mode to run a half swap.`);
       return;
     }
     const lineup = lineupsByQuarter[row.quarter];
-    if (!lineup) { setQueueNote("That quarter has no lineup."); return; }
+    if (!lineup) { setQueueNote(`That ${nounOne} has no lineup.`); return; }
     const fieldIdx = lineup.starters.findIndex(slot => slot.player?.id === row.outId);
-    if (fieldIdx < 0) { setQueueNote("That player is no longer on the field for that quarter."); return; }
+    if (fieldIdx < 0) { setQueueNote(`That player is no longer on the field for that ${nounOne}.`); return; }
     if (isGkPosition(lineup.starters[fieldIdx]?.pos)) { refuseGoalkeeper(); return; }
-    if (!(lineup.bench || []).some(p => p.id === row.inId)) { setQueueNote("The sub is not on the bench for that quarter."); return; }
+    if (!(lineup.bench || []).some(p => p.id === row.inId)) { setQueueNote(`The sub is not on the bench for that ${nounOne}.`); return; }
     const ok = swapBenchAndField(fieldIdx, row.inId, {
       lineup,
       quarter: row.quarter,
@@ -1979,7 +1980,7 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
         swapBenchAndField(swapSel.idx, playerId);
         return;
       }
-      setQueueNote("Full quarters. Drag a player to swap. Turn on sub mode for half swaps.");
+      setQueueNote(`Full ${noun}. Drag a player to swap. Turn on sub mode for half swaps.`);
       return;
     }
     if (planSub) {
@@ -2044,7 +2045,7 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
     setLineupsByQuarter(prev => ({ ...prev, [quarter]: next }));
     setSwapSel(null);
     setFairWarn(null);
-    setScrambleNote(`Q${quarter} positions reshuffled. Same players stayed on the field. The goalkeeper stayed in goal.`);
+    setScrambleNote(`${abbr}${quarter} positions reshuffled. Same players stayed on the field. The goalkeeper stayed in goal.`);
   };
 
   const scrambleMembership = () => {
@@ -2070,7 +2071,7 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
     }
     const nextAll = { ...lineupsByQuarter, [quarter]: result.lineup };
     setLineupsByQuarter(nextAll);
-    setScrambleNote(`Q${quarter} redrawn. The other quarters were left alone.`);
+    setScrambleNote(`${abbr}${quarter} redrawn. The other ${noun} were left alone.`);
     warnIfShort(nextAll);
     if (running) {
       const next = {};
@@ -2166,7 +2167,7 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
   }, [pairKey, lineupKey, quarter, swapSel]);
   const queueWhosNext = (benchPlayer) => {
     if (!subMode) {
-      setQueueNote("Full quarters. Turn on sub mode to queue a half swap.");
+      setQueueNote(`Full ${noun}. Turn on sub mode to queue a half swap.`);
       return;
     }
     const planned = shownPairs.find(pair => pair.inId === benchPlayer.id);
@@ -2180,7 +2181,7 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
   };
   const bringBenchOn = () => {
     if (!subMode) {
-      setQueueNote("Full quarters. Turn on sub mode to bring the bench on.");
+      setQueueNote(`Full ${noun}. Turn on sub mode to bring the bench on.`);
       return;
     }
     if (!currentLineup || shownPairs.length === 0) {
@@ -2207,7 +2208,7 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
     setSwapSel(null);
     warnIfShort(nextAll, players, credit, segments);
     const named = shownPairs.map(pair => `${playerName(pair.inId)} on for ${playerName(pair.outId)}`).join(", ");
-    setQueueNote(`Bench is on: ${named}. Minutes already played stay. Other quarters stay.`);
+    setQueueNote(`Bench is on: ${named}. Minutes already played stay. Other ${noun} stay.`);
   };
   const cellKind = (playerId, q, status) => {
     if (status === "unplanned") return "unplanned";
@@ -2232,7 +2233,7 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
   const formationTemplates = shapesFor(format, !!setup?.gk, planSlotsNow);
   const formationOverrides = normalizeFormationOverrides(normalizeGameDay(gameDay).formationOverrides);
   const activeStrategy = formationTemplates.find(t => t.name === activeFormation) || formationTemplates[0] || null;
-  const periodShapeName = formationNameForPeriod(activeStrategy?.name || activeFormation, formationOverrides, quarter);
+  const periodShapeName = formationNameForPeriod(activeStrategy?.name || activeFormation, formationOverrides, quarter, totalQuarters);
   const writeOverrides = (next) => {
     setGameDay(prev => ({ ...normalizeGameDay(prev), formationOverrides: next }));
   };
@@ -2241,7 +2242,7 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
     if (!tmpl) return;
     const hasSheet = periodList.some(q => lineupsByQuarter[q]);
     if (shapeOnly && hasSheet) {
-      const nextOverrides = withPeriodOverride(formationOverrides, quarter, tmpl.name, activeStrategy?.name || activeFormation);
+      const nextOverrides = withPeriodOverride(formationOverrides, quarter, tmpl.name, activeStrategy?.name || activeFormation, totalQuarters);
       writeOverrides(nextOverrides);
       if (lineupsByQuarter[quarter]) {
         setLineupsByQuarter(prev => ({ ...prev, [quarter]: reshapeLineup(prev[quarter], tmpl.slots) }));
@@ -2259,6 +2260,7 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
     if (hasSheet) {
       setLineupsByQuarter(reapplyBase(lineupsByQuarter, {
         periods: totalQuarters,
+        fromPeriod: quarter,
         baseSlots: tmpl.slots,
         overrides: cleaned,
       }));
@@ -2283,7 +2285,7 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
     setSwapSel(null);
     if (!subMode) {
       setPlanSub(false);
-      setQueueNote("Full quarters. Half swaps are off. Planning uses whole quarters.");
+      setQueueNote(`Full ${noun}. Half swaps are off. Planning uses whole ${noun}.`);
     } else {
       setQueueNote("Sub mode. Half swaps are on. Planning spreads sit time across halves.");
     }
@@ -2440,6 +2442,7 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
       {/* Injury alerts */}
       {injuryAlerts.map(alert => (
         <InjuryAlert key={alert.id} player={alert.player} quarter={alert.quarter}
+          periodAbbrev={abbr} periodNoun={noun}
           onDismiss={() => setInjuryAlerts(prev => prev.filter(a => a.id !== alert.id))}/>
       ))}
 
@@ -2554,7 +2557,7 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
           background:"rgba(211,84,0,0.1)", border:"1px solid rgba(211,84,0,0.35)",
           borderRadius:9, padding:"10px 14px", marginBottom:14, fontSize:12, color:C.gold,
         }}>
-          <b>{violations.length} player{violations.length>1?"s":""}</b> still below {subMode ? `${minHalves} halves (${minQ} of ${totalQuarters} quarters)` : `${minQ} of ${totalQuarters} quarters`} on the field:&nbsp;
+          <b>{violations.length} player{violations.length>1?"s":""}</b> still below {subMode ? `${minHalves} halves (${minQ} of ${totalQuarters} ${noun})` : `${minQ} of ${totalQuarters} ${noun}`} on the field:&nbsp;
           {violations.map(p=>p.name.split(" ")[0]).join(", ")}.
         </div>
       )}
@@ -2584,7 +2587,7 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
         <div className="ck-roster" style={{flex:"1 1 320px",minWidth:0,maxWidth:400}}>
 
           <Card style={{marginBottom:14}}>
-            <div style={{fontSize:11,color:C.muted,fontWeight:700,textTransform:"uppercase",letterSpacing:"0.05em",marginBottom:8}}>Plan · Q{quarter}</div>
+            <div style={{fontSize:11,color:C.muted,fontWeight:700,textTransform:"uppercase",letterSpacing:"0.05em",marginBottom:8}}>Plan · {abbr}{quarter}</div>
             <Btn primary full disabled={!gate.ok} onClick={() => planWholeGame(1)} style={{marginBottom:8}}>
               Plan full game
             </Btn>
@@ -2606,7 +2609,7 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
               <div style={{fontSize:11,color:C.muted,fontWeight:700,textTransform:"uppercase",letterSpacing:"0.05em"}}>Play Time</div>
               {allPlanned
                 ? <div style={{fontSize:9,fontWeight:700,color:violations.length===0?C.ok:C.gold,background:violations.length===0?"rgba(39,174,96,0.15)":"rgba(211,84,0,0.15)",padding:"2px 7px",borderRadius:4}}>
-                    {violations.length===0?"QUARTERS MET":"SHORT"}
+                    {violations.length===0?`${noun.toUpperCase()} MET`:"SHORT"}
                   </div>
                 : <div style={{fontSize:9,color:C.muted}}>not fully planned</div>
               }
@@ -2736,7 +2739,7 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
                           <span style={{display:"flex",alignItems:"center",gap:6,flexShrink:0}}>
                             {onNow && <span style={{fontSize:9,fontWeight:800,color:"#0a0d0f",background:"#2ecc71",borderRadius:3,padding:"2px 5px"}}>IN</span>}
                             <span style={{fontSize:10,color:ok?"#2ecc71":C.gold,fontWeight:700}}>
-                              {allPlanned ? `${formatQuarterEquity(plannedHalves)}/${target}Q` : ""}
+                              {allPlanned ? `${formatQuarterEquity(plannedHalves)}/${target}${abbr}` : ""}
                             </span>
                           </span>
                         )}
@@ -2761,7 +2764,7 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
                         else if (Object.keys(lineupsByQuarter).length > 0) markUnavailable(p.id, "injury");
                         else setPlayers(prev=>prev.map(x=>x.id===p.id?{...x,injured:true,out:false}:x));
                       }}
-                        style={{...tinyBtn,
+                        style={{...tinyBtn, minHeight:44, minWidth:44,
                           color:isInjured?"#fff":"#e74c3c",
                           background:isInjured?"rgba(231,76,60,0.85)":"rgba(231,76,60,0.08)",
                           borderColor:"rgba(231,76,60,0.4)"}}>Inj</button>
@@ -2770,7 +2773,7 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
                         else if (Object.keys(lineupsByQuarter).length > 0) markUnavailable(p.id, "out");
                         else setPlayers(prev=>prev.map(x=>x.id===p.id?{...x,out:true,injured:false}:x));
                       }}
-                        style={{...tinyBtn,
+                        style={{...tinyBtn, minHeight:44, minWidth:44,
                           color:isOut?"#0a0d0f":"#e67e22",
                           background:isOut?"#e67e22":"rgba(230,126,34,0.10)",
                           borderColor:"rgba(230,126,34,0.4)"}}>Out</button>
@@ -2797,11 +2800,11 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
                             const slot = qLineup?.starters?.find(s=>s.player?.id===p.id);
                             const pos = slot ? (POS_LABEL[slot.pos] || slot.pos) : "";
                             const label = kind==="full" || kind==="partial-on" ? pos : kind==="partial-off" ? "½" : kind==="unplanned" ? "?" : "";
-                            const title = kind==="full" ? `Q${q} full quarter${pos?` · ${pos}`:""}`
-                              : kind==="partial-on" ? `Q${q} partial · came on${pos?` · ${pos}`:""}`
-                              : kind==="partial-off" ? `Q${q} partial · played, then off`
-                              : kind==="bench" ? `Q${q} bench`
-                              : kind==="blank" ? `Q${q} unavailable` : `Q${q} not planned`;
+                            const title = kind==="full" ? `${abbr}${q} full ${nounOne}${pos?` · ${pos}`:""}`
+                              : kind==="partial-on" ? `${abbr}${q} partial · came on${pos?` · ${pos}`:""}`
+                              : kind==="partial-off" ? `${abbr}${q} partial · played, then off`
+                              : kind==="bench" ? `${abbr}${q} bench`
+                              : kind==="blank" ? `${abbr}${q} unavailable` : `${abbr}${q} not planned`;
                             const background = kind==="full" ? "#2ecc71"
                               : kind==="partial-on" ? "linear-gradient(90deg, rgba(255,255,255,0.16) 0 46%, #2ecc71 46% 100%)"
                               : kind==="partial-off" ? "linear-gradient(90deg, #2ecc71 0 46%, rgba(255,255,255,0.12) 46% 100%)"
@@ -2855,7 +2858,7 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
                 gap:8, marginBottom: subsOpen ? 8 : 0, padding:0, border:"none", background:"transparent",
                 color:C.gold, cursor:"pointer", fontFamily:"inherit",
               }}>
-                <span style={{fontSize:12,fontWeight:800,textTransform:"uppercase",letterSpacing:"0.06em"}}>Mid-quarter subs</span>
+                <span style={{fontSize:12,fontWeight:800,textTransform:"uppercase",letterSpacing:"0.06em"}}>Mid-{nounOne} subs</span>
                 <span style={{fontSize:12,fontWeight:800,color:C.text}}>{subsOpen ? "Hide" : "Show"}</span>
               </button>
               {!subsOpen && (
@@ -2868,7 +2871,7 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
               <div style={{display:"flex",gap:8,marginBottom:10,flexWrap:"wrap"}}>
                 <button onClick={() => {
                   if (!subMode) {
-                    setQueueNote("Full quarters. Turn on sub mode to queue a half swap.");
+                    setQueueNote(`Full ${noun}. Turn on sub mode to queue a half swap.`);
                     return;
                   }
                   setPlanSub(v => !v);
@@ -2885,11 +2888,11 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
               </div>
               <div style={{fontSize:11,color:C.muted,lineHeight:1.45,marginBottom:10}}>
                 {!subMode
-                  ? "Full quarters. Half swaps and the queue stay off. Drag still moves a player now."
+                  ? `Full ${noun}. Half swaps and the queue stay off. Drag still moves a player now.`
                   : planSub
                   ? "Tap who leaves, then who comes on. The queue shows that pair by name. Drag still swaps right away."
                   : "Drag or tap to swap now. Plan sub queues the next 2–3 swaps without moving anyone yet."}
-                {" "}Changing quarter keeps minutes already played.
+                {" "}Changing the {nounOne} keeps minutes already played.
               </div>
               {shownPairs.length > 0 && (
                 <div style={{marginBottom:12,padding:"10px",borderRadius:10,background:"rgba(0,0,0,0.2)",border:"1px solid rgba(46,204,113,0.28)"}}>
@@ -2906,14 +2909,14 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
                       <span style={{color:C.muted}}>→</span>
                       <span style={{fontWeight:800}}>{playerName(pair.outId)}</span>
                       <span style={{fontSize:10,fontWeight:800,color:C.muted,letterSpacing:"0.04em"}}>OFF</span>
-                      {pair.fromPlan && <span style={{fontSize:10,color:C.muted}}>next quarter</span>}
+                      {pair.fromPlan && <span style={{fontSize:10,color:C.muted}}>next {nounOne}</span>}
                     </div>
                   ))}
                   <Btn secondary full onClick={bringBenchOn} style={{marginTop:4,borderColor:"rgba(46,204,113,0.45)"}}>
                     Bring the bench on
                   </Btn>
                   <div style={{fontSize:10,color:C.muted,lineHeight:1.4,marginTop:6}}>
-                    This quarter only. Minutes already played stay. Other quarters stay.
+                    This {nounOne} only. Minutes already played stay. Other {noun} stay.
                   </div>
                 </div>
               )}
@@ -2943,7 +2946,7 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
                 );
               })}
               {!anyMinutes && whosNext.length > 0 && (
-                <div style={{fontSize:10,color:C.muted,margin:"2px 0 8px"}}>This order uses quarters on the field.</div>
+                <div style={{fontSize:10,color:C.muted,margin:"2px 0 8px"}}>This order uses {noun} on the field.</div>
               )}
               {anyMinutes && whosNext.length > 0 && (
                 <div style={{fontSize:10,color:C.muted,margin:"0 0 8px"}}>
@@ -3074,7 +3077,7 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
                   <button
                     onClick={() => {
                       if (!subMode) {
-                        setQueueNote("Full quarters. Turn on sub mode to run the listed swaps.");
+                        setQueueNote(`Full ${noun}. Turn on sub mode to run the listed swaps.`);
                         return;
                       }
                       if (shownPairs.length > 0) {
@@ -3161,6 +3164,7 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
                   onTap={onFieldTap}
                   selectedIdx={swapSel?.type==="field" ? swapSel.idx : null}
                   quarter={quarter}
+                  periodAbbrev={abbr}
                   drag={drag}
                   hoverToken={drag.hover}
                   activeSource={drag.activeSource}
@@ -3181,7 +3185,7 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
               <div style={{fontSize:11, color:C.muted, lineHeight:1.4, marginTop:8, textAlign:"center"}}>
                 {subMode
                   ? "SUB runs the listed swaps. Tap a bench player, then a field player, to move a line. A green ring means release will swap."
-                  : "Full quarters. SUB stays off until sub mode is on. Drag still swaps a player."}
+                  : `Full ${noun}. SUB stays off until sub mode is on. Drag still swaps a player.`}
               </div>
             )}
             {queueNote && !subsOpen && (
@@ -3504,8 +3508,10 @@ function TabRules({ setup }) {
   const [viewAge, setViewAge] = useState(setup.age);
   const [view, setView] = useState("quick");
   useEffect(() => { setViewAge(setup.age); }, [setup.age]);
-  const preview = tableRule(setup.orgId || "us-soccer", viewAge, setup.saySeason);
-  const say = setup.orgId === "say-east";
+  const rulesView = rulesTabView(setup, viewAge);
+  const preview = rulesView.preview;
+  const badges = rulesView.badges;
+  const say = rulesView.say;
   const division = say ? sayDivision(viewAge) : null;
   const divisionKey = say ? sayDivisionKey(viewAge) : "";
   return (
@@ -3522,7 +3528,7 @@ function TabRules({ setup }) {
           <div style={{fontSize:11,color:C.muted}}>
             {say
               ? "Source: SAY East Playing Laws Rulebook (Updated Jan 2026) - Silver Matrix age chart"
-              : `${viewAge} · ${preview.periods} × ${preview.periodMinutes} min${preview.gk ? " · goalkeeper" : " · no goalkeeper"}`}
+              : `${viewAge} · ${badges.periods} × ${badges.periodMinutes} min${badges.gk ? " · goalkeeper" : " · no goalkeeper"}`}
           </div>
         </div>
       </div>
@@ -3553,10 +3559,10 @@ function TabRules({ setup }) {
         )}
         <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
           {[
-            ["Players", `${preview.playersOnField}v${preview.playersOnField}`],
-            ["Goalkeeper", preview.gk ? "Yes" : "No"],
-            ["Clock", `${preview.periods} × ${preview.periodMinutes} min`],
-            ["Ball", preview.ballSize ? `Size ${preview.ballSize}` : "Coach's choice"],
+            ["Players", `${badges.playersOnField}v${badges.playersOnField}`],
+            ["Goalkeeper", badges.gk ? "Yes" : "No"],
+            ["Clock", `${badges.periods} × ${badges.periodMinutes} min`],
+            ["Ball", badges.ballSize ? `Size ${badges.ballSize}` : "Coach's choice"],
             ...(division ? [
               ["Format", division.format || ""],
               ["Field", division.fieldLength ? `${division.fieldLength} x ${division.fieldWidth}` : ""],
@@ -3588,7 +3594,7 @@ function TabRules({ setup }) {
           <div style={{fontSize:12,color:C.gold,marginTop:10}}>Unverified default. The note says what the rulebook did not settle.</div>
         )}
         <div style={{fontSize:13,color:C.text,lineHeight:1.5,marginTop:12}}>{preview.note}</div>
-        {preview.gk && <div style={{fontSize:12,color:C.muted,lineHeight:1.45,marginTop:8}}>{gkFullPeriodReason(preview.periodType)}</div>}
+        {badges.gk && <div style={{fontSize:12,color:C.muted,lineHeight:1.45,marginTop:8}}>{gkFullPeriodReason(preview.periodType)}</div>}
         {preview.source && (
           <a href={preview.source} target="_blank" rel="noreferrer" style={{display:"inline-block",marginTop:12,fontSize:12,color:C.gold}}>
             Source
@@ -4619,7 +4625,7 @@ function CoachKitLoaded() {
         />
         {tab==="season"   && <TabSeason   players={players} playerStats={playerStats} setPlayerStats={setPlayerStats} games={games} setGames={setGames} practiceDates={practiceDates} setPracticeDates={setPracticeDates} practiceAttendance={practiceAttendance} setPracticeAttendance={setPracticeAttendance}/>}
         {tab==="team"     && <TabTeam     players={players} updatePlayer={updatePlayer} league={league} games={games} cloud={cloud} clerkUserId={user?.id || ""} schedule={schedule} setSchedule={setSchedule}/>}
-        {tab==="rules"    && <TabRules    setup={setup} onAgeChange={handleAgeChange}/>}
+        {tab==="rules"    && <TabRules    setup={setup}/>}
         {tab==="drills"   && <TabDrills   drills={allDrills} league={league} addCustomDrill={addCustomDrill} removeCustomDrill={removeCustomDrill}/>}
         {tab==="practice" && <TabPractice drills={allDrills} league={league}/>}
       </div>
@@ -4817,7 +4823,7 @@ function TabSeason({ players, playerStats, setPlayerStats, games, setGames, prac
                   <div style={{fontSize:11,color:C.muted}}>{g.date}  <b style={{color:g.homeScore>g.oppScore?C.ok:"#e74c3c"}}>{g.homeScore}</b>  {g.oppScore}</div>
                   {g.strategy && (
                     <div style={{fontSize:11, color:C.gold, fontWeight:700, marginTop:3}}>
-                      {g.strategy.formation || "Strategy"}{g.strategy.formationLabel ? ` · ${g.strategy.formationLabel}` : ""} · {g.strategy.subMode ? "Sub mode" : "Full quarters"}{g.strategy.format ? ` · ${g.strategy.format}` : ""}
+                      {g.strategy.formation || "Strategy"}{g.strategy.formationLabel ? ` · ${g.strategy.formationLabel}` : ""} · {g.strategy.subMode ? "Sub mode" : "Full periods"}{g.strategy.format ? ` · ${g.strategy.format}` : ""}
                     </div>
                   )}
                   {sheets?.field && sheets?.playTime && (

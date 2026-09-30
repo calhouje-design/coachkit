@@ -43,6 +43,32 @@ test("changing the base reshapes only periods that are not overridden", () => {
   assert.equal(next[2], lineups[2]);
 });
 
+test("changing the base leaves periods already played unchanged", () => {
+  const slots = ["GK", "LD", "RD", "CF"];
+  const played = lineup(slots, ["gk", "a", "b", "c"]);
+  const lineups = {
+    1: played,
+    2: lineup(slots, ["gk", "a", "b", "c"]),
+    3: lineup(slots, ["gk", "d", "e", "f"]),
+  };
+  const next = reapplyBase(lineups, {
+    periods: 3,
+    fromPeriod: 2,
+    baseSlots: ["GK", "LB", "RB", "ST"],
+  });
+  assert.equal(next[1], played);
+  assert.deepEqual(next[2].starters.map(slot => slot.pos), ["GK", "LB", "RB", "ST"]);
+  assert.deepEqual(next[3].starters.map(slot => slot.pos), ["GK", "LB", "RB", "ST"]);
+});
+
+test("an override past the last period is refused and a longer game's override stays stored", () => {
+  const kept = withPeriodOverride({ 4: "2-0-4" }, 3, "2-1-3", "2-3-2", 2);
+  assert.equal(kept[4], "2-0-4");
+  assert.equal(kept[3], undefined);
+  assert.equal(formationNameForPeriod("2-3-2", kept, 4, 2), "2-3-2");
+  assert.equal(formationNameForPeriod("2-3-2", kept, 4, 4), "2-0-4");
+});
+
 test("reshape keeps the goalkeeper in the GK slot", () => {
   const next = reshapeLineup(lineup(["GK", "CM", "CF"], ["keep", "mid", "fwd"]), ["CF", "GK", "CM"]);
   assert.equal(next.starters.find(slot => slot.pos === "GK").player.id, "keep");
@@ -68,4 +94,11 @@ test("SAY East rules content is still attached to each division", () => {
   }
   assert.equal(sayDivisionKey("U7"), "U8 / Passers");
   assert.equal(sayDivisionKey("U18"), "U19 / Seniors");
+  const passers = sayDivision("U8");
+  const card = passers.quickRules.map(rule => rule.text).join("\n");
+  assert.match(passers.format, /6v6/);
+  assert.match(card, /4 x 10/);
+  assert.match(card, /6v6 field/);
+  assert.equal(card.includes("4 x 12"), false);
+  assert.equal(card.includes("7v7"), false);
 });

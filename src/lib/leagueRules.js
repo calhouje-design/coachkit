@@ -447,9 +447,10 @@ export function resolveSetup({ league, format, settings } = {}) {
     const playersOnField = playersFromFormat(format) || 6;
     const gk = explicitGk == null ? true : explicitGk;
     const periods = explicitPeriods || 4;
+    const sayRule = tableRule("say-east", legacy.age, season);
     const periodMinutes = explicitMinutes != null && explicitMinutes !== "" && Number(explicitMinutes) > 0
       ? clampMinutes(explicitMinutes)
-      : legacy.periodMinutes;
+      : (periods === 2 ? minutesFor(sayRule, 2, null) : legacy.periodMinutes);
     return shape({
       legacy: true,
       orgId: null,
@@ -496,6 +497,31 @@ export function resolveSetup({ league, format, settings } = {}) {
     tablePeriods: rule.periods,
     tableMinutes: minutesFor(rule, periods, null),
   });
+}
+
+/**
+ * Rules tab. A saved team with no organization is SAY East here.
+ * The team's own age shows that team's format, goalkeeper, and clock.
+ * Other ages show the org table.
+ */
+export function rulesTabView(setup, viewAge) {
+  const say = setup?.orgId === "say-east" || setup?.legacy === true;
+  const orgForTable = say ? "say-east" : (LEAGUE_RULES[setup?.orgId] ? setup.orgId : "us-soccer");
+  const age = viewAge || setup?.age;
+  const preview = tableRule(orgForTable, age, setup?.saySeason);
+  const same = !!setup && age === setup.age;
+  return {
+    say,
+    orgId: orgForTable,
+    preview,
+    badges: {
+      playersOnField: same ? setup.playersOnField : preview.playersOnField,
+      gk: same ? !!setup.gk : !!preview.gk,
+      periods: same ? setup.periods : preview.periods,
+      periodMinutes: same ? setup.periodMinutes : preview.periodMinutes,
+      ballSize: same && setup.ballSize ? setup.ballSize : preview.ballSize,
+    },
+  };
 }
 
 export function unverifiedCells() {

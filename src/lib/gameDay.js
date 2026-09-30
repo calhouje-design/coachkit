@@ -663,6 +663,21 @@ export function scheduleHalfRotation(players, slots, {
   return { lineups, segments };
 }
 
+/** The keeper left in goal plays the whole period. Drop a half mark the replan wrote for them. */
+function creditPinnedGoalkeeper(segments, lineup, quarter) {
+  const gkId = goalkeeperId(lineup);
+  if (!gkId) return segments || {};
+  const row = { ...(segments?.[gkId] || {}) };
+  const q = Number(quarter);
+  if (row[q] == null && row[String(q)] == null) return segments || {};
+  delete row[q];
+  delete row[String(q)];
+  const next = { ...(segments || {}) };
+  if (Object.keys(row).length) next[gkId] = row;
+  else delete next[gkId];
+  return next;
+}
+
 function pinNamedGoalkeeper(lineup, gkId, roster) {
   if (!lineup?.starters || !gkId) return lineup;
   const gkIdx = lineup.starters.findIndex(slot => isGkPosition(slot.pos));
@@ -757,13 +772,15 @@ export function regenerateForAbsence({
   for (let q = start; q <= absentEnd; q++) {
     if (shaped[q]) shaped[q] = pullFromQuarter(shaped[q], absentId);
   }
+  let absentSegments = absentPlan.segments;
   const prevGk = lockGoalkeeperId || goalkeeperId(lineups?.[start]);
   if (prevGk && prevGk !== absentId && shaped[start]) {
     shaped[start] = pinNamedGoalkeeper(shaped[start], prevGk, roster);
     shaped[start] = pullFromQuarter(shaped[start], absentId);
+    absentSegments = creditPinnedGoalkeeper(absentSegments, shaped[start], start);
   }
   if (back == null || back > totalQuarters) {
-    return { lineups: shaped, segments: absentPlan.segments };
+    return { lineups: shaped, segments: absentSegments };
   }
 
   const lockedUntilReturn = {};
@@ -774,7 +791,7 @@ export function regenerateForAbsence({
     minHalves,
     fromQuarter: back,
     lockedLineups: lockedUntilReturn,
-    lockedSegments: absentPlan.segments,
+    lockedSegments: absentSegments,
     totalQuarters,
     rate,
     slotsByQuarter,
@@ -783,10 +800,12 @@ export function regenerateForAbsence({
   for (let q = start; q <= absentEnd; q++) {
     if (returned[q]) returned[q] = pullFromQuarter(returned[q], absentId);
   }
+  let returnSegments = returnPlan.segments;
   if (lockGoalkeeperId && returned[back]) {
     returned[back] = pinNamedGoalkeeper(returned[back], lockGoalkeeperId, withBack);
+    returnSegments = creditPinnedGoalkeeper(returnSegments, returned[back], back);
   }
-  return { lineups: returned, segments: returnPlan.segments };
+  return { lineups: returned, segments: returnSegments };
 }
 
 /**

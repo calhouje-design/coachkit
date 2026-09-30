@@ -4,28 +4,33 @@ function isGk(pos) {
   return String(pos || "").trim().toUpperCase() === "GK";
 }
 
-export function normalizeFormationOverrides(value) {
+export function normalizeFormationOverrides(value, maxPeriod = 4) {
   if (!value || typeof value !== "object") return {};
+  const cap = Math.max(1, Number(maxPeriod) || 4);
   const out = {};
   Object.entries(value).forEach(([key, name]) => {
     const period = Number(key);
-    if (!Number.isInteger(period) || period < 1 || period > 4) return;
+    if (!Number.isInteger(period) || period < 1 || period > cap) return;
     if (typeof name !== "string" || !name.trim()) return;
     out[period] = name.trim();
   });
   return out;
 }
 
-export function formationNameForPeriod(base, overrides, period) {
+export function formationNameForPeriod(base, overrides, period, totalQuarters = 4) {
+  const q = Number(period);
+  const cap = Number(totalQuarters) || 4;
+  if (!Number.isInteger(q) || q < 1 || q > cap) return base || "";
   const map = normalizeFormationOverrides(overrides);
-  return map[period] || base || "";
+  return map[q] || base || "";
 }
 
-/** A name that matches the base is not an override. Other periods are left alone. */
-export function withPeriodOverride(overrides, period, name, base) {
+/** A name that matches the base is not an override. Periods past the last one are refused. Stored overrides for a longer game stay. */
+export function withPeriodOverride(overrides, period, name, base, totalQuarters = 4) {
   const map = { ...normalizeFormationOverrides(overrides) };
   const q = Number(period);
-  if (!Number.isInteger(q)) return map;
+  const cap = Number(totalQuarters) || 4;
+  if (!Number.isInteger(q) || q < 1 || q > cap) return map;
   if (!name || name === base) delete map[q];
   else map[q] = name;
   return map;
@@ -65,12 +70,13 @@ export function reshapeLineup(lineup, slots) {
   return { starters, bench };
 }
 
-/** New base slots land on periods that are not overridden. Overrides stay as they are. */
-export function reapplyBase(lineups, { periods = 4, baseSlots, overrides } = {}) {
+/** New base slots land on periods from fromPeriod on that are not overridden. Earlier periods stay as the same lineup. */
+export function reapplyBase(lineups, { periods = 4, baseSlots, overrides, fromPeriod = 1 } = {}) {
   const next = { ...(lineups || {}) };
-  const map = normalizeFormationOverrides(overrides);
   const count = Number(periods) || 4;
-  for (let q = 1; q <= count; q++) {
+  const map = normalizeFormationOverrides(overrides, count);
+  const start = Math.max(1, Number(fromPeriod) || 1);
+  for (let q = start; q <= count; q++) {
     if (!next[q] || map[q]) continue;
     next[q] = reshapeLineup(next[q], baseSlots);
   }
