@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   clampPeriod,
   formationNameForPeriod,
+  preservePlayedBase,
   reapplyBase,
   reshapeLineup,
   withPeriodOverride,
@@ -34,6 +35,7 @@ test("changing the base reshapes only periods that are not overridden", () => {
   };
   const next = reapplyBase(lineups, {
     periods: 2,
+    fromPeriod: 1,
     baseSlots: ["GK", "LB", "RB", "ST"],
     overrides: { 2: "2-0-4" },
   });
@@ -67,6 +69,17 @@ test("an override past the last period is refused and a longer game's override s
   assert.equal(kept[3], undefined);
   assert.equal(formationNameForPeriod("2-3-2", kept, 4, 2), "2-3-2");
   assert.equal(formationNameForPeriod("2-3-2", kept, 4, 4), "2-0-4");
+});
+
+test("a later base change names the old shape on periods that had no override", () => {
+  const locked = preservePlayedBase({ 2: "3-1-2" }, 3, "2-3-2", 4);
+  assert.equal(locked[1], "2-3-2");
+  assert.equal(locked[2], "3-1-2");
+  assert.equal(locked[3], undefined);
+  assert.equal(formationNameForPeriod("2-0-4", locked, 1, 4), "2-3-2");
+  assert.equal(formationNameForPeriod("2-0-4", locked, 2, 4), "3-1-2");
+  assert.equal(formationNameForPeriod("2-0-4", locked, 3, 4), "2-0-4");
+  assert.throws(() => reapplyBase({}, { periods: 4, baseSlots: ["GK"] }), /fromPeriod/);
 });
 
 test("reshape keeps the goalkeeper in the GK slot", () => {

@@ -5,11 +5,13 @@ import {
   LEAGUE_RULES,
   resolveSetup,
   rulesTabView,
+  sayClockText,
   tableRule,
   unverifiedCells,
   defaultSlots,
   gkFullPeriodReason,
 } from "./leagueRules.js";
+import { sayDivision } from "./sayEastGuide.js";
 
 test("age list includes the odd ages and U18 through U19", () => {
   assert.deepEqual(AGES, [
@@ -52,7 +54,8 @@ test("SAY East keeps Cincinnati sizes and flags the unverified cells", () => {
     assert.equal(row.playersOnField, 6);
     assert.equal(row.gk, true);
     assert.equal(row.periodMinutes, 10);
-    assert.equal(row.verified, false);
+    assert.equal(row.verified, true);
+    assert.equal(row.source, "Jared Calhoun, SAY East U8 coach, 2026-09-30");
   }
   assert.equal(tableRule("say-east", "U9").playersOnField, 8);
   assert.equal(tableRule("say-east", "U9").gk, true);
@@ -204,9 +207,40 @@ test("unverified cells are the ones the rulebooks do not settle", () => {
     "say-east:U17",
     "say-east:U18",
     "say-east:U19",
-    "say-east:U7",
-    "say-east:U8",
   ].sort());
+});
+
+test("a legacy U8 Passers card names the saved clock beside the SAY East standard", () => {
+  const legacy = resolveSetup({
+    league: "U8 / Passers",
+    format: "6v6",
+    settings: { quarterMinutes: null },
+  });
+  const view = rulesTabView(legacy, "U8");
+  assert.equal(view.differs, true);
+  assert.equal(view.team.playersOnField, 6);
+  assert.equal(view.team.gk, true);
+  assert.equal(view.team.periods, 4);
+  assert.equal(view.team.periodMinutes, 12);
+  assert.equal(view.league.periods, 4);
+  assert.equal(view.league.periodMinutes, 10);
+  assert.equal(view.league.halvesMinutes, 20);
+  assert.equal(view.clock.team, "Your team: 4 × 12");
+  assert.equal(view.clock.standard, "SAY East standard: 4 × 10 (halves 2 × 20)");
+  const matched = rulesTabView(legacy, "U10");
+  assert.equal(matched.differs, false);
+  assert.equal(matched.clock, null);
+});
+
+test("SAY East guide clock text matches the league table for every age", () => {
+  for (const age of AGES) {
+    const rule = tableRule("say-east", age);
+    const division = sayDivision(age);
+    const clocks = division.quickRules.map(item => item.text).filter(text => /^\d+\s*x\s*\d+\s*min/.test(text));
+    assert.deepEqual(clocks, [sayClockText(rule)], age);
+    assert.equal(division.periods, rule.periods, age);
+    assert.equal(division.periodMin, rule.periodMinutes, age);
+  }
 });
 
 test("no-GK slots stay off the goal and a half still names one full period", () => {

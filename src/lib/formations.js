@@ -70,12 +70,30 @@ export function reshapeLineup(lineup, slots) {
   return { starters, bench };
 }
 
-/** New base slots land on periods from fromPeriod on that are not overridden. Earlier periods stay as the same lineup. */
-export function reapplyBase(lineups, { periods = 4, baseSlots, overrides, fromPeriod = 1 } = {}) {
+/**
+ * Periods already played keep the previous base name when they had no override.
+ * Chips and a saved strategy then name that shape instead of the new base.
+ */
+export function preservePlayedBase(overrides, fromPeriod, oldBase, totalQuarters = 4) {
+  const map = { ...normalizeFormationOverrides(overrides) };
+  const start = Number(fromPeriod);
+  const cap = Number(totalQuarters) || 4;
+  if (!oldBase || !Number.isInteger(start)) return map;
+  for (let q = 1; q < start && q <= cap; q++) {
+    if (!map[q]) map[q] = oldBase;
+  }
+  return map;
+}
+
+/** New base slots land on periods from fromPeriod on that are not overridden. fromPeriod is required. */
+export function reapplyBase(lineups, { periods = 4, baseSlots, overrides, fromPeriod } = {}) {
+  const start = Number(fromPeriod);
+  if (!Number.isInteger(start) || start < 1) {
+    throw new TypeError("reapplyBase requires fromPeriod");
+  }
   const next = { ...(lineups || {}) };
   const count = Number(periods) || 4;
   const map = normalizeFormationOverrides(overrides, count);
-  const start = Math.max(1, Number(fromPeriod) || 1);
   for (let q = start; q <= count; q++) {
     if (!next[q] || map[q]) continue;
     next[q] = reshapeLineup(next[q], baseSlots);

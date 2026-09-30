@@ -44,7 +44,7 @@ import {
   planAvailability,
   returnToGame,
 } from "./lib/gameDay.js";
-import { clampPeriod, formationNameForPeriod, reapplyBase, reshapeLineup, withPeriodOverride, withoutPeriodOverride, normalizeFormationOverrides } from "./lib/formations.js";
+import { clampPeriod, formationNameForPeriod, preservePlayedBase, reapplyBase, reshapeLineup, withPeriodOverride, withoutPeriodOverride, normalizeFormationOverrides } from "./lib/formations.js";
 import { SAY_PLAY_TIME, sayDivision, sayDivisionKey } from "./lib/sayEastGuide.js";
 import { downloadCanvas, paintFieldSheet, paintPlayTimeSheet } from "./lib/sharePaint.js";
 import { useTeamCloud } from "./lib/teamCloud.js";
@@ -2252,8 +2252,13 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
       return;
     }
     setActiveFormation(tmpl.name);
-    const cleaned = withoutPeriodOverride(formationOverrides, quarter);
+    const oldBase = activeStrategy?.name || activeFormation;
+    const named = oldBase && oldBase !== tmpl.name
+      ? preservePlayedBase(formationOverrides, quarter, oldBase, totalQuarters)
+      : formationOverrides;
+    const cleaned = withoutPeriodOverride(named, quarter);
     Object.keys(cleaned).forEach(key => {
+      if (Number(key) < quarter) return;
       if (cleaned[key] === tmpl.name) delete cleaned[key];
     });
     writeOverrides(cleaned);
@@ -3103,7 +3108,7 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
                   >
                     <div>SUB</div>
                     <div style={{fontSize:8, fontWeight:800, letterSpacing:"0.06em", marginTop:3}}>
-                      {!subMode ? "FULL Q" : shownPairs.length ? "RUN" : planSub ? "ON" : "READY"}
+                      {!subMode ? `FULL ${abbr}` : shownPairs.length ? "RUN" : planSub ? "ON" : "READY"}
                     </div>
                   </button>
                   <div style={{fontSize:9, color:C.muted, fontWeight:800, textAlign:"center", letterSpacing:"0.06em"}}>BENCH</div>
@@ -3561,7 +3566,7 @@ function TabRules({ setup }) {
           {[
             ["Players", `${badges.playersOnField}v${badges.playersOnField}`],
             ["Goalkeeper", badges.gk ? "Yes" : "No"],
-            ["Clock", `${badges.periods} × ${badges.periodMinutes} min`],
+            ...(rulesView.clock ? [] : [["Clock", `${badges.periods} × ${badges.periodMinutes} min`]]),
             ["Ball", badges.ballSize ? `Size ${badges.ballSize}` : "Coach's choice"],
             ...(division ? [
               ["Format", division.format || ""],
@@ -3573,6 +3578,16 @@ function TabRules({ setup }) {
               <span style={{color:C.muted}}>{k}: </span><span style={{color:C.text,fontWeight:700}}>{v}</span>
             </div>
           ))}
+          {rulesView.clock && (
+            <>
+              <div style={{background:"rgba(0,0,0,0.35)",borderRadius:7,padding:"5px 11px",fontSize:11}}>
+                <span style={{color:C.text,fontWeight:700}}>{rulesView.clock.team}</span>
+              </div>
+              <div style={{background:"rgba(0,0,0,0.35)",borderRadius:7,padding:"5px 11px",fontSize:11}}>
+                <span style={{color:C.text,fontWeight:700}}>{rulesView.clock.standard}</span>
+              </div>
+            </>
+          )}
         </div>
         {division && (
           <div style={{display:"flex",gap:8,flexWrap:"wrap",marginTop:8}}>
@@ -3596,9 +3611,13 @@ function TabRules({ setup }) {
         <div style={{fontSize:13,color:C.text,lineHeight:1.5,marginTop:12}}>{preview.note}</div>
         {badges.gk && <div style={{fontSize:12,color:C.muted,lineHeight:1.45,marginTop:8}}>{gkFullPeriodReason(preview.periodType)}</div>}
         {preview.source && (
-          <a href={preview.source} target="_blank" rel="noreferrer" style={{display:"inline-block",marginTop:12,fontSize:12,color:C.gold}}>
-            Source
-          </a>
+          String(preview.source).startsWith("http") ? (
+            <a href={preview.source} target="_blank" rel="noreferrer" style={{display:"inline-block",marginTop:12,fontSize:12,color:C.gold}}>
+              Source
+            </a>
+          ) : (
+            <div style={{marginTop:12,fontSize:12,color:C.gold}}>{preview.source}</div>
+          )
         )}
       </div>
       {division && (

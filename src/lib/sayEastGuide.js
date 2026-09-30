@@ -1,5 +1,9 @@
 /** SAY East quick rules, missed rules, and official links. Restored from the Rules tab. */
 
+import { tableRule, sayClockText } from "./leagueRules.js";
+
+const CLOCK_LINE = /^\d+\s*x\s*\d+\s*min/;
+
 export function sayDivisionKey(age) {
   const n = Number(String(age || "").replace(/\D/g, ""));
   if (!Number.isFinite(n) || n <= 6) return "U6 / Instructional";
@@ -12,7 +16,17 @@ export function sayDivisionKey(age) {
 }
 
 export function sayDivision(age) {
-  return SAY_EAST_DIVISIONS[sayDivisionKey(age)] || SAY_EAST_DIVISIONS["U10 / Wings"];
+  const base = SAY_EAST_DIVISIONS[sayDivisionKey(age)] || SAY_EAST_DIVISIONS["U10 / Wings"];
+  const rule = tableRule("say-east", age);
+  const clock = sayClockText(rule);
+  return {
+    ...base,
+    periods: rule.periods,
+    periodMin: rule.periodMinutes,
+    quickRules: base.quickRules.map(item => (
+      CLOCK_LINE.test(item.text) ? { ...item, text: clock } : item
+    )),
+  };
 }
 
 // -- SAY East Play-Time Rules (SAY Rule 12) --
@@ -110,11 +124,11 @@ export const SAY_EAST_DIVISIONS = {
     goalSize: "12-18 ft wide x 6-7 ft high",
     heading: false, offside: false, slideTackle: false, buildOut: true,
     gkPunt: true, throwIns: true, penaltyKick: true, yellowRedCards: true,
-    periods: 4, periodMin: 15,
+    periods: 4, periodMin: 12,
     quickRules: [
       { icon:"", text:"No heading - IFK awarded to opponents", important: true },
       { icon:"", text:"Build-out line used - opponents retreat on GK possession / goal kicks", important: true },
-      { icon:"", text:"4 x 15 min quarters (60 min total)" },
+      { icon:"", text:"4 x 12 min quarters (48 min total). Halves are 2 x 24" },
       { icon:"", text:"SAY East: 8v8 format (spring & fall)" },
       { icon:"", text:"Every player must play - half the game (SAY Rule 12)" },
       { icon:"", text:"GK may punt (SAY East exception)" },
@@ -147,11 +161,11 @@ export const SAY_EAST_DIVISIONS = {
     goalSize: "18-21 ft wide x 6-7 ft high",
     heading: false, offside: true, slideTackle: false, buildOut: false,
     gkPunt: true, throwIns: true, penaltyKick: true, yellowRedCards: true,
-    periods: 4, periodMin: 20,
+    periods: 4, periodMin: 15,
     quickRules: [
       { icon:"", text:"NO heading - banned in games & practices through U12", important: true },
       { icon:"", text:"Full offside rule applies (from defensive line, whole field)", important: true },
-      { icon:"", text:"4 x 20 min quarters (80 min total)" },
+      { icon:"", text:"4 x 15 min quarters (60 min total). Halves are 2 x 30" },
       { icon:"", text:"SAY East: 9v9 format (spring & fall)" },
       { icon:"", text:"Every player must play - half the game (SAY Rule 12)" },
       { icon:"", text:"GK may punt (SAY East exception)" },
@@ -184,11 +198,11 @@ export const SAY_EAST_DIVISIONS = {
     goalSize: "24 ft wide x 8 ft high (11v11)",
     heading: true, offside: true, slideTackle: true, buildOut: false,
     gkPunt: true, throwIns: true, penaltyKick: true, yellowRedCards: true,
-    periods: 2, periodMin: 35,
+    periods: 4, periodMin: 15,
     quickRules: [
       { icon:"", text:"Heading is allowed - limit practice headers per SAY policy", important: true },
       { icon:"", text:"Full offside rule (FIFA standard from defensive line)" },
-      { icon:"", text:"2 x 35 min halves (70 min total)" },
+      { icon:"", text:"4 x 15 min quarters (60 min total). Halves are 2 x 30" },
       { icon:"", text:"SAY East: 9v9 spring / 11v11 fall" },
       { icon:"", text:"Every player must play - half the game (SAY Rule 12)" },
       { icon:"", text:"GK may punt" },
@@ -222,10 +236,10 @@ export const SAY_EAST_DIVISIONS = {
     goalSize: "24 ft wide x 8 ft high",
     heading: true, offside: true, slideTackle: true, buildOut: false,
     gkPunt: true, throwIns: true, penaltyKick: true, yellowRedCards: true,
-    periods: 2, periodMin: 40,
+    periods: 4, periodMin: 20,
     quickRules: [
       { icon:"", text:"Full SAY/FIFA Laws of the Game apply", important: true },
-      { icon:"", text:"2 x 40 min halves (80 min total)" },
+      { icon:"", text:"4 x 20 min quarters (80 min total). Halves are 2 x 40" },
       { icon:"", text:"Heading fully allowed - no practice limits" },
       { icon:"", text:"Full offside rule - FIFA standard" },
       { icon:"", text:"Every player must play - half the game (SAY Rule 12)" },
@@ -258,10 +272,10 @@ export const SAY_EAST_DIVISIONS = {
     goalSize: "24 ft wide x 8 ft high",
     heading: true, offside: true, slideTackle: true, buildOut: false,
     gkPunt: true, throwIns: true, penaltyKick: true, yellowRedCards: true,
-    periods: 2, periodMin: 45,
+    periods: 4, periodMin: 20,
     quickRules: [
       { icon:"", text:"Full SAY/FIFA Laws of the Game apply", important: true },
-      { icon:"", text:"2 x 45 min halves (90 min total)" },
+      { icon:"", text:"4 x 20 min quarters (80 min total). Halves are 2 x 40" },
       { icon:"", text:"Heading fully allowed" },
       { icon:"", text:"Full offside rule - FIFA standard" },
       { icon:"", text:"Every player must play - half the game (SAY Rule 12)" },

@@ -156,16 +156,15 @@ const SAY_EAST = {
     verified: true, source: SOURCES.sayEast, minFraction: 1,
     note: "SAY East has no U6 division. National 6U guidelines: 4v4, no goalkeeper, 4×8.",
   }),
-  // GK at 6v6 is optional in the national laws and SAY East does not say which it uses.
   U7: cell({
     playersOnField: 6, gk: true, periods: 4, periodMinutes: 10, halvesMinutes: 20, ballSize: 3,
-    verified: false, source: SOURCES.sayEast,
-    note: "Passers are 6v6. Goalkeeper use is unverified, so GK defaults on. Quarters default; halves are 2×20.",
+    verified: true, source: "Jared Calhoun, SAY East U8 coach, 2026-09-30",
+    note: "Passers are 6v6 with a goalkeeper. Quarters default; halves are 2×20.",
   }),
   U8: cell({
     playersOnField: 6, gk: true, periods: 4, periodMinutes: 10, halvesMinutes: 20, ballSize: 3,
-    verified: false, source: SOURCES.sayEast,
-    note: "Passers are 6v6. Goalkeeper use is unverified, so GK defaults on. Quarters default; halves are 2×20.",
+    verified: true, source: "Jared Calhoun, SAY East U8 coach, 2026-09-30",
+    note: "Passers are 6v6 with a goalkeeper. Quarters default; halves are 2×20.",
   }),
   U9: cell({
     playersOnField: 8, gk: true, periods: 4, periodMinutes: 12, halvesMinutes: 24, ballSize: 4,
@@ -345,6 +344,15 @@ export function periodAbbrev(periodType) {
   return "Q";
 }
 
+/** Guide clock line. Quarters are the default; a halves alternate is named when the table has one. */
+export function sayClockText(rule) {
+  const noun = periodNoun(rule.periodType, rule.periods);
+  const total = rule.periods * rule.periodMinutes;
+  const main = `${rule.periods} x ${rule.periodMinutes} min ${noun} (${total} min total)`;
+  if (rule.halvesMinutes) return `${main}. Halves are 2 x ${rule.halvesMinutes}`;
+  return main;
+}
+
 export function periodNoun(periodType, count = 2) {
   const one = count === 1;
   if (periodType === "halves") return one ? "half" : "halves";
@@ -502,7 +510,8 @@ export function resolveSetup({ league, format, settings } = {}) {
 /**
  * Rules tab. A saved team with no organization is SAY East here.
  * The team's own age shows that team's format, goalkeeper, and clock.
- * Other ages show the org table.
+ * Other ages show the org table. When the saved clock is not the table clock,
+ * both numbers are named.
  */
 export function rulesTabView(setup, viewAge) {
   const say = setup?.orgId === "say-east" || setup?.legacy === true;
@@ -510,17 +519,38 @@ export function rulesTabView(setup, viewAge) {
   const age = viewAge || setup?.age;
   const preview = tableRule(orgForTable, age, setup?.saySeason);
   const same = !!setup && age === setup.age;
+  const team = {
+    playersOnField: same ? setup.playersOnField : preview.playersOnField,
+    gk: same ? !!setup.gk : !!preview.gk,
+    periods: same ? setup.periods : preview.periods,
+    periodMinutes: same ? setup.periodMinutes : preview.periodMinutes,
+    ballSize: same && setup.ballSize ? setup.ballSize : preview.ballSize,
+  };
+  const league = {
+    playersOnField: preview.playersOnField,
+    gk: !!preview.gk,
+    periods: preview.periods,
+    periodMinutes: preview.periodMinutes,
+    halvesMinutes: preview.halvesMinutes || null,
+    ballSize: preview.ballSize,
+  };
+  const differs = same && (
+    team.periods !== league.periods || team.periodMinutes !== league.periodMinutes
+  );
+  const standardName = say ? "SAY East" : (setup?.orgLabel || "League");
+  const halves = league.halvesMinutes ? ` (halves 2 × ${league.halvesMinutes})` : "";
   return {
     say,
     orgId: orgForTable,
     preview,
-    badges: {
-      playersOnField: same ? setup.playersOnField : preview.playersOnField,
-      gk: same ? !!setup.gk : !!preview.gk,
-      periods: same ? setup.periods : preview.periods,
-      periodMinutes: same ? setup.periodMinutes : preview.periodMinutes,
-      ballSize: same && setup.ballSize ? setup.ballSize : preview.ballSize,
-    },
+    differs,
+    team,
+    league,
+    badges: team,
+    clock: differs ? {
+      team: `Your team: ${team.periods} × ${team.periodMinutes}`,
+      standard: `${standardName} standard: ${league.periods} × ${league.periodMinutes}${halves}`,
+    } : null,
   };
 }
 
