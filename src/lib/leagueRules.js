@@ -158,12 +158,12 @@ const SAY_EAST = {
   }),
   U7: cell({
     playersOnField: 6, gk: true, periods: 4, periodMinutes: 10, halvesMinutes: 20, ballSize: 3,
-    verified: true, source: "Jared Calhoun, SAY East U8 coach, 2026-09-30",
+    verified: true, source: "Confirmed by a SAY East U8 coach, 2026",
     note: "Passers are 6v6 with a goalkeeper. Quarters default; halves are 2×20.",
   }),
   U8: cell({
     playersOnField: 6, gk: true, periods: 4, periodMinutes: 10, halvesMinutes: 20, ballSize: 3,
-    verified: true, source: "Jared Calhoun, SAY East U8 coach, 2026-09-30",
+    verified: true, source: "Confirmed by a SAY East U8 coach, 2026",
     note: "Passers are 6v6 with a goalkeeper. Quarters default; halves are 2×20.",
   }),
   U9: cell({

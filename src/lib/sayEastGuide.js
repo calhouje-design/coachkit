@@ -136,7 +136,7 @@ export const SAY_EAST_DIVISIONS = {
       { icon:"", text:"Unlimited substitutions (with referee permission)" },
       { icon:"", text:"Yellow & red cards apply" },
       { icon:"", text:"Size 4 ball" },
-      { icon:"", text:"7v7 small-sided field: 55-65 x 35-45 yards" },
+      { icon:"", text:"8v8 small-sided field: 55-65 x 35-45 yards" },
     ],
     unknownRules: [
       "SAY East uses 8v8 format - this is larger than the national 7v7 standard",

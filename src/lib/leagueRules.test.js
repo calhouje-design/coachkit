@@ -55,7 +55,7 @@ test("SAY East keeps Cincinnati sizes and flags the unverified cells", () => {
     assert.equal(row.gk, true);
     assert.equal(row.periodMinutes, 10);
     assert.equal(row.verified, true);
-    assert.equal(row.source, "Jared Calhoun, SAY East U8 coach, 2026-09-30");
+    assert.equal(row.source, "Confirmed by a SAY East U8 coach, 2026");
   }
   assert.equal(tableRule("say-east", "U9").playersOnField, 8);
   assert.equal(tableRule("say-east", "U9").gk, true);
