@@ -1854,12 +1854,33 @@ test("a live first period keeps the half sub, its credit, and the formation over
   assert.equal(segmentAt(kept.segments, "inn", 1), "entered");
   assert.deepEqual(kept.credit, credit);
   assert.deepEqual(kept.overrides, overrides);
-  const rebuilt = { newbie: { 1: "entered", 2: "left" } };
-  const restored = preservePeriodMarks(rebuilt, kept.segments, 1);
+  const later = { out: { 1: "left", 2: "entered" }, inn: { 1: "entered" } };
+  const carriedLater = replanCarryForward({
+    resetClock: false,
+    fromQuarter: 1,
+    segments: later,
+    credit,
+    overrides,
+  });
+  assert.equal(segmentAt(carriedLater.segments, "out", 1), "left");
+  assert.equal(segmentAt(carriedLater.segments, "out", 2), null);
+  const lineup = {
+    starters: [{ pos: "CF", player: { id: "inn" } }, { pos: "CM", player: { id: "newbie" } }],
+    bench: [{ id: "out" }],
+  };
+  const rebuilt = { newbie: { 1: "left", 2: "left" } };
+  const restored = preservePeriodMarks(rebuilt, kept.segments, 1, lineup);
   assert.equal(segmentAt(restored, "out", 1), "left");
   assert.equal(segmentAt(restored, "inn", 1), "entered");
   assert.equal(segmentAt(restored, "newbie", 1), null);
   assert.equal(segmentAt(restored, "newbie", 2), "left");
+  const contradicted = {
+    starters: [{ pos: "CF", player: { id: "out" } }],
+    bench: [{ id: "inn" }],
+  };
+  const dropped = preservePeriodMarks(rebuilt, kept.segments, 1, contradicted);
+  assert.equal(segmentAt(dropped, "out", 1), null);
+  assert.equal(segmentAt(dropped, "inn", 1), null);
   const wiped = replanCarryForward({
     resetClock: true,
     fromQuarter: 1,
@@ -1868,6 +1889,126 @@ test("a live first period keeps the half sub, its credit, and the formation over
     overrides,
   });
   assert.deepEqual(wiped, { segments: {}, credit: {}, overrides: {} });
+});
+
+function quarterMarksDisagree(segments, lineup, quarter) {
+  const onField = new Set((lineup?.starters || []).map(slot => slot.player?.id).filter(Boolean));
+  return Object.entries(segments || {}).some(([playerId, row]) => {
+    const kind = row?.[quarter] ?? row?.[String(quarter)];
+    if (kind === "entered") return !onField.has(playerId);
+    if (kind === "left") return onField.has(playerId);
+    return false;
+  });
+}
+
+test("a live first-period sub replan stores marks that match the new lineup", () => {
+  const slots = ["GK", "CD", "CM", "CF"];
+  const players = variedRoster(8);
+  const base = scheduleHalfRotation(players, slots, { minHalves: 2, totalQuarters: 2, seed: 3 });
+  const gk = goalkeeperId(base.lineups[1]);
+  const entered = base.lineups[1].starters.map(slot => slot.player.id).find(id => id !== gk);
+  const left = base.lineups[1].bench[0].id;
+  const marks = { [entered]: { 1: "entered" }, [left]: { 1: "left" } };
+  let sawDifferent = false;
+  for (let seed = 1; seed <= 24; seed++) {
+    let cursor = seed;
+    const chosen = firstDifferentPlan({
+      currentLineups: base.lineups,
+      currentPlan: { lineups: base.lineups, segments: base.segments },
+      fromQuarter: 1,
+      attempts: 6,
+      nextSeed: () => cursor++,
+      lockGoalkeeperId: gk,
+      fairPlay: (result) => {
+        const stored = preservePeriodMarks(result.segments, marks, 1, result.lineups[1]);
+        return sheetMeetsMinimum(players, result.lineups, stored, { minHalves: 2, totalQuarters: 2 });
+      },
+      plan: (planSeed) => scheduleHalfRotation(players, slots, {
+        minHalves: 2,
+        totalQuarters: 2,
+        fromQuarter: 1,
+        lockedSegments: marks,
+        seed: planSeed,
+        lockGoalkeeperId: gk,
+      }),
+    });
+    if (chosen.unchanged) continue;
+    sawDifferent = true;
+    const stored = preservePeriodMarks(chosen.plan.segments, marks, 1, chosen.lineups[1]);
+    assert.equal(chosen.lineups[1].starters.some(slot => slot.player?.id === entered), true, `seed ${seed}`);
+    assert.equal(chosen.lineups[1].bench.some(player => player.id === left), true, `seed ${seed}`);
+    assert.equal(goalkeeperId(chosen.lineups[1]), gk);
+    assert.equal(segmentAt(stored, gk, 1), null);
+    [1, 2].forEach(q => {
+      assert.equal(chosen.lineups[q].starters.every(slot => slot.player?.id), true);
+      assert.equal(quarterMarksDisagree(stored, chosen.lineups[q], q), false, `seed ${seed} Q${q}`);
+    });
+    assert.equal(
+      chosen.meetsMinimum,
+      sheetMeetsMinimum(players, chosen.lineups, stored, { minHalves: 2, totalQuarters: 2 }),
+    );
+  }
+  assert.equal(sawDifferent, true);
+
+  const configs = [
+    { count: 8, slots: ["GK", "CD", "CM", "CF"], total: 2, minHalves: 2 },
+    { count: 10, slots: ["GK", "LD", "RD", "LM", "RM", "CF"], total: 4, minHalves: 4 },
+    { count: 7, slots: ["GK", "LD", "RD", "CF"], total: 3, minHalves: 2 },
+  ];
+  configs.forEach(cfg => {
+    const roster = variedRoster(cfg.count);
+    for (let seed = 1; seed <= 15; seed++) {
+      const planned = scheduleHalfRotation(roster, cfg.slots, {
+        minHalves: cfg.minHalves,
+        totalQuarters: cfg.total,
+        seed,
+      });
+      const q1 = {};
+      Object.entries(planned.segments || {}).forEach(([playerId, row]) => {
+        if (row[1]) q1[playerId] = { 1: row[1] };
+      });
+      const gkId = goalkeeperId(planned.lineups[1]);
+      const again = scheduleHalfRotation(roster, cfg.slots, {
+        minHalves: cfg.minHalves,
+        totalQuarters: cfg.total,
+        fromQuarter: 1,
+        lockedSegments: q1,
+        seed: seed + 100,
+        lockGoalkeeperId: gkId,
+      });
+      let stored = again.segments;
+      for (let q = 1; q <= cfg.total; q++) stored = preservePeriodMarks(stored, q1, q, again.lineups[q]);
+      for (let q = 1; q <= cfg.total; q++) {
+        assert.equal(again.lineups[q].starters.every(slot => slot.player?.id), true, `${cfg.count} ${seed} Q${q}`);
+        assert.equal(quarterMarksDisagree(stored, again.lineups[q], q), false, `${cfg.count} ${seed} Q${q}`);
+      }
+      assert.equal(goalkeeperId(again.lineups[1]), gkId);
+    }
+  });
+});
+
+test("rotation fills a scarce position with the player who lists it", () => {
+  const sheet = {
+    lineups: {
+      1: {
+        starters: [
+          { pos: "GK", player: { id: "gk", positions: ["GK"] } },
+          { pos: "LD", player: { id: "vers", positions: ["LD", "CF"] } },
+          { pos: "CF", player: { id: "only", positions: ["LD"] } },
+        ],
+        bench: [],
+      },
+    },
+    segments: {},
+  };
+  const rotated = rotatePlanSheet(sheet, { step: 1, fromQuarter: 1, lockGoalkeeperId: "gk" });
+  const at = (pos) => rotated.lineups[1].starters.find(slot => slot.pos === pos)?.player;
+  assert.equal(at("GK").id, "gk");
+  assert.equal(at("CF").id, "vers");
+  assert.equal(at("LD").id, "only");
+  rotated.lineups[1].starters.forEach(slot => {
+    assert.equal(slot.player.positions.includes(slot.pos), true);
+  });
 });
 
 test("replan of a live first period pins the goalkeeper and keeps the clock", () => {

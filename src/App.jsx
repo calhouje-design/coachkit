@@ -1499,6 +1499,15 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
       totalQuarters,
       credit: creditForPlan,
     });
+    const savedSubSegments = (result) => {
+      const lineups = result?.lineups;
+      let segments = result?.segments;
+      if (decision.resetClock || fromQ !== 1 || !lineups) return segments;
+      for (let q = fromQ; q <= totalQuarters; q++) {
+        segments = preservePeriodMarks(segments, subSegments, q, lineups[q]);
+      }
+      return segments;
+    };
     if (subMode) {
       const chosen = firstDifferentPlan({
         currentLineups: lineupsByQuarter,
@@ -1506,7 +1515,7 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
         fromQuarter: fromQ,
         recentKeys: recentPlanKeys.current,
         lockGoalkeeperId: liveGk,
-        fairPlay: (result) => meets(result?.lineups, result?.segments),
+        fairPlay: (result) => meets(result?.lineups, savedSubSegments(result)),
         plan: (seed) => scheduleHalfRotation(players, planSlots, {
           minHalves,
           fromQuarter: fromQ,
@@ -1525,9 +1534,7 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
       }
       const planned = chosen.plan;
       rememberSheet(planned.lineups);
-      const storedHalfSegments = !decision.resetClock && fromQ === 1
-        ? preservePeriodMarks(planned.segments, subSegments, fromQ)
-        : planned.segments;
+      const storedHalfSegments = savedSubSegments(planned);
       setSubSegments(storedHalfSegments);
       notePlanResult(planned.lineups, players, creditForPlan, storedHalfSegments);
       if (!decision.resetClock && fromQ === quarter && running) {

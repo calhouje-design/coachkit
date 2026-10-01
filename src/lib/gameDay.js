@@ -813,12 +813,48 @@ function rotateQuarterAssignments(lineup, step, { pinGk, segments, quarter }) {
   if (!pool.length) return lineup;
   const shift = step % pool.length;
   const ordered = pool.slice(shift).concat(pool.slice(0, shift));
-  const draft = assignHalfSlots(ordered, slotNames, locked);
-  const placed = new Set(draft.map(slot => slot.player?.id).filter(Boolean));
-  const filled = fillOpenField(draft, onField.filter(player => !placed.has(player.id)));
-  const ids = filled.starters.map(slot => slot.player?.id).filter(Boolean);
-  if (filled.starters.some(slot => !slot.player) || new Set(ids).size !== ids.length) return lineup;
-  return { starters: filled.starters, bench: [...(lineup.bench || [])] };
+  const starters = assignPreferListed(ordered, slotNames, locked);
+  const ids = starters.map(slot => slot.player?.id).filter(Boolean);
+  if (starters.some(slot => !slot.player) || new Set(ids).size !== ids.length) return lineup;
+  return { starters, bench: [...(lineup.bench || [])] };
+}
+
+/** Listed players take the scarce slots first. An open slot is filled only after that. */
+function assignPreferListed(pool, slotNames, lockedGk = []) {
+  const starters = slotNames.map(pos => ({ pos, player: null }));
+  const used = new Set();
+  let gkCursor = 0;
+  starters.forEach(slot => {
+    if (!isGkPosition(slot.pos) || !lockedGk[gkCursor]) return;
+    slot.player = lockedGk[gkCursor];
+    used.add(slot.player.id);
+    gkCursor += 1;
+  });
+  const lists = (player, pos) => (player?.positions || []).includes(pos);
+  const remaining = () => (pool || []).filter(player => player && !used.has(player.id));
+  let guard = 0;
+  while (guard < 20) {
+    guard += 1;
+    const open = starters.filter(slot => !slot.player);
+    if (!open.length) break;
+    const ranked = open
+      .map(slot => ({ slot, candidates: remaining().filter(player => lists(player, slot.pos)) }))
+      .sort((a, b) => a.candidates.length - b.candidates.length);
+    const next = ranked.find(item => item.candidates.length > 0);
+    if (!next) break;
+    const player = [...next.candidates].sort((a, b) => {
+      const choices = (candidate) => open.filter(slot => lists(candidate, slot.pos)).length;
+      return choices(a) - choices(b);
+    })[0];
+    next.slot.player = player;
+    used.add(player.id);
+  }
+  const leftover = remaining();
+  starters.forEach(slot => {
+    if (slot.player || !leftover.length) return;
+    slot.player = leftover.shift();
+  });
+  return starters;
 }
 
 /**
@@ -836,28 +872,78 @@ export function replanCarryForward({
   if (resetClock) return { segments: {}, credit: {}, overrides: {} };
   const start = Math.max(1, Number(fromQuarter) || 1);
   return {
-    segments: start <= 1 ? (segments || {}) : clearSubSegmentsFrom(segments, start),
+    segments: start <= 1 ? marksForQuarter(segments, 1) : clearSubSegmentsFrom(segments, start),
     credit: credit || {},
     overrides: overrides || {},
   };
 }
 
-/** Put the live period's existing half marks back on top of a rebuilt sheet. */
-export function preservePeriodMarks(nextSegments, previousSegments, quarter) {
+function halfMarkIds(segments, quarter) {
+  const ids = new Set();
   const q = Number(quarter);
-  const next = { ...(nextSegments || {}) };
+  Object.entries(segments || {}).forEach(([playerId, row]) => {
+    const kind = row?.[q] ?? row?.[String(q)];
+    if (kind === "entered" || kind === "left") ids.add(playerId);
+  });
+  return ids;
+}
+
+/** Half marks that already happened, or null when they cannot share the period with the keeper. */
+function feasibleHalfLocks(segments, quarter, active, slotCount, keepers) {
+  const q = Number(quarter);
+  const activeIds = new Set((active || []).map(player => player.id));
+  const keeperIds = new Set((keepers || []).map(player => player.id));
+  const entered = [];
+  const left = [];
+  Object.entries(segments || {}).forEach(([playerId, row]) => {
+    if (!activeIds.has(playerId)) return;
+    const kind = row?.[q] ?? row?.[String(q)];
+    if (kind === "entered") entered.push(playerId);
+    else if (kind === "left") left.push(playerId);
+  });
+  if (!entered.length && !left.length) return null;
+  const overlap = entered.some(id => left.includes(id) || keeperIds.has(id))
+    || left.some(id => keeperIds.has(id));
+  if (overlap) return null;
+  if (entered.length + keeperIds.size > slotCount) return null;
+  if (left.length + keeperIds.size > slotCount) return null;
+  return { entered, left };
+}
+
+function marksForQuarter(segments, quarter) {
+  const q = Number(quarter);
+  const next = {};
   if (!q) return next;
-  const kept = new Set();
-  Object.entries(previousSegments || {}).forEach(([playerId, row]) => {
+  Object.entries(segments || {}).forEach(([playerId, row]) => {
     const kind = row?.[q] ?? row?.[String(q)];
     if (kind == null) return;
-    kept.add(playerId);
+    next[playerId] = { [q]: kind };
+  });
+  return next;
+}
+
+/**
+ * Keep a previous half mark only when the lineup agrees with it.
+ * "entered" is on the field. "left" is on the bench. Anything else keeps the planner's mark.
+ * A stored mark that still disagrees is dropped.
+ */
+export function preservePeriodMarks(nextSegments, previousSegments, quarter, lineup) {
+  const q = Number(quarter);
+  const next = { ...(nextSegments || {}) };
+  if (!q || !lineup?.starters) return next;
+  const onField = new Set((lineup.starters || []).map(slot => slot.player?.id).filter(Boolean));
+  const agrees = (playerId, kind) => (
+    kind === "entered" ? onField.has(playerId) : kind === "left" ? !onField.has(playerId) : false
+  );
+  Object.entries(previousSegments || {}).forEach(([playerId, row]) => {
+    const kind = row?.[q] ?? row?.[String(q)];
+    if (!agrees(playerId, kind)) return;
     next[playerId] = { ...(next[playerId] || {}), [q]: kind };
   });
   Object.keys(next).forEach(playerId => {
-    if (kept.has(playerId)) return;
     const row = { ...(next[playerId] || {}) };
-    if (row[q] == null && row[String(q)] == null) return;
+    const kind = row[q] ?? row[String(q)];
+    if (kind == null || agrees(playerId, kind)) return;
     delete row[q];
     delete row[String(q)];
     if (Object.keys(row).length) next[playerId] = row;
@@ -1002,21 +1088,35 @@ export function scheduleHalfRotation(players, slots, {
   const gkByQuarter = {};
   remainingQs.forEach(q => {
     let keepers = pickQuarterGoalkeepers(active, slotNames, remaining, satLast, seed);
-    if (q === fromQuarter && lockedKeeper) {
-      const count = slotNames.filter(isGkPosition).length;
-      keepers = count
-        ? [lockedKeeper, ...keepers.filter(player => player.id !== lockedKeeper.id)].slice(0, count)
-        : [];
+    if (q === fromQuarter) {
+      const marked = halfMarkIds(lockedSegments, q);
+      const pinIsMarked = lockedKeeper && marked.has(lockedKeeper.id);
+      if (marked.size && !pinIsMarked) {
+        const gkPool = active.filter(player => !marked.has(player.id));
+        if (gkPool.length) keepers = pickQuarterGoalkeepers(gkPool, slotNames, remaining, satLast, seed);
+      }
+      if (lockedKeeper) {
+        const count = slotNames.filter(isGkPosition).length;
+        keepers = count
+          ? [lockedKeeper, ...keepers.filter(player => player.id !== lockedKeeper.id)].slice(0, count)
+          : [];
+      }
     }
     gkByQuarter[q] = keepers;
+    const halfLocks = q === fromQuarter ? feasibleHalfLocks(lockedSegments, q, active, slotNames.length, keepers) : null;
     [1, 2].forEach(half => {
       const chosen = keepers.map(player => player.id);
+      const banned = new Set(!halfLocks ? [] : half === 1 ? halfLocks.entered : halfLocks.left);
+      const must = !halfLocks ? [] : half === 1 ? halfLocks.left : halfLocks.entered;
+      must.forEach(id => {
+        if (!chosen.includes(id) && !banned.has(id) && chosen.length < slotNames.length) chosen.push(id);
+      });
       chosen.forEach(id => {
-        if (remaining[id] > 0) remaining[id] -= 1;
+        if (keepers.some(player => player.id === id) && remaining[id] > 0) remaining[id] -= 1;
       });
       const pushWhile = (pred, owesTime) => {
         active
-          .filter(player => !chosen.includes(player.id) && pred(player) && (!owesTime || remaining[player.id] > 0))
+          .filter(player => !chosen.includes(player.id) && !banned.has(player.id) && pred(player) && (!owesTime || remaining[player.id] > 0))
           .sort(byNeed)
           .forEach(player => {
             if (chosen.length < slotNames.length) chosen.push(player.id);
