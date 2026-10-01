@@ -46,6 +46,7 @@ import {
   clockAfterPeriodSwitch,
   periodHasRealEvent,
   noteRealPeriodEvent,
+  realEventsAfterUnavailable,
   realEventPlayerIds,
   realEventsThrough,
   replanCarryForward,
@@ -1669,10 +1670,14 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
     });
     setPlayers(updatedPlayers);
     dropQueued(playerId);
-    setRealPeriodEvents(prev => {
-      const kept = autoRegen ? realEventsThrough(prev, quarter) : prev;
-      return noteRealPeriodEvent(kept, quarter, [playerId]);
-    });
+    if (live) {
+      setRealPeriodEvents(prev => realEventsAfterUnavailable(prev, {
+        quarter,
+        live: true,
+        playerId,
+        autoRegen,
+      }));
+    }
     if (mode === "injury") setInjuryAlerts(prev => [...prev, { player, quarter, id: Date.now() }]);
     const hasSheet = Object.keys(lineupsByQuarter).length > 0;
     if (!hasSheet) return;

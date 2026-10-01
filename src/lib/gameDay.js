@@ -1086,6 +1086,22 @@ export function realEventsThrough(flags, throughQuarter) {
   return next;
 }
 
+/**
+ * An Out or injury is a real event only when that period is already live:
+ * the clock has run, or a real swap is already on the period.
+ * An Out at 0:00 is not. The regen writes planned marks, and those must not lock a replan.
+ */
+export function realEventsAfterUnavailable(flags, {
+  quarter,
+  live = false,
+  playerId,
+  autoRegen = true,
+} = {}) {
+  if (!live) return normalizeRealPeriodEvents(flags);
+  const kept = autoRegen ? realEventsThrough(flags, quarter) : normalizeRealPeriodEvents(flags);
+  return noteRealPeriodEvent(kept, quarter, [playerId]);
+}
+
 function pickQuarterGoalkeepers(active, slotNames, remaining, satLast, seed = null) {
   const count = slotNames.filter(isGkPosition).length;
   if (!count) return [];
