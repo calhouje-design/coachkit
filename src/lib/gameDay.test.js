@@ -47,6 +47,9 @@ import {
   liveReplanGoalkeeper,
   liveReplanClockDecision,
   segmentsAfterFullReplan,
+  rotatePlanSheet,
+  replanCarryForward,
+  preservePeriodMarks,
   gameLogFromStrategy,
   upsertGameLog,
   playerQuarterPresence,
@@ -1742,6 +1745,129 @@ test("a full-mode replan clears replanned half marks and keeps earlier ones", ()
   assert.equal(segmentAt(next, "gk", 1), "entered");
   assert.equal(segmentAt(next, "gk", 2), null);
   assert.deepEqual(segmentsAfterFullReplan(segments, 1, lineup, 1), {});
+});
+
+test("five players on a five-a-side field still change sheets across ten presses", () => {
+  const positions = [
+    ["GK", "LD", "CD", "RD"],
+    ["GK", "LM", "CM", "RM"],
+    ["GK", "CF", "LF", "RF", "ST"],
+    ["LD", "LM"],
+    ["RD", "RM"],
+  ];
+  const players = positions.map((list, index) => ({
+    id: `p${index}`,
+    name: `P${index}`,
+    positions: list,
+    ratings: { a: 1 + ((index * 7) % 5), b: 1 + ((index * 3) % 5), c: 1 + (index % 4) },
+    injured: false,
+    out: false,
+  }));
+  const slots = ["GK", "LD", "RD", "CM", "CF"];
+  const rate = (player) => {
+    const vals = Object.values(player.ratings).filter(value => value > 0);
+    return vals.reduce((sum, value) => sum + value, 0) / vals.length;
+  };
+  let lineups = {};
+  let segments = {};
+  let recent = [];
+  const remember = (sheet) => {
+    if (!sheet || !Object.keys(sheet).some(key => sheet[key]?.starters)) return;
+    const key = planHistoryKey(sheet, 1);
+    recent = [key, ...recent.filter(item => item !== key)].slice(0, 5);
+  };
+  let seedCtr = 1;
+  const nextSeed = () => (seedCtr = (seedCtr * 1103515245 + 12345) >>> 0);
+  for (let press = 1; press <= 10; press++) {
+    remember(lineups);
+    const chosen = firstDifferentPlan({
+      currentLineups: lineups,
+      currentPlan: { lineups, segments },
+      fromQuarter: 1,
+      recentKeys: recent,
+      nextSeed,
+      fairPlay: (result) => sheetMeetsMinimum(players, result.lineups, result.segments, {
+        minHalves: 4,
+        totalQuarters: 4,
+      }),
+      plan: (seed) => scheduleHalfRotation(players, slots, {
+        minHalves: 4,
+        totalQuarters: 4,
+        rate,
+        seed,
+      }),
+    });
+    assert.equal(chosen.unchanged, false, `press ${press} reported only one lineup`);
+    assert.equal(plansDiffer(lineups, chosen.lineups, 1), true, `press ${press} repeated the sheet`);
+    [1, 2, 3, 4].forEach(q => {
+      const starters = chosen.lineups[q].starters;
+      assert.equal(starters.every(slot => slot.player?.id), true, `press ${press} Q${q}`);
+      const gk = goalkeeperId(chosen.lineups[q]);
+      assert.ok(gk);
+      assert.equal(segmentAt(chosen.segments, gk, q), null);
+    });
+    assert.equal(sheetMeetsMinimum(players, chosen.lineups, chosen.segments, {
+      minHalves: 4,
+      totalQuarters: 4,
+    }), true);
+    lineups = chosen.lineups;
+    segments = chosen.segments;
+    remember(lineups);
+  }
+});
+
+test("a pinned goalkeeper stays in goal when the sheet is rotated", () => {
+  const players = [
+    ["GK", "LD", "CD", "RD"],
+    ["GK", "LM", "CM", "RM"],
+    ["GK", "CF", "LF", "RF", "ST"],
+    ["LD", "LM"],
+    ["RD", "RM"],
+  ].map((list, index) => ({
+    id: `p${index}`,
+    name: `P${index}`,
+    positions: list,
+    injured: false,
+    out: false,
+  }));
+  const slots = ["GK", "LD", "RD", "CM", "CF"];
+  const base = scheduleHalfRotation(players, slots, { minHalves: 4, totalQuarters: 4, seed: 1 });
+  const gk = goalkeeperId(base.lineups[1]);
+  const rotated = rotatePlanSheet(base, { step: 1, fromQuarter: 1, lockGoalkeeperId: gk });
+  assert.equal(goalkeeperId(rotated.lineups[1]), gk);
+  assert.equal(plansDiffer(base.lineups, rotated.lineups, 2), true);
+  assert.equal(segmentAt(rotated.segments, gk, 1), null);
+});
+
+test("a live first period keeps the half sub, its credit, and the formation override", () => {
+  const segments = { out: { 1: "left" }, inn: { 1: "entered" } };
+  const credit = { out: [1] };
+  const overrides = { 1: "3-1" };
+  const kept = replanCarryForward({
+    resetClock: false,
+    fromQuarter: 1,
+    segments,
+    credit,
+    overrides,
+  });
+  assert.equal(segmentAt(kept.segments, "out", 1), "left");
+  assert.equal(segmentAt(kept.segments, "inn", 1), "entered");
+  assert.deepEqual(kept.credit, credit);
+  assert.deepEqual(kept.overrides, overrides);
+  const rebuilt = { newbie: { 1: "entered", 2: "left" } };
+  const restored = preservePeriodMarks(rebuilt, kept.segments, 1);
+  assert.equal(segmentAt(restored, "out", 1), "left");
+  assert.equal(segmentAt(restored, "inn", 1), "entered");
+  assert.equal(segmentAt(restored, "newbie", 1), null);
+  assert.equal(segmentAt(restored, "newbie", 2), "left");
+  const wiped = replanCarryForward({
+    resetClock: true,
+    fromQuarter: 1,
+    segments,
+    credit,
+    overrides,
+  });
+  assert.deepEqual(wiped, { segments: {}, credit: {}, overrides: {} });
 });
 
 test("replan of a live first period pins the goalkeeper and keeps the clock", () => {

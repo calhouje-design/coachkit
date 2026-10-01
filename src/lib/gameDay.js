@@ -677,7 +677,9 @@ function wrapPlan(result, { unchanged, meetsMinimum }) {
  * Call `plan(seed)` up to N times. Recent sheets are a preference, not a ban.
  * Order: a different fair sheet that is not recent; any different sheet that is
  * not recent; a different recent sheet (fair first, then the least recently
- * shown); the current sheet only when nothing else differs. Non-finite attempt
+ * shown). If every seed matches the sheet on screen, rotate the goalkeeper and
+ * the on-field positions and use that same order. The current sheet is kept
+ * only when that rotation also finds nothing different. Non-finite attempt
  * counts cannot spin.
  */
 export function firstDifferentPlan({
@@ -690,6 +692,7 @@ export function firstDifferentPlan({
   fairPlay = null,
   recentKeys = null,
   historyFromQuarter = 1,
+  lockGoalkeeperId = null,
 } = {}) {
   if (typeof plan !== "function") throw new TypeError("firstDifferentPlan requires plan");
   const tries = resolveAttempts(attempts);
@@ -706,22 +709,36 @@ export function firstDifferentPlan({
   const keepOlder = (slot, result, rank) => (
     !slot || rank > slot.rank ? { result, rank } : slot
   );
-  for (let i = 0; i < tries; i++) {
-    const seed = Number(draw()) >>> 0;
-    const result = plan(seed);
-    if (!first) first = result;
+  const consider = (result) => {
     const lineups = lineupsOf(result);
-    if (!plansDiffer(currentLineups, lineups, fromQuarter)) continue;
+    if (!plansDiffer(currentLineups, lineups, fromQuarter)) return null;
     const key = planHistoryKey(lineups, historyFromQuarter);
     const meets = judge ? !!judge(result) : true;
     const rank = recentRank.has(key) ? recentRank.get(key) : -1;
     if (rank < 0) {
       if (meets) return wrapPlan(result, { unchanged: false, meetsMinimum: true });
       if (!freshShort) freshShort = result;
-      continue;
+      return null;
     }
     if (meets) recentFair = keepOlder(recentFair, result, rank);
     else recentShort = keepOlder(recentShort, result, rank);
+    return null;
+  };
+  for (let i = 0; i < tries; i++) {
+    const seed = Number(draw()) >>> 0;
+    const result = plan(seed);
+    if (!first) first = result;
+    const picked = consider(result);
+    if (picked) return picked;
+  }
+  if (!freshShort && !recentFair && !recentShort) {
+    const base = currentPlan || (currentLineups ? { lineups: currentLineups } : null);
+    if (base) {
+      for (let step = 1; step <= ROTATION_STEPS; step++) {
+        const picked = consider(rotatePlanSheet(base, { step, fromQuarter, lockGoalkeeperId }));
+        if (picked) return picked;
+      }
+    }
   }
   if (freshShort) return wrapPlan(freshShort, { unchanged: false, meetsMinimum: false });
   if (recentFair) return wrapPlan(recentFair.result, { unchanged: false, meetsMinimum: true });
@@ -731,6 +748,122 @@ export function firstDifferentPlan({
     return wrapPlan({ lineups: currentLineups }, { unchanged: true, meetsMinimum: null });
   }
   return wrapPlan(first, { unchanged: false, meetsMinimum: judge && first ? judge(first) : null });
+}
+
+const ROTATION_STEPS = 12;
+
+function listedKeeper(player) {
+  return !!(player && (player.positions || []).some(isGkPosition));
+}
+
+/**
+ * A different legal sheet when seeds all land on the current one.
+ * Players already on the field trade the gloves and, when their positions allow,
+ * the other slots. Playing time, the bench, played periods, and a pinned keeper stay.
+ */
+export function rotatePlanSheet(result, {
+  step = 1,
+  fromQuarter = 1,
+  lockGoalkeeperId = null,
+} = {}) {
+  const source = lineupsOf(result) || {};
+  const segments = result?.segments;
+  const lineups = { ...source };
+  const amount = Math.max(1, Number(step) || 1);
+  const start = Math.max(1, Number(fromQuarter) || 1);
+  Object.keys(source).forEach(key => {
+    const quarter = Number(key);
+    if (!Number.isInteger(quarter) || quarter < start) return;
+    const pin = lockGoalkeeperId
+      && quarter === start
+      && goalkeeperId(source[quarter]) === lockGoalkeeperId;
+    lineups[quarter] = rotateQuarterAssignments(source[quarter], amount + (quarter - start), {
+      pinGk: !!pin,
+      segments,
+      quarter,
+    });
+  });
+  if (result && typeof result === "object" && Object.prototype.hasOwnProperty.call(result, "lineups")) {
+    return { ...result, lineups };
+  }
+  return lineups;
+}
+
+function rotateQuarterAssignments(lineup, step, { pinGk, segments, quarter }) {
+  if (!lineup?.starters?.length) return lineup;
+  const onField = lineup.starters.map(slot => slot.player).filter(Boolean);
+  if (onField.length < 2) return lineup;
+  const slotNames = lineup.starters.map(slot => slot.pos);
+  const currentGk = lineup.starters.find(slot => isGkPosition(slot.pos))?.player || null;
+  const fullPeriod = (player) => player && segmentAt(segments, player.id, quarter) == null;
+  let locked = [];
+  let pool = onField;
+  if (currentGk && (pinGk || !fullPeriod(currentGk))) {
+    locked = [currentGk];
+    pool = onField.filter(player => player.id !== currentGk.id);
+  } else if (currentGk) {
+    const gkPool = onField.filter(player => fullPeriod(player) && listedKeeper(player));
+    if (gkPool.length >= 2) {
+      const at = Math.max(0, gkPool.findIndex(player => player.id === currentGk.id));
+      const next = gkPool[(at + step) % gkPool.length];
+      locked = [next];
+      pool = onField.filter(player => player.id !== next.id);
+    }
+  }
+  if (!pool.length) return lineup;
+  const shift = step % pool.length;
+  const ordered = pool.slice(shift).concat(pool.slice(0, shift));
+  const draft = assignHalfSlots(ordered, slotNames, locked);
+  const placed = new Set(draft.map(slot => slot.player?.id).filter(Boolean));
+  const filled = fillOpenField(draft, onField.filter(player => !placed.has(player.id)));
+  const ids = filled.starters.map(slot => slot.player?.id).filter(Boolean);
+  if (filled.starters.some(slot => !slot.player) || new Set(ids).size !== ids.length) return lineup;
+  return { starters: filled.starters, bench: [...(lineup.bench || [])] };
+}
+
+/**
+ * What a replan keeps. Resetting the clock clears credit, half marks, and
+ * formation overrides. A live first period keeps all three, including that
+ * period's half-sub marks.
+ */
+export function replanCarryForward({
+  resetClock = false,
+  fromQuarter = 1,
+  segments = {},
+  credit = {},
+  overrides = {},
+} = {}) {
+  if (resetClock) return { segments: {}, credit: {}, overrides: {} };
+  const start = Math.max(1, Number(fromQuarter) || 1);
+  return {
+    segments: start <= 1 ? (segments || {}) : clearSubSegmentsFrom(segments, start),
+    credit: credit || {},
+    overrides: overrides || {},
+  };
+}
+
+/** Put the live period's existing half marks back on top of a rebuilt sheet. */
+export function preservePeriodMarks(nextSegments, previousSegments, quarter) {
+  const q = Number(quarter);
+  const next = { ...(nextSegments || {}) };
+  if (!q) return next;
+  const kept = new Set();
+  Object.entries(previousSegments || {}).forEach(([playerId, row]) => {
+    const kind = row?.[q] ?? row?.[String(q)];
+    if (kind == null) return;
+    kept.add(playerId);
+    next[playerId] = { ...(next[playerId] || {}), [q]: kind };
+  });
+  Object.keys(next).forEach(playerId => {
+    if (kept.has(playerId)) return;
+    const row = { ...(next[playerId] || {}) };
+    if (row[q] == null && row[String(q)] == null) return;
+    delete row[q];
+    delete row[String(q)];
+    if (Object.keys(row).length) next[playerId] = row;
+    else delete next[playerId];
+  });
+  return next;
 }
 
 /**
@@ -803,10 +936,13 @@ export function scheduleHalfRotation(players, slots, {
     });
   });
 
-  const quota = {};
+  const minimum = {};
+  const bonus = {};
   active.forEach(p => {
-    quota[p.id] = Math.min(halfCap, Math.max(0, minHalves - (already[p.id] || 0)));
+    minimum[p.id] = Math.min(halfCap, Math.max(0, minHalves - (already[p.id] || 0)));
+    bonus[p.id] = 0;
   });
+  const quota = { ...minimum };
   let free = Math.max(0, totalHalfSlots - Object.values(quota).reduce((sum, n) => sum + n, 0));
   const rated = [...active].sort((a, b) => rate(b) - rate(a) || tieCompare(seed, a.id, b.id));
   let guard = 0;
@@ -815,6 +951,7 @@ export function scheduleHalfRotation(players, slots, {
     for (const p of rated) {
       if (quota[p.id] < halfCap) {
         quota[p.id] += 1;
+        bonus[p.id] += 1;
         free -= 1;
         gave = true;
         if (free === 0) break;
@@ -832,10 +969,16 @@ export function scheduleHalfRotation(players, slots, {
     let short = Math.max(0, reserve - (quota[lockedKeeper.id] || 0));
     const donors = active
       .filter(player => player.id !== lockedKeeper.id)
-      .sort((a, b) => (quota[b.id] || 0) - (quota[a.id] || 0) || tieCompare(seed, a.id, b.id));
+      .sort((a, b) => (
+        (bonus[b.id] || 0) - (bonus[a.id] || 0)
+        || (quota[b.id] || 0) - (quota[a.id] || 0)
+        || tieCompare(seed, a.id, b.id)
+      ));
     while (short > 0) {
-      const donor = donors.find(player => (quota[player.id] || 0) > 0);
+      const donor = donors.find(player => (bonus[player.id] || 0) > 0)
+        || donors.find(player => (quota[player.id] || 0) > 0);
       if (!donor) break;
+      if (bonus[donor.id] > 0) bonus[donor.id] -= 1;
       quota[donor.id] -= 1;
       quota[lockedKeeper.id] = (quota[lockedKeeper.id] || 0) + 1;
       short -= 1;

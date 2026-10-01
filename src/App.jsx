@@ -22,7 +22,6 @@ import {
   noteSubSegment,
   segmentAt,
   markQuarterSub,
-  clearSubSegmentsFrom,
   playCellKind,
   planBenchRotation,
   applyBenchRotation,
@@ -45,6 +44,8 @@ import {
   liveReplanGoalkeeper,
   liveReplanClockDecision,
   segmentsAfterFullReplan,
+  replanCarryForward,
+  preservePeriodMarks,
   gameLogFromStrategy,
   upsertGameLog,
   playerQuarterPresence,
@@ -1465,11 +1466,18 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
         if (lineupsByQuarter[q]) locked[q] = lineupsByQuarter[q];
       }
     }
-    const nextSegments = fromQ === 1 ? {} : clearSubSegmentsFrom(subSegments, fromQ);
+    const carried = replanCarryForward({
+      resetClock: decision.resetClock,
+      fromQuarter: fromQ,
+      segments: subSegments,
+      credit: appearanceCredit,
+      overrides: normalizeFormationOverrides(normalizeGameDay(gameDay).formationOverrides),
+    });
+    const nextSegments = carried.segments;
     const formatSlots = planSlotsNow;
     const templates = shapesFor(format, !!setup?.gk, formatSlots);
-    const overridesNow = fromQ === 1 ? {} : normalizeFormationOverrides(normalizeGameDay(gameDay).formationOverrides);
-    if (fromQ === 1) {
+    const overridesNow = carried.overrides;
+    if (decision.resetClock) {
       setGameDay(prev => ({ ...normalizeGameDay(prev), formationOverrides: {} }));
     }
     const slotsForName = (name) => {
@@ -1481,7 +1489,7 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
     for (let q = fromQ; q <= totalQuarters; q++) {
       slotsByQuarter[q] = slotsForName(formationNameForPeriod(activeFormation, overridesNow, q, totalQuarters));
     }
-    const creditForPlan = fromQ === 1 ? {} : appearanceCredit;
+    const creditForPlan = carried.credit;
     const liveGk = decision.pinGoalkeeper
       ? liveReplanGoalkeeper(lineupsByQuarter, fromQ, true)
       : null;
@@ -1494,9 +1502,10 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
     if (subMode) {
       const chosen = firstDifferentPlan({
         currentLineups: lineupsByQuarter,
-        currentPlan: { lineups: lineupsByQuarter, segments: subSegments },
+        currentPlan: { lineups: lineupsByQuarter, segments: decision.resetClock ? {} : subSegments },
         fromQuarter: fromQ,
         recentKeys: recentPlanKeys.current,
+        lockGoalkeeperId: liveGk,
         fairPlay: (result) => meets(result?.lineups, result?.segments),
         plan: (seed) => scheduleHalfRotation(players, planSlots, {
           minHalves,
@@ -1516,8 +1525,11 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
       }
       const planned = chosen.plan;
       rememberSheet(planned.lineups);
-      setSubSegments(planned.segments);
-      notePlanResult(planned.lineups, players, creditForPlan, planned.segments);
+      const storedHalfSegments = !decision.resetClock && fromQ === 1
+        ? preservePeriodMarks(planned.segments, subSegments, fromQ)
+        : planned.segments;
+      setSubSegments(storedHalfSegments);
+      notePlanResult(planned.lineups, players, creditForPlan, storedHalfSegments);
       if (!decision.resetClock && fromQ === quarter && running) {
         const next = {};
         (planned.lineups[quarter]?.starters || []).forEach(slot => {
@@ -1533,6 +1545,7 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
       currentPlan: lineupsByQuarter,
       fromQuarter: fromQ,
       recentKeys: recentPlanKeys.current,
+      lockGoalkeeperId: liveGk,
       fairPlay: (result) => meets(result, nextSegments),
       plan: (seed) => scheduleWholeGame({
         players,
@@ -1556,7 +1569,9 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
     }
     const result = chosen.plan;
     rememberSheet(result);
-    const storedSegments = segmentsAfterFullReplan(subSegments, fromQ, result?.[fromQ], fromQ);
+    const storedSegments = decision.resetClock
+      ? {}
+      : segmentsAfterFullReplan(subSegments, fromQ <= 1 ? fromQ + 1 : fromQ, result?.[fromQ], fromQ);
     setSubSegments(storedSegments);
     notePlanResult(result, players, creditForPlan, storedSegments);
     if (!decision.resetClock && fromQ === quarter && running) {
