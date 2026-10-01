@@ -2772,7 +2772,7 @@ test("an out at 0:00 does not lock the period, so a replan still changes it", ()
     autoRegen: true,
   });
   assert.equal(periodHasRealEvent(halfEvents, 2), false);
-  assert.deepEqual(halfEvents, { 3: ["later"] });
+  assert.deepEqual(halfEvents, {});
   const halfOutPlayers = players.map(player => player.id === halfBench ? { ...player, out: true } : player);
   const halfOut = planAvailability({
     autoRegen: true,
@@ -3011,4 +3011,95 @@ test("a live out while the clock is running keeps that period live", () => {
     });
     assert.equal(goalkeeperId(planned.lineups[2]), gk, `seed ${seed}`);
   }
+});
+
+test("an out in an unstarted period clears a later real swap before replan", () => {
+  const slots = ["GK", "LD", "RD", "LM", "RM", "CF"];
+  const players = variedRoster(8);
+  const plan = scheduleHalfRotation(players, slots, { minHalves: 4, totalQuarters: 4, seed: 1 });
+  const q3Gk = goalkeeperId(plan.lineups[3]);
+  const swapOut = plan.lineups[3].starters.find(slot => slot.player?.id && slot.player.id !== q3Gk).player;
+  const swapIn = plan.lineups[3].bench[0];
+  const lineups = { ...plan.lineups, 3: swapFieldBench(plan.lineups[3], swapOut.id, swapIn.id) };
+  const segments = markQuarterSub(plan.segments, 3, swapOut.id, swapIn.id);
+  const q1Id = goalkeeperId(plan.lineups[1]);
+  const events = noteRealPeriodEvent(noteRealPeriodEvent({}, 1, [q1Id]), 3, [swapOut.id, swapIn.id]);
+  assert.equal(periodHasRealEvent(events, 3), true);
+
+  const back = clockAfterPeriodSwitch({}, 3, 2, 0, {});
+  assert.equal(back.clockSec, 0);
+  const benchId = lineups[2].bench.find(player => player.id !== swapIn.id && player.id !== swapOut.id).id;
+  const live = back.clockSec > 0 || periodHasRealEvent(events, 2);
+  assert.equal(live, false);
+  const kept = realEventsAfterUnavailable(events, {
+    quarter: 2,
+    live,
+    playerId: benchId,
+    autoRegen: false,
+  });
+  assert.deepEqual(realEventPlayerIds(kept, 3), [swapOut.id, swapIn.id]);
+  const trimmed = realEventsAfterUnavailable(events, {
+    quarter: 2,
+    live,
+    playerId: benchId,
+    autoRegen: true,
+  });
+  assert.equal(periodHasRealEvent(trimmed, 2), false);
+  assert.equal(periodHasRealEvent(trimmed, 3), false);
+  assert.deepEqual(realEventPlayerIds(trimmed, 1), [q1Id]);
+
+  const outPlayers = players.map(player => player.id === benchId ? { ...player, out: true } : player);
+  const rebuilt = planAvailability({
+    autoRegen: true,
+    kind: "absent",
+    players: outPlayers,
+    slots,
+    lineups,
+    segments,
+    absentId: benchId,
+    quarter: 2,
+    minHalves: 4,
+    subMode: true,
+    totalQuarters: 4,
+    livePeriod: live,
+  });
+  const decision = liveReplanClockDecision({
+    liveReplan: true,
+    fromQuarter: 3,
+    quarter: 3,
+    clockStarted: false,
+    realEvent: periodHasRealEvent(trimmed, 3),
+  });
+  assert.deepEqual(decision, { resetClock: false, pinGoalkeeper: false });
+  const carried = replanCarryForward({
+    resetClock: decision.resetClock,
+    fromQuarter: 3,
+    livePeriod: decision.pinGoalkeeper,
+    segments: rebuilt.segments,
+    credit: {},
+    overrides: {},
+  });
+  assert.equal(segmentAt(carried.segments, swapOut.id, 3), null);
+  assert.equal(segmentAt(carried.segments, swapIn.id, 3), null);
+  let swapReleased = false;
+  for (let seed = 1; seed <= 24; seed++) {
+    const planned = scheduleHalfRotation(outPlayers, slots, {
+      minHalves: 4,
+      totalQuarters: 4,
+      fromQuarter: 3,
+      lockedLineups: { 1: rebuilt.lineups[1], 2: rebuilt.lineups[2] },
+      lockedSegments: carried.segments,
+      seed,
+    });
+    const stored = segmentsSavedForSubReplan(planned.segments, segments, planned.lineups, {
+      fromQuarter: 3,
+      resetClock: false,
+      livePeriod: decision.pinGoalkeeper,
+    });
+    assert.equal(planned.lineups[1], rebuilt.lineups[1]);
+    assert.equal(planned.lineups[2], rebuilt.lineups[2]);
+    assert.deepEqual(quarterMarkMap(stored, 3), quarterMarkMap(planned.segments, 3), `seed ${seed}`);
+    if (!planned.lineups[3].starters.some(slot => slot.player?.id === swapIn.id)) swapReleased = true;
+  }
+  assert.equal(swapReleased, true);
 });

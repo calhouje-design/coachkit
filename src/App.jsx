@@ -1670,16 +1670,16 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
     });
     setPlayers(updatedPlayers);
     dropQueued(playerId);
-    if (live) {
+    if (mode === "injury") setInjuryAlerts(prev => [...prev, { player, quarter, id: Date.now() }]);
+    const hasSheet = Object.keys(lineupsByQuarter).length > 0;
+    if (live || (autoRegen && hasSheet)) {
       setRealPeriodEvents(prev => realEventsAfterUnavailable(prev, {
         quarter,
-        live: true,
+        live,
         playerId,
         autoRegen,
       }));
     }
-    if (mode === "injury") setInjuryAlerts(prev => [...prev, { player, quarter, id: Date.now() }]);
-    const hasSheet = Object.keys(lineupsByQuarter).length > 0;
     if (!hasSheet) return;
     let credit = appearanceCredit;
     if (wasOn) credit = setAppearanceCreditFor(credit, playerId, quarter, true);

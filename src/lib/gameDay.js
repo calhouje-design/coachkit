@@ -1089,7 +1089,8 @@ export function realEventsThrough(flags, throughQuarter) {
 /**
  * An Out or injury is a real event only when that period is already live:
  * the clock has run, or a real swap is already on the period.
- * An Out at 0:00 is not. The regen writes planned marks, and those must not lock a replan.
+ * An Out at 0:00 is not. When auto-regen rebuilds this period and the ones after it,
+ * those later real-event flags are dropped. The current period is not flagged.
  */
 export function realEventsAfterUnavailable(flags, {
   quarter,
@@ -1097,8 +1098,8 @@ export function realEventsAfterUnavailable(flags, {
   playerId,
   autoRegen = true,
 } = {}) {
-  if (!live) return normalizeRealPeriodEvents(flags);
   const kept = autoRegen ? realEventsThrough(flags, quarter) : normalizeRealPeriodEvents(flags);
+  if (!live) return kept;
   return noteRealPeriodEvent(kept, quarter, [playerId]);
 }
 
