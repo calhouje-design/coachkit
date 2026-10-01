@@ -183,7 +183,7 @@ function paintQuarterPanel(ctx, x, y, w, h, panel) {
   ctx.font = "900 11px Arial, sans-serif";
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
-  ctx.fillText(`Q${panel.quarter}`, pitchX + 24, pitchY + 15);
+  ctx.fillText(panel.label || `Q${panel.quarter}`, pitchX + 24, pitchY + 15);
 
   if (!starters.length) {
     ctx.fillStyle = "rgba(255,255,255,0.4)";
@@ -229,15 +229,19 @@ function paintQuarterPanel(ctx, x, y, w, h, panel) {
   ctx.restore();
 }
 
-/** Sheet 1. Four field panels, each with its own bench and dotted sub lines. */
+/** Sheet 1. One field panel per period (2, 3, or 4), each with its bench and sub lines. */
 export function paintFieldSheet(canvas, { field, league, opponent, homeScore, awayScore } = {}) {
   if (!canvas) return;
-  const W = 740;
+  const panels = (field?.quarters || []).length ? field.quarters : [{ quarter: 1, label: "Q1", starters: [], bench: [], pairs: [] }];
+  const count = panels.length;
+  const cols = count === 3 ? 3 : count === 1 ? 1 : 2;
+  const rows = Math.ceil(count / cols);
   const pad = 10;
   const header = 86;
-  const cellW = (W - pad * 3) / 2;
-  const cellH = 430;
-  const H = header + pad + cellH * 2 + 28;
+  const cellW = count === 3 ? 250 : 360;
+  const cellH = count === 3 ? 360 : 430;
+  const W = pad + cols * cellW + pad * cols;
+  const H = header + pad + rows * cellH + (rows - 1) * pad + 28;
   const ctx = fitCanvas(canvas, W, H);
   ctx.fillStyle = "#0c1409";
   ctx.fillRect(0, 0, W, H);
@@ -261,7 +265,9 @@ export function paintFieldSheet(canvas, { field, league, opponent, homeScore, aw
   ctx.fillText("CoachKit", 50, 22);
   ctx.fillStyle = "#a8a39e";
   ctx.font = "11px Arial, sans-serif";
-  ctx.fillText("Field, bench, and sub lines · Q1–Q4", 50, 40);
+  const firstLabel = panels[0]?.label || `Q${panels[0]?.quarter || 1}`;
+  const lastLabel = panels[panels.length - 1]?.label || firstLabel;
+  ctx.fillText(`Field, bench, and sub lines · ${firstLabel}–${lastLabel}`, 50, 40);
   ctx.textAlign = "right";
   ctx.fillStyle = "#e8a020";
   ctx.font = "bold 12px Arial, sans-serif";
@@ -278,18 +284,16 @@ export function paintFieldSheet(canvas, { field, league, opponent, homeScore, aw
   ctx.font = "bold 13px Arial, sans-serif";
   ctx.fillText(`US  ${homeScore ?? 0}  :  ${awayScore ?? 0}  ${(opponent || "THEM").toUpperCase()}`, W / 2, 68);
 
-  const byQuarter = {};
-  (field?.quarters || []).forEach(panel => {
-    byQuarter[panel.quarter] = panel;
-  });
-  [[1, 0, 0], [2, 1, 0], [3, 0, 1], [4, 1, 1]].forEach(([quarter, col, row]) => {
+  panels.forEach((panel, index) => {
+    const col = index % cols;
+    const row = Math.floor(index / cols);
     paintQuarterPanel(
       ctx,
       pad + col * (cellW + pad),
       header + pad + row * (cellH + pad),
       cellW,
       cellH,
-      byQuarter[quarter] || { quarter, starters: [], bench: [], pairs: [] },
+      panel,
     );
   });
 
@@ -370,7 +374,8 @@ export function paintPlayTimeSheet(canvas, { playTime, league } = {}) {
   ctx.fillText("Play time", 50, 20);
   ctx.fillStyle = "#a8a39e";
   ctx.font = "11px Arial, sans-serif";
-  ctx.fillText(`${league || "CoachKit"} · how many quarters each player is on`, 50, 38);
+  const periodWord = playTime?.periodAbbrev === "H" ? "halves" : playTime?.periodAbbrev === "P" ? "periods" : "quarters";
+  ctx.fillText(`${league || "CoachKit"} · how many ${periodWord} each player is on`, 50, 38);
   ctx.textAlign = "right";
   ctx.fillText(new Date().toLocaleDateString(), W - 14, 28);
 
@@ -389,17 +394,19 @@ export function paintPlayTimeSheet(canvas, { playTime, league } = {}) {
   ctx.fillText("Bench", 226, legendY + 9);
   ctx.fillStyle = "#7a7570";
   ctx.textAlign = "right";
-  ctx.fillText(`Min ${playTime?.minQ ?? 2} of 4`, W - 14, legendY + 9);
+  const periodCount = playTime?.periods || playTime?.rows?.[0]?.cells?.length || 4;
+  const abbrev = playTime?.periodAbbrev || "Q";
+  ctx.fillText(`Min ${playTime?.minQ ?? 2} of ${periodCount}`, W - 14, legendY + 9);
 
   const cellsX = 168;
-  const cellW = 52;
+  const cellW = periodCount > 4 ? 40 : 52;
   const gap = 6;
   ctx.font = "bold 9px Arial, sans-serif";
   ctx.fillStyle = "#7a7570";
   ctx.textAlign = "center";
-  [1, 2, 3, 4].forEach((quarter, index) => {
-    ctx.fillText(`Q${quarter}`, cellsX + index * (cellW + gap) + cellW / 2, 96);
-  });
+  for (let index = 0; index < periodCount; index++) {
+    ctx.fillText(`${abbrev}${index + 1}`, cellsX + index * (cellW + gap) + cellW / 2, 96);
+  }
 
   if (!rows.length) {
     ctx.fillStyle = "#7a7570";
@@ -430,7 +437,7 @@ export function paintPlayTimeSheet(canvas, { playTime, league } = {}) {
     ctx.textAlign = "right";
     ctx.textBaseline = "middle";
     ctx.fillText(row.label || "", W - 16, y + 16);
-    const barW = 4 * cellW + 3 * gap;
+    const barW = periodCount * cellW + Math.max(0, periodCount - 1) * gap;
     ctx.fillStyle = "rgba(255,255,255,0.08)";
     roundRect(ctx, cellsX, y + 34, barW, 4, 2);
     ctx.fill();
