@@ -859,8 +859,8 @@ function assignPreferListed(pool, slotNames, lockedGk = []) {
 
 /**
  * What a replan keeps. Resetting the clock clears credit, half marks, and
- * formation overrides. A live first period keeps all three, including that
- * period's half-sub marks.
+ * formation overrides. Otherwise the live period's half-sub marks stay, along
+ * with marks from periods already played. Later periods are planned again.
  */
 export function replanCarryForward({
   resetClock = false,
@@ -872,7 +872,7 @@ export function replanCarryForward({
   if (resetClock) return { segments: {}, credit: {}, overrides: {} };
   const start = Math.max(1, Number(fromQuarter) || 1);
   return {
-    segments: start <= 1 ? marksForQuarter(segments, 1) : clearSubSegmentsFrom(segments, start),
+    segments: marksThroughQuarter(segments, start),
     credit: credit || {},
     overrides: overrides || {},
   };
@@ -910,14 +910,17 @@ function feasibleHalfLocks(segments, quarter, active, slotCount, keepers) {
   return { entered, left };
 }
 
-function marksForQuarter(segments, quarter) {
-  const q = Number(quarter);
+function marksThroughQuarter(segments, throughQuarter) {
+  const end = Number(throughQuarter);
   const next = {};
-  if (!q) return next;
+  if (!end) return next;
   Object.entries(segments || {}).forEach(([playerId, row]) => {
-    const kind = row?.[q] ?? row?.[String(q)];
-    if (kind == null) return;
-    next[playerId] = { [q]: kind };
+    const kept = {};
+    Object.entries(row || {}).forEach(([quarter, kind]) => {
+      const q = Number(quarter);
+      if (q >= 1 && q <= end) kept[q] = kind;
+    });
+    if (Object.keys(kept).length) next[playerId] = kept;
   });
   return next;
 }
@@ -953,7 +956,7 @@ export function preservePeriodMarks(nextSegments, previousSegments, quarter, lin
 }
 
 /**
- * A live first period keeps half marks that already happened.
+ * The live period keeps half marks that already happened, when the lineup agrees.
  * Later periods keep the planner's marks. Those were planned, not played.
  */
 export function segmentsSavedForSubReplan(plannedSegments, previousSegments, lineups, {
@@ -961,8 +964,9 @@ export function segmentsSavedForSubReplan(plannedSegments, previousSegments, lin
   resetClock = false,
 } = {}) {
   const fromQ = Number(fromQuarter) || 1;
-  if (resetClock || fromQ !== 1 || !lineups?.[1]?.starters) return plannedSegments;
-  return preservePeriodMarks(plannedSegments, previousSegments, 1, lineups[1]);
+  const lineup = lineups?.[fromQ] || lineups?.[String(fromQ)];
+  if (resetClock || !lineup?.starters) return plannedSegments;
+  return preservePeriodMarks(plannedSegments, previousSegments, fromQ, lineup);
 }
 
 /**
@@ -1213,6 +1217,23 @@ export function segmentsAfterFullReplan(segments, fromQuarter, lineup, quarter) 
   const cleared = start <= 1 ? {} : clearSubSegmentsFrom(segments, start);
   if (!lineup || quarter == null) return cleared;
   return creditPinnedGoalkeeper(cleared, lineup, quarter);
+}
+
+/**
+ * Full-mode save: drop planned half marks from the live period on, then put
+ * that period's real swaps back only where the lineup still agrees.
+ * Later periods stay on the cleared plan. The goalkeeper keeps a full period.
+ */
+export function segmentsSavedForFullReplan(previousSegments, lineups, {
+  fromQuarter = 1,
+  resetClock = false,
+} = {}) {
+  if (resetClock) return {};
+  const fromQ = Math.max(1, Number(fromQuarter) || 1);
+  const lineup = lineups?.[fromQ] || lineups?.[String(fromQ)];
+  const cleared = segmentsAfterFullReplan(previousSegments, fromQ, lineup, fromQ);
+  const kept = preservePeriodMarks(cleared, previousSegments, fromQ, lineup);
+  return creditPinnedGoalkeeper(kept, lineup, fromQ);
 }
 
 function pinNamedGoalkeeper(lineup, gkId, roster) {
@@ -1575,6 +1596,7 @@ function overallRating(player) {
  * Full-period plan. Every eligible player is targeted for the minimum before
  * extra periods go to higher-rated players. `lockGoalkeeperId` keeps that
  * keeper in goal for the first period being rebuilt (a live replan).
+ * Half marks already stored for that period keep those players on or off the field.
  */
 export function scheduleWholeGame({
   players = [],
@@ -1621,7 +1643,26 @@ export function scheduleWholeGame({
   });
   const remainingQs = [];
   for (let q = fromQuarter; q <= totalQ; q++) remainingQs.push(q);
-  const periodsLeft = remainingQs.length;
+  const keeperPlayer = lockGoalkeeperId
+    ? active.find(player => player.id === lockGoalkeeperId) || null
+    : null;
+  const liveChoice = livePeriodChoice(
+    active,
+    slotsPerQ,
+    feasibleHalfLocks(segments, fromQuarter, active, slotsPerQ, keeperPlayer ? [keeperPlayer] : []),
+    keeperPlayer,
+    shuffle,
+  );
+  if (liveChoice) {
+    const onField = new Set(liveChoice.chosen);
+    active.forEach(player => {
+      const id = player.id;
+      const halves = liveChoice.left.has(id) || liveChoice.entered.has(id) ? 1 : onField.has(id) ? 2 : 0;
+      alreadyHalves[id] = (alreadyHalves[id] || 0) + halves;
+    });
+  }
+  const planQs = liveChoice ? remainingQs.filter(q => q !== fromQuarter) : remainingQs;
+  const periodsLeft = planQs.length;
   const totalSlots = slotsPerQ * periodsLeft;
   const quota = {};
   active.forEach(player => {
@@ -1653,13 +1694,15 @@ export function scheduleWholeGame({
   const qRemaining = { ...qCount };
   const prevQ0 = fromQuarter - 1;
   let satLast = new Set(
-    prevQ0 >= 1 && lockedLineups[prevQ0]
-      ? active
-        .filter(player => !(lockedLineups[prevQ0].starters || []).some(slot => slot.player?.id === player.id))
-        .map(player => player.id)
-      : []
+    liveChoice
+      ? active.filter(player => !liveChoice.chosen.includes(player.id)).map(player => player.id)
+      : prevQ0 >= 1 && lockedLineups[prevQ0]
+        ? active
+          .filter(player => !(lockedLineups[prevQ0].starters || []).some(slot => slot.player?.id === player.id))
+          .map(player => player.id)
+        : []
   );
-  remainingQs.forEach(q => {
+  planQs.forEach(q => {
     const chosen = [];
     const eligible = () => active.filter(player => qRemaining[player.id] > 0 && !chosen.includes(player.id));
     eligible()
@@ -1687,9 +1730,10 @@ export function scheduleWholeGame({
       if (slot.player) lastPos[slot.player.id] = slot.pos;
     });
   }
-  remainingQs.forEach(q => {
-    const startersPool = active.filter(player => quarterId[player.id].has(q));
-    const bench = active.filter(player => !quarterId[player.id].has(q));
+  const assignQuarter = (q, starterIds) => {
+    const idSet = new Set(starterIds);
+    const startersPool = active.filter(player => idSet.has(player.id));
+    const bench = active.filter(player => !idSet.has(player.id));
     const chosenPos = {};
     startersPool.forEach(player => {
       const allowed = player.positions?.length ? player.positions : ["CM"];
@@ -1711,10 +1755,44 @@ export function scheduleWholeGame({
       }
       return { pos: slotPos, player: pick || null };
     });
-    result[q] = { starters, bench };
-    if (lockGoalkeeperId && q === fromQuarter) {
+    return { starters, bench };
+  };
+  if (liveChoice) {
+    let lineup = assignQuarter(fromQuarter, liveChoice.chosen);
+    if (keeperPlayer) lineup = pinNamedGoalkeeper(lineup, keeperPlayer.id, players);
+    result[fromQuarter] = lineup;
+  }
+  planQs.forEach(q => {
+    const startersPool = active.filter(player => quarterId[player.id].has(q));
+    result[q] = assignQuarter(q, startersPool.map(player => player.id));
+    if (!liveChoice && lockGoalkeeperId && q === fromQuarter) {
       result[q] = pinNamedGoalkeeper(result[q], lockGoalkeeperId, players);
     }
   });
   return result;
+}
+
+function livePeriodChoice(activePlayers, slotCount, locks, keeper, shuffle) {
+  if (!locks || !slotCount) return null;
+  const left = new Set(locks.left);
+  const keeperId = keeper?.id || null;
+  if (keeperId && left.has(keeperId)) return null;
+  const entered = [];
+  locks.entered.forEach(id => {
+    if (id !== keeperId && !left.has(id) && !entered.includes(id)) entered.push(id);
+  });
+  const must = keeperId ? [keeperId] : [];
+  entered.forEach(id => {
+    if (!must.includes(id)) must.push(id);
+  });
+  if (must.length > slotCount) return null;
+  const available = (activePlayers || []).filter(player => player?.id && !left.has(player.id));
+  if (available.length < slotCount) return null;
+  const chosen = [...must];
+  shuffle(available.filter(player => !chosen.includes(player.id))).forEach(player => {
+    if (chosen.length < slotCount) chosen.push(player.id);
+  });
+  if (chosen.length < slotCount) return null;
+  if (chosen.some(id => left.has(id))) return null;
+  return { chosen, entered: new Set(entered), left };
 }

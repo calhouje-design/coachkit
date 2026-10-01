@@ -43,9 +43,9 @@ import {
   sheetMeetsMinimum,
   liveReplanGoalkeeper,
   liveReplanClockDecision,
-  segmentsAfterFullReplan,
   replanCarryForward,
   segmentsSavedForSubReplan,
+  segmentsSavedForFullReplan,
   gameLogFromStrategy,
   upsertGameLog,
   playerQuarterPresence,
@@ -1505,6 +1505,11 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
       result?.lineups,
       { fromQuarter: fromQ, resetClock: decision.resetClock },
     );
+    const savedFullSegments = (result) => segmentsSavedForFullReplan(
+      subSegments,
+      result,
+      { fromQuarter: fromQ, resetClock: decision.resetClock },
+    );
     if (subMode) {
       const chosen = firstDifferentPlan({
         currentLineups: lineupsByQuarter,
@@ -1550,7 +1555,7 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
       fromQuarter: fromQ,
       recentKeys: recentPlanKeys.current,
       lockGoalkeeperId: liveGk,
-      fairPlay: (result) => meets(result, nextSegments),
+      fairPlay: (result) => meets(result, savedFullSegments(result)),
       plan: (seed) => scheduleWholeGame({
         players,
         format,
@@ -1573,9 +1578,7 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
     }
     const result = chosen.plan;
     rememberSheet(result);
-    const storedSegments = decision.resetClock
-      ? {}
-      : segmentsAfterFullReplan(subSegments, fromQ <= 1 ? fromQ + 1 : fromQ, result?.[fromQ], fromQ);
+    const storedSegments = savedFullSegments(result);
     setSubSegments(storedSegments);
     notePlanResult(result, players, creditForPlan, storedSegments);
     if (!decision.resetClock && fromQ === quarter && running) {

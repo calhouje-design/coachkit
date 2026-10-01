@@ -51,6 +51,7 @@ import {
   replanCarryForward,
   preservePeriodMarks,
   segmentsSavedForSubReplan,
+  segmentsSavedForFullReplan,
   gameLogFromStrategy,
   upsertGameLog,
   playerQuarterPresence,
@@ -2066,10 +2067,11 @@ test("a live first-period replan leaves later periods on the new plan's marks", 
       resetClock: false,
     });
     assert.deepEqual(quarterMarkMap(stored, 2), quarterMarkMap(chosen.plan.segments, 2));
-    assert.equal(segmentsSavedForSubReplan(chosen.plan.segments, base.segments, chosen.lineups, {
+    const laterSave = segmentsSavedForSubReplan(chosen.plan.segments, base.segments, chosen.lineups, {
       fromQuarter: 2,
       resetClock: false,
-    }), chosen.plan.segments);
+    });
+    assert.deepEqual(quarterMarkMap(laterSave, 1), quarterMarkMap(chosen.plan.segments, 1));
     [1, 2].forEach(q => {
       const keeper = goalkeeperId(chosen.lineups[q]);
       assert.equal(segmentAt(stored, keeper, q), null, `Q${q} keeper`);
@@ -2087,6 +2089,203 @@ test("a live first-period replan leaves later periods on the new plan's marks", 
     );
   }
   assert.equal(saw, true);
+});
+
+test("a live full-period replan keeps the swap that already happened", () => {
+  const slots = ["GK", "LD", "RD", "LM", "RM", "CF"];
+  const players = variedRoster(8);
+  const base = scheduleWholeGame({
+    players,
+    format: "6v6",
+    slotOverride: slots,
+    totalPeriods: 4,
+    minFraction: 0.5,
+    seed: 1,
+  });
+  const gk = goalkeeperId(base[1]);
+  const outgoing = base[1].starters.find(slot => slot.player?.id && slot.player.id !== gk).player;
+  const incoming = base[1].bench[0];
+  const segments = markQuarterSub({}, 1, outgoing.id, incoming.id);
+  let credit = setAppearanceCreditFor({}, outgoing.id, 1, true);
+  credit = setAppearanceCreditFor(credit, incoming.id, 1, false);
+  const judge = (lineups, stored) => sheetMeetsMinimum(players, lineups, stored, {
+    minHalves: 4,
+    totalQuarters: 4,
+    credit,
+  });
+  const planFull = (seed) => scheduleWholeGame({
+    players,
+    format: "6v6",
+    slotOverride: slots,
+    totalPeriods: 4,
+    minFraction: 0.5,
+    fromQuarter: 1,
+    segments,
+    credit,
+    seed,
+    lockGoalkeeperId: gk,
+  });
+  let cursor = 2;
+  const chosen = firstDifferentPlan({
+    currentLineups: base,
+    currentPlan: base,
+    fromQuarter: 1,
+    lockGoalkeeperId: gk,
+    nextSeed: () => cursor++,
+    fairPlay: (result) => judge(result, segmentsSavedForFullReplan(segments, result, {
+      fromQuarter: 1,
+      resetClock: false,
+    })),
+    plan: planFull,
+  });
+  assert.equal(chosen.unchanged, false);
+  const stored = segmentsSavedForFullReplan(segments, chosen.lineups, { fromQuarter: 1, resetClock: false });
+  assert.equal(chosen.lineups[1].starters.some(slot => slot.player?.id === incoming.id), true);
+  assert.equal(chosen.lineups[1].bench.some(player => player.id === outgoing.id), true);
+  assert.equal(goalkeeperId(chosen.lineups[1]), gk);
+  assert.equal(segmentAt(stored, incoming.id, 1), "entered");
+  assert.equal(segmentAt(stored, outgoing.id, 1), "left");
+  assert.equal(quarterMarksDisagree(stored, chosen.lineups[1], 1), false);
+  [2, 3, 4].forEach(q => assert.deepEqual(quarterMarkMap(stored, q), {}));
+  [1, 2, 3, 4].forEach(q => {
+    assert.equal(chosen.lineups[q].starters.every(slot => slot.player?.id), true, `Q${q}`);
+    assert.equal(segmentAt(stored, goalkeeperId(chosen.lineups[q]), q), null, `Q${q} keeper`);
+  });
+  assert.equal(chosen.meetsMinimum, judge(chosen.lineups, stored));
+  for (let seed = 1; seed <= 24; seed++) {
+    const planned = planFull(seed);
+    assert.equal(planned[1].starters.some(slot => slot.player?.id === incoming.id), true, `seed ${seed}`);
+    assert.equal(planned[1].bench.some(player => player.id === outgoing.id), true, `seed ${seed}`);
+    assert.equal(goalkeeperId(planned[1]), gk, `seed ${seed}`);
+    const saved = segmentsSavedForFullReplan(segments, planned, { fromQuarter: 1, resetClock: false });
+    assert.equal(quarterMarksDisagree(saved, planned[1], 1), false, `seed ${seed}`);
+    assert.equal(segmentAt(saved, gk, 1), null, `seed ${seed}`);
+  }
+
+  const half = scheduleHalfRotation(players, slots, { minHalves: 4, totalQuarters: 4, seed: 1 });
+  const halfGk = goalkeeperId(half.lineups[1]);
+  const halfOut = half.lineups[1].starters.find(slot => slot.player?.id && slot.player.id !== halfGk).player;
+  const halfIn = half.lineups[1].bench[0];
+  const halfMarks = markQuarterSub(half.segments, 1, halfOut.id, halfIn.id);
+  const q1Only = {};
+  Object.entries(halfMarks).forEach(([playerId, row]) => {
+    if (row[1]) q1Only[playerId] = { 1: row[1] };
+  });
+  const halfAgain = scheduleHalfRotation(players, slots, {
+    minHalves: 4,
+    totalQuarters: 4,
+    fromQuarter: 1,
+    lockedSegments: q1Only,
+    seed: 4,
+    lockGoalkeeperId: halfGk,
+  });
+  const halfStored = segmentsSavedForSubReplan(halfAgain.segments, halfMarks, halfAgain.lineups, {
+    fromQuarter: 1,
+    resetClock: false,
+  });
+  assert.equal(halfAgain.lineups[1].starters.some(slot => slot.player?.id === halfIn.id), true);
+  assert.equal(halfAgain.lineups[1].bench.some(player => player.id === halfOut.id), true);
+  assert.equal(goalkeeperId(halfAgain.lineups[1]), halfGk);
+  assert.equal(segmentAt(halfStored, halfGk, 1), null);
+  assert.equal(quarterMarksDisagree(halfStored, halfAgain.lineups[1], 1), false);
+  assert.deepEqual(quarterMarkMap(halfStored, 2), quarterMarkMap(halfAgain.segments, 2));
+  let halfCursor = 9;
+  const halfChosen = firstDifferentPlan({
+    currentLineups: half.lineups,
+    currentPlan: half,
+    fromQuarter: 1,
+    lockGoalkeeperId: halfGk,
+    attempts: 8,
+    nextSeed: () => halfCursor++,
+    fairPlay: (result) => {
+      const judged = segmentsSavedForSubReplan(result.segments, halfMarks, result.lineups, {
+        fromQuarter: 1,
+        resetClock: false,
+      });
+      return sheetMeetsMinimum(players, result.lineups, judged, { minHalves: 4, totalQuarters: 4 });
+    },
+    plan: (seed) => scheduleHalfRotation(players, slots, {
+      minHalves: 4,
+      totalQuarters: 4,
+      fromQuarter: 1,
+      lockedSegments: q1Only,
+      seed,
+      lockGoalkeeperId: halfGk,
+    }),
+  });
+  const halfJudged = segmentsSavedForSubReplan(halfChosen.plan.segments, halfMarks, halfChosen.lineups, {
+    fromQuarter: 1,
+    resetClock: false,
+  });
+  assert.equal(
+    halfChosen.meetsMinimum,
+    sheetMeetsMinimum(players, halfChosen.lineups, halfJudged, { minHalves: 4, totalQuarters: 4 }),
+  );
+
+  const q2Out = half.lineups[2].starters.find(slot => slot.player?.id && slot.player.id !== goalkeeperId(half.lineups[2])).player;
+  const q2In = half.lineups[2].bench[0];
+  const q2Marks = markQuarterSub(half.segments, 2, q2Out.id, q2In.id);
+  const carried = replanCarryForward({
+    resetClock: false,
+    fromQuarter: 2,
+    segments: q2Marks,
+    credit: {},
+    overrides: {},
+  });
+  assert.equal(segmentAt(carried.segments, q2Out.id, 2), "left");
+  assert.equal(segmentAt(carried.segments, q2In.id, 2), "entered");
+  Object.keys(q2Marks).forEach(playerId => {
+    assert.equal(segmentAt(carried.segments, playerId, 3), null);
+    assert.equal(segmentAt(carried.segments, playerId, 4), null);
+  });
+  const q2Gk = goalkeeperId(half.lineups[2]);
+  const q2Half = scheduleHalfRotation(players, slots, {
+    minHalves: 4,
+    totalQuarters: 4,
+    fromQuarter: 2,
+    lockedLineups: { 1: half.lineups[1] },
+    lockedSegments: carried.segments,
+    seed: 5,
+    lockGoalkeeperId: q2Gk,
+  });
+  const q2Stored = segmentsSavedForSubReplan(q2Half.segments, q2Marks, q2Half.lineups, {
+    fromQuarter: 2,
+    resetClock: false,
+  });
+  assert.equal(q2Half.lineups[1], half.lineups[1]);
+  assert.equal(q2Half.lineups[2].starters.some(slot => slot.player?.id === q2In.id), true);
+  assert.equal(q2Half.lineups[2].bench.some(player => player.id === q2Out.id), true);
+  assert.equal(goalkeeperId(q2Half.lineups[2]), q2Gk);
+  assert.equal(segmentAt(q2Stored, q2Gk, 2), null);
+  assert.equal(quarterMarksDisagree(q2Stored, q2Half.lineups[2], 2), false);
+  assert.deepEqual(quarterMarkMap(q2Stored, 3), quarterMarkMap(q2Half.segments, 3));
+
+  const fullQ2Gk = goalkeeperId(base[2]);
+  const fullOut = base[2].starters.find(slot => slot.player?.id && slot.player.id !== fullQ2Gk).player;
+  const fullIn = base[2].bench[0];
+  const q2FullMarks = markQuarterSub({}, 2, fullOut.id, fullIn.id);
+  const q2Full = scheduleWholeGame({
+    players,
+    format: "6v6",
+    slotOverride: slots,
+    totalPeriods: 4,
+    minFraction: 0.5,
+    fromQuarter: 2,
+    lockedLineups: { 1: base[1] },
+    segments: q2FullMarks,
+    seed: 6,
+    lockGoalkeeperId: fullQ2Gk,
+  });
+  const q2FullStored = segmentsSavedForFullReplan(q2FullMarks, q2Full, { fromQuarter: 2, resetClock: false });
+  assert.equal(q2Full[1], base[1]);
+  assert.equal(q2Full[2].starters.some(slot => slot.player?.id === fullIn.id), true);
+  assert.equal(q2Full[2].bench.some(player => player.id === fullOut.id), true);
+  assert.equal(goalkeeperId(q2Full[2]), fullQ2Gk);
+  assert.equal(segmentAt(q2FullStored, fullIn.id, 2), "entered");
+  assert.equal(segmentAt(q2FullStored, fullOut.id, 2), "left");
+  assert.equal(quarterMarksDisagree(q2FullStored, q2Full[2], 2), false);
+  assert.equal(segmentAt(q2FullStored, fullQ2Gk, 2), null);
+  [3, 4].forEach(q => assert.deepEqual(quarterMarkMap(q2FullStored, q), {}));
 });
 
 test("rotation fills a scarce position with the player who lists it", () => {
