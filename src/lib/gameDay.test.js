@@ -1848,6 +1848,7 @@ test("a live first period keeps the half sub, its credit, and the formation over
   const kept = replanCarryForward({
     resetClock: false,
     fromQuarter: 1,
+    livePeriod: true,
     segments,
     credit,
     overrides,
@@ -1860,6 +1861,7 @@ test("a live first period keeps the half sub, its credit, and the formation over
   const carriedLater = replanCarryForward({
     resetClock: false,
     fromQuarter: 1,
+    livePeriod: true,
     segments: later,
     credit,
     overrides,
@@ -1998,6 +2000,7 @@ test("a live first-period sub replan stores marks that match the new lineup", ()
       const stored = segmentsSavedForSubReplan(again.segments, planned.segments, again.lineups, {
         fromQuarter: 1,
         resetClock: false,
+        livePeriod: true,
       });
       for (let q = 2; q <= cfg.total; q++) {
         assert.deepEqual(quarterMarkMap(stored, q), quarterMarkMap(again.segments, q), `${cfg.count} ${seed} Q${q}`);
@@ -2042,6 +2045,7 @@ test("a live first-period replan leaves later periods on the new plan's marks", 
         const judged = segmentsSavedForSubReplan(result.segments, base.segments, result.lineups, {
           fromQuarter: 1,
           resetClock: false,
+          livePeriod: true,
         });
         return sheetMeetsMinimum(players, result.lineups, judged, { minHalves: 2, totalQuarters: 2 });
       },
@@ -2065,6 +2069,7 @@ test("a live first-period replan leaves later periods on the new plan's marks", 
     const stored = segmentsSavedForSubReplan(chosen.plan.segments, base.segments, chosen.lineups, {
       fromQuarter: 1,
       resetClock: false,
+      livePeriod: true,
     });
     assert.deepEqual(quarterMarkMap(stored, 2), quarterMarkMap(chosen.plan.segments, 2));
     const laterSave = segmentsSavedForSubReplan(chosen.plan.segments, base.segments, chosen.lineups, {
@@ -2135,11 +2140,16 @@ test("a live full-period replan keeps the swap that already happened", () => {
     fairPlay: (result) => judge(result, segmentsSavedForFullReplan(segments, result, {
       fromQuarter: 1,
       resetClock: false,
+      livePeriod: true,
     })),
     plan: planFull,
   });
   assert.equal(chosen.unchanged, false);
-  const stored = segmentsSavedForFullReplan(segments, chosen.lineups, { fromQuarter: 1, resetClock: false });
+  const stored = segmentsSavedForFullReplan(segments, chosen.lineups, {
+    fromQuarter: 1,
+    resetClock: false,
+    livePeriod: true,
+  });
   assert.equal(chosen.lineups[1].starters.some(slot => slot.player?.id === incoming.id), true);
   assert.equal(chosen.lineups[1].bench.some(player => player.id === outgoing.id), true);
   assert.equal(goalkeeperId(chosen.lineups[1]), gk);
@@ -2157,7 +2167,11 @@ test("a live full-period replan keeps the swap that already happened", () => {
     assert.equal(planned[1].starters.some(slot => slot.player?.id === incoming.id), true, `seed ${seed}`);
     assert.equal(planned[1].bench.some(player => player.id === outgoing.id), true, `seed ${seed}`);
     assert.equal(goalkeeperId(planned[1]), gk, `seed ${seed}`);
-    const saved = segmentsSavedForFullReplan(segments, planned, { fromQuarter: 1, resetClock: false });
+    const saved = segmentsSavedForFullReplan(segments, planned, {
+      fromQuarter: 1,
+      resetClock: false,
+      livePeriod: true,
+    });
     assert.equal(quarterMarksDisagree(saved, planned[1], 1), false, `seed ${seed}`);
     assert.equal(segmentAt(saved, gk, 1), null, `seed ${seed}`);
   }
@@ -2182,6 +2196,7 @@ test("a live full-period replan keeps the swap that already happened", () => {
   const halfStored = segmentsSavedForSubReplan(halfAgain.segments, halfMarks, halfAgain.lineups, {
     fromQuarter: 1,
     resetClock: false,
+    livePeriod: true,
   });
   assert.equal(halfAgain.lineups[1].starters.some(slot => slot.player?.id === halfIn.id), true);
   assert.equal(halfAgain.lineups[1].bench.some(player => player.id === halfOut.id), true);
@@ -2201,6 +2216,7 @@ test("a live full-period replan keeps the swap that already happened", () => {
       const judged = segmentsSavedForSubReplan(result.segments, halfMarks, result.lineups, {
         fromQuarter: 1,
         resetClock: false,
+        livePeriod: true,
       });
       return sheetMeetsMinimum(players, result.lineups, judged, { minHalves: 4, totalQuarters: 4 });
     },
@@ -2216,6 +2232,7 @@ test("a live full-period replan keeps the swap that already happened", () => {
   const halfJudged = segmentsSavedForSubReplan(halfChosen.plan.segments, halfMarks, halfChosen.lineups, {
     fromQuarter: 1,
     resetClock: false,
+    livePeriod: true,
   });
   assert.equal(
     halfChosen.meetsMinimum,
@@ -2228,6 +2245,7 @@ test("a live full-period replan keeps the swap that already happened", () => {
   const carried = replanCarryForward({
     resetClock: false,
     fromQuarter: 2,
+    livePeriod: true,
     segments: q2Marks,
     credit: {},
     overrides: {},
@@ -2251,6 +2269,7 @@ test("a live full-period replan keeps the swap that already happened", () => {
   const q2Stored = segmentsSavedForSubReplan(q2Half.segments, q2Marks, q2Half.lineups, {
     fromQuarter: 2,
     resetClock: false,
+    livePeriod: true,
   });
   assert.equal(q2Half.lineups[1], half.lineups[1]);
   assert.equal(q2Half.lineups[2].starters.some(slot => slot.player?.id === q2In.id), true);
@@ -2276,7 +2295,11 @@ test("a live full-period replan keeps the swap that already happened", () => {
     seed: 6,
     lockGoalkeeperId: fullQ2Gk,
   });
-  const q2FullStored = segmentsSavedForFullReplan(q2FullMarks, q2Full, { fromQuarter: 2, resetClock: false });
+  const q2FullStored = segmentsSavedForFullReplan(q2FullMarks, q2Full, {
+    fromQuarter: 2,
+    resetClock: false,
+    livePeriod: true,
+  });
   assert.equal(q2Full[1], base[1]);
   assert.equal(q2Full[2].starters.some(slot => slot.player?.id === fullIn.id), true);
   assert.equal(q2Full[2].bench.some(player => player.id === fullOut.id), true);
@@ -2286,6 +2309,57 @@ test("a live full-period replan keeps the swap that already happened", () => {
   assert.equal(quarterMarksDisagree(q2FullStored, q2Full[2], 2), false);
   assert.equal(segmentAt(q2FullStored, fullQ2Gk, 2), null);
   [3, 4].forEach(q => assert.deepEqual(quarterMarkMap(q2FullStored, q), {}));
+});
+
+test("a replan before the period starts does not lock its planned half marks", () => {
+  const slots = ["GK", "LD", "RD", "LM", "RM", "CF"];
+  const players = variedRoster(8);
+  [2, 3].forEach(from => {
+    const base = scheduleHalfRotation(players, slots, { minHalves: 4, totalQuarters: 4, seed: 1 });
+    assert.ok(Object.keys(quarterMarkMap(base.segments, from)).length > 0, `Q${from} had no planned marks`);
+    const carried = replanCarryForward({
+      resetClock: false,
+      fromQuarter: from,
+      livePeriod: false,
+      segments: base.segments,
+      credit: {},
+      overrides: {},
+    });
+    assert.deepEqual(quarterMarkMap(carried.segments, from), {}, `Q${from} mark was locked`);
+    for (let q = from + 1; q <= 4; q++) {
+      assert.deepEqual(quarterMarkMap(carried.segments, q), {}, `Q${q} mark was locked`);
+    }
+    for (let q = 1; q < from; q++) {
+      assert.deepEqual(quarterMarkMap(carried.segments, q), quarterMarkMap(base.segments, q));
+    }
+    const locked = {};
+    for (let q = 1; q < from; q++) locked[q] = base.lineups[q];
+    let sawLineup = false;
+    let sawMarks = false;
+    for (let seed = 1; seed <= 24; seed++) {
+      const planned = scheduleHalfRotation(players, slots, {
+        minHalves: 4,
+        totalQuarters: 4,
+        fromQuarter: from,
+        lockedLineups: locked,
+        lockedSegments: carried.segments,
+        seed,
+      });
+      const stored = segmentsSavedForSubReplan(planned.segments, base.segments, planned.lineups, {
+        fromQuarter: from,
+        resetClock: false,
+        livePeriod: false,
+      });
+      assert.deepEqual(quarterMarkMap(stored, from), quarterMarkMap(planned.segments, from), `Q${from} seed ${seed}`);
+      for (let q = 1; q < from; q++) assert.equal(planned.lineups[q], locked[q]);
+      if (plansDiffer(base.lineups, planned.lineups, from)) sawLineup = true;
+      if (JSON.stringify(quarterMarkMap(base.segments, from)) !== JSON.stringify(quarterMarkMap(stored, from))) {
+        sawMarks = true;
+      }
+    }
+    assert.equal(sawLineup, true, `Q${from} lineup never changed`);
+    assert.equal(sawMarks, true, `Q${from} marks never changed`);
+  });
 });
 
 test("rotation fills a scarce position with the player who lists it", () => {

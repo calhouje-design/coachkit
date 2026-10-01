@@ -859,20 +859,22 @@ function assignPreferListed(pool, slotNames, lockedGk = []) {
 
 /**
  * What a replan keeps. Resetting the clock clears credit, half marks, and
- * formation overrides. Otherwise the live period's half-sub marks stay, along
- * with marks from periods already played. Later periods are planned again.
+ * formation overrides. A live period keeps the swaps that already happened.
+ * A period that has not started is planned again. Periods already played stay.
  */
 export function replanCarryForward({
   resetClock = false,
   fromQuarter = 1,
+  livePeriod = false,
   segments = {},
   credit = {},
   overrides = {},
 } = {}) {
   if (resetClock) return { segments: {}, credit: {}, overrides: {} };
   const start = Math.max(1, Number(fromQuarter) || 1);
+  const through = livePeriod ? start : start - 1;
   return {
-    segments: marksThroughQuarter(segments, start),
+    segments: marksThroughQuarter(segments, through),
     credit: credit || {},
     overrides: overrides || {},
   };
@@ -956,16 +958,17 @@ export function preservePeriodMarks(nextSegments, previousSegments, quarter, lin
 }
 
 /**
- * The live period keeps half marks that already happened, when the lineup agrees.
- * Later periods keep the planner's marks. Those were planned, not played.
+ * A live period keeps half marks that already happened, when the lineup agrees.
+ * A period that has not started keeps the planner's marks. So do later periods.
  */
 export function segmentsSavedForSubReplan(plannedSegments, previousSegments, lineups, {
   fromQuarter = 1,
   resetClock = false,
+  livePeriod = false,
 } = {}) {
   const fromQ = Number(fromQuarter) || 1;
   const lineup = lineups?.[fromQ] || lineups?.[String(fromQ)];
-  if (resetClock || !lineup?.starters) return plannedSegments;
+  if (resetClock || !livePeriod || !lineup?.starters) return plannedSegments;
   return preservePeriodMarks(plannedSegments, previousSegments, fromQ, lineup);
 }
 
@@ -1220,18 +1223,20 @@ export function segmentsAfterFullReplan(segments, fromQuarter, lineup, quarter) 
 }
 
 /**
- * Full-mode save: drop planned half marks from the live period on, then put
- * that period's real swaps back only where the lineup still agrees.
- * Later periods stay on the cleared plan. The goalkeeper keeps a full period.
+ * Full-mode save: drop half marks from the replanned period on. A live period
+ * puts its real swaps back only where the lineup still agrees. A period that
+ * has not started stays clear. The goalkeeper keeps a full period.
  */
 export function segmentsSavedForFullReplan(previousSegments, lineups, {
   fromQuarter = 1,
   resetClock = false,
+  livePeriod = false,
 } = {}) {
   if (resetClock) return {};
   const fromQ = Math.max(1, Number(fromQuarter) || 1);
   const lineup = lineups?.[fromQ] || lineups?.[String(fromQ)];
   const cleared = segmentsAfterFullReplan(previousSegments, fromQ, lineup, fromQ);
+  if (!livePeriod || !lineup?.starters) return cleared;
   const kept = preservePeriodMarks(cleared, previousSegments, fromQ, lineup);
   return creditPinnedGoalkeeper(kept, lineup, fromQ);
 }

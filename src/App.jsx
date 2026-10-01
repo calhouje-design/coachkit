@@ -1469,6 +1469,7 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
     const carried = replanCarryForward({
       resetClock: decision.resetClock,
       fromQuarter: fromQ,
+      livePeriod: decision.pinGoalkeeper,
       segments: subSegments,
       credit: appearanceCredit,
       overrides: normalizeFormationOverrides(normalizeGameDay(gameDay).formationOverrides),
@@ -1503,12 +1504,12 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
       result?.segments,
       subSegments,
       result?.lineups,
-      { fromQuarter: fromQ, resetClock: decision.resetClock },
+      { fromQuarter: fromQ, resetClock: decision.resetClock, livePeriod: decision.pinGoalkeeper },
     );
     const savedFullSegments = (result) => segmentsSavedForFullReplan(
       subSegments,
       result,
-      { fromQuarter: fromQ, resetClock: decision.resetClock },
+      { fromQuarter: fromQ, resetClock: decision.resetClock, livePeriod: decision.pinGoalkeeper },
     );
     if (subMode) {
       const chosen = firstDifferentPlan({
