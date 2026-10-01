@@ -43,6 +43,8 @@ import {
   planHistoryKey,
   sheetMeetsMinimum,
   liveReplanGoalkeeper,
+  liveReplanClockDecision,
+  segmentsAfterFullReplan,
   gameLogFromStrategy,
   upsertGameLog,
   playerQuarterPresence,
@@ -1442,13 +1444,20 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
   };
 
   // -- Plan entire game from scratch (or from a quarter onwards) --
-  const planWholeGame = (fromQ = 1) => {
+  const planWholeGame = (fromQ = 1, options = {}) => {
     if (!gate.ok) {
       setJustRegenned(false);
       setScrambleNote(null);
       return;
     }
-    if (fromQ === 1) resetLiveTracking();
+    const clockStarted = running || (clockRef.current || 0) > 0;
+    const decision = liveReplanClockDecision({
+      liveReplan: !!options.liveReplan,
+      fromQuarter: fromQ,
+      quarter,
+      clockStarted,
+    });
+    if (decision.resetClock) resetLiveTracking();
     else if (fromQ === quarter) commitOnFieldMinutes();
     const locked = {};
     if (fromQ > 1) {
@@ -1473,9 +1482,8 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
       slotsByQuarter[q] = slotsForName(formationNameForPeriod(activeFormation, overridesNow, q, totalQuarters));
     }
     const creditForPlan = fromQ === 1 ? {} : appearanceCredit;
-    const clockStarted = fromQ > 1 && (running || (clockRef.current || 0) > 0);
-    const liveGk = fromQ === quarter
-      ? liveReplanGoalkeeper(lineupsByQuarter, fromQ, clockStarted)
+    const liveGk = decision.pinGoalkeeper
+      ? liveReplanGoalkeeper(lineupsByQuarter, fromQ, true)
       : null;
     rememberSheet(lineupsByQuarter);
     const meets = (lineups, segments) => sheetMeetsMinimum(players, lineups, segments, {
@@ -1510,7 +1518,7 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
       rememberSheet(planned.lineups);
       setSubSegments(planned.segments);
       notePlanResult(planned.lineups, players, creditForPlan, planned.segments);
-      if (fromQ !== 1 && fromQ === quarter && running) {
+      if (!decision.resetClock && fromQ === quarter && running) {
         const next = {};
         (planned.lineups[quarter]?.starters || []).forEach(slot => {
           if (slot.player?.id) next[slot.player.id] = clockRef.current || 0;
@@ -1548,8 +1556,10 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
     }
     const result = chosen.plan;
     rememberSheet(result);
-    notePlanResult(result, players, creditForPlan, nextSegments);
-    if (fromQ !== 1 && fromQ === quarter && running) {
+    const storedSegments = segmentsAfterFullReplan(subSegments, fromQ, result?.[fromQ], fromQ);
+    setSubSegments(storedSegments);
+    notePlanResult(result, players, creditForPlan, storedSegments);
+    if (!decision.resetClock && fromQ === quarter && running) {
       const next = {};
       (result[quarter]?.starters || []).forEach(slot => {
         if (slot.player?.id) next[slot.player.id] = clockRef.current || 0;
@@ -2451,7 +2461,7 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
                 : `Full ${noun}. Target is ${minQ} of ${totalQuarters}. Half swaps stay off.`}
             </div>
             {allPlanned && (
-              <Btn secondary full disabled={!gate.ok} onClick={() => planWholeGame(quarter)}>
+              <Btn secondary full disabled={!gate.ok} onClick={() => planWholeGame(quarter, { liveReplan: true })}>
                 Replan {abbr}{quarter}–{abbr}{totalQuarters}{quarter>1?` · keep ${abbr}1–${abbr}${quarter-1}`:""}
               </Btn>
             )}

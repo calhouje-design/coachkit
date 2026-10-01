@@ -45,6 +45,8 @@ import {
   planHistoryKey,
   sheetMeetsMinimum,
   liveReplanGoalkeeper,
+  liveReplanClockDecision,
+  segmentsAfterFullReplan,
   gameLogFromStrategy,
   upsertGameLog,
   playerQuarterPresence,
@@ -1469,4 +1471,294 @@ test("a full-period return is started often enough to reach the minimum", () => 
   [3, 4].forEach(q => assert.equal(goalkeeperId(returned.lineups[q]), "keep"));
   assert.equal(returned.lineups[1], lineups[1]);
   assert.equal(returned.lineups[2], lineups[2]);
+});
+
+test("three valid sheets stay available across ten presses", () => {
+  const sheet = (id) => ({
+    1: { starters: [{ pos: "CF", player: { id } }], bench: [] },
+  });
+  const ids = ["a", "b", "c"];
+  let current = sheet("a");
+  let recent = [];
+  const remember = (lineups) => {
+    const key = planHistoryKey(lineups, 1);
+    recent = [key, ...recent.filter(item => item !== key)].slice(0, 5);
+  };
+  remember(current);
+  for (let press = 0; press < 10; press++) {
+    let cursor = 0;
+    const chosen = firstDifferentPlan({
+      currentLineups: current,
+      currentPlan: { lineups: current },
+      recentKeys: recent,
+      attempts: 24,
+      nextSeed: () => {
+        cursor += 1;
+        return cursor;
+      },
+      plan: (seed) => ({ lineups: sheet(ids[(seed - 1) % 3]) }),
+    });
+    assert.equal(chosen.unchanged, false, `press ${press + 1} stuck on one sheet`);
+    assert.equal(plansDiffer(current, chosen.lineups, 1), true);
+    current = chosen.lineups;
+    remember(current);
+  }
+});
+
+test("a recent sheet is reused when it is the least recently shown", () => {
+  const sheet = (id) => ({
+    1: { starters: [{ pos: "CF", player: { id } }], bench: [] },
+  });
+  const current = sheet("now");
+  const fair = sheet("fair");
+  const older = sheet("older");
+  const least = sheet("least");
+  const chosen = firstDifferentPlan({
+    currentLineups: current,
+    currentPlan: { lineups: current },
+    recentKeys: [planHistoryKey(fair, 1), planHistoryKey(older, 1), planHistoryKey(least, 1)],
+    attempts: 3,
+    nextSeed: (() => {
+      const order = [1, 2, 3];
+      let i = 0;
+      return () => order[i++] ?? 3;
+    })(),
+    plan: (seed) => ({ lineups: [fair, older, least][seed - 1] }),
+  });
+  assert.equal(chosen.unchanged, false);
+  assert.equal(chosen.lineups[1].starters[0].player.id, "least");
+
+  const fairOverOldShort = firstDifferentPlan({
+    currentLineups: current,
+    recentKeys: [planHistoryKey(fair, 1), planHistoryKey(older, 1)],
+    attempts: 2,
+    nextSeed: (() => {
+      const order = [1, 2];
+      let i = 0;
+      return () => order[i++] ?? 2;
+    })(),
+    fairPlay: (result) => result.fair,
+    plan: (seed) => (seed === 1
+      ? { lineups: fair, fair: true }
+      : { lineups: older, fair: false }),
+  });
+  assert.equal(fairOverOldShort.lineups[1].starters[0].player.id, "fair");
+  assert.equal(fairOverOldShort.meetsMinimum, true);
+});
+
+test("a two-half six-a-side game does not stick after five sheets", () => {
+  const out = [
+    ["LD", "CD", "RD"], ["LM", "CM", "RM"], ["CF", "LF", "RF", "ST"], ["LD", "LM"],
+    ["RD", "RM"], ["CM", "CD"], ["CF", "CM"], ["LF", "LM"], ["RF", "RM"], ["CD", "RD"],
+  ];
+  const players = out.map((positions, i) => ({
+    id: `p${i}`,
+    name: `P${i}`,
+    positions: i < 3 ? ["GK", ...positions] : positions,
+    ratings: { a: 1 + ((i * 7) % 5), b: 1 + ((i * 3) % 5), c: 1 + (i % 4) },
+    injured: false,
+    out: false,
+  }));
+  const setup = resolveSetup({
+    league: "U9",
+    format: "",
+    settings: { org: "custom", custom: { playersOnField: 6, gk: true, periods: 2, periodMinutes: 10 } },
+  });
+  const slots = setup.slots;
+  const total = setup.periods;
+  const minHalves = minQuarters(setup.minFraction ?? 0.5, total) * 2;
+  const rate = (player) => {
+    const vals = Object.values(player.ratings || {}).filter(value => value > 0);
+    return vals.length ? vals.reduce((sum, value) => sum + value, 0) / vals.length : 0;
+  };
+  const slotsByQuarter = { 1: slots, 2: slots };
+  let seedCtr = 1;
+  const nextSeed = () => (seedCtr = (seedCtr * 1103515245 + 12345) >>> 0);
+  const distinct = new Set();
+  for (let i = 0; i < 400; i++) {
+    distinct.add(planHistoryKey(scheduleWholeGame({
+      players,
+      format: setup.format,
+      slotOverride: slots,
+      totalPeriods: total,
+      minFraction: setup.minFraction ?? 0.5,
+      slotsByQuarter,
+      seed: nextSeed(),
+      rate,
+    }), 1));
+  }
+  assert.equal(distinct.size, 5);
+  let lineups = {};
+  let recent = [];
+  const remember = (sheet) => {
+    if (!sheet || !Object.keys(sheet).some(key => sheet[key]?.starters)) return;
+    const key = planHistoryKey(sheet, 1);
+    recent = [key, ...recent.filter(item => item !== key)].slice(0, 5);
+  };
+  for (let press = 1; press <= 12; press++) {
+    remember(lineups);
+    const chosen = firstDifferentPlan({
+      currentLineups: lineups,
+      currentPlan: lineups,
+      fromQuarter: 1,
+      recentKeys: recent,
+      nextSeed,
+      fairPlay: (result) => sheetMeetsMinimum(players, result, {}, { minHalves, totalQuarters: total }),
+      plan: (seed) => scheduleWholeGame({
+        players,
+        format: setup.format,
+        slotOverride: slots,
+        totalPeriods: total,
+        minFraction: setup.minFraction ?? 0.5,
+        slotsByQuarter,
+        seed,
+        rate,
+      }),
+    });
+    assert.equal(chosen.unchanged, false, `press ${press} reported only one lineup`);
+    lineups = chosen.lineups;
+    remember(lineups);
+  }
+});
+
+test("sub-mode replan with a pinned keeper fills every slot", () => {
+  const players = [
+    { id: "p0", name: "Avery", positions: ["GK", "LD", "CD", "RD"], ratings: { a: 1, b: 1, c: 1 } },
+    { id: "p1", name: "Ben", positions: ["GK", "LM", "CM", "RM"], ratings: { a: 3, b: 4, c: 2 } },
+    { id: "p2", name: "Cam", positions: ["GK", "CF", "LF", "RF", "ST"], ratings: { a: 5, b: 2, c: 3 } },
+    { id: "p3", name: "Dani", positions: ["LD", "LM"], ratings: { a: 2, b: 5, c: 4 } },
+    { id: "p4", name: "Eli", positions: ["RD", "RM"], ratings: { a: 4, b: 3, c: 1 } },
+    { id: "p5", name: "Finn", positions: ["CM", "CD"], ratings: { a: 1, b: 1, c: 2 } },
+    { id: "p6", name: "Gus", positions: ["CF", "CM"], ratings: { a: 3, b: 4, c: 3 } },
+    { id: "p7", name: "Hana", positions: ["LF", "LM"], ratings: { a: 5, b: 2, c: 4 } },
+  ].map(player => ({ ...player, injured: false, out: false }));
+  const byId = Object.fromEntries(players.map(player => [player.id, player]));
+  const slots = ["GK", "CD", "CM", "CF"];
+  const lineup = (starterIds, benchIds) => ({
+    starters: slots.map((pos, index) => ({ pos, player: byId[starterIds[index]] })),
+    bench: benchIds.map(id => byId[id]),
+  });
+  const locked = {
+    1: lineup(["p0", "p5", "p6", "p4"], ["p1", "p2", "p3", "p7"]),
+    2: lineup(["p1", "p5", "p6", "p4"], ["p0", "p2", "p3", "p7"]),
+  };
+  const rate = (player) => {
+    const vals = Object.values(player.ratings).filter(value => value > 0);
+    return vals.reduce((sum, value) => sum + value, 0) / vals.length;
+  };
+  const used = [
+    4158529536, 4149465088, 3088039936, 2872373248, 2796183552, 533401600, 3361079296,
+    2157850624, 368746496, 2021019712, 2824067840, 2590928896, 119922688, 3579875392,
+    395385856, 3880852544, 1302640640, 2402453504, 2381584384, 1614702592, 1849849856,
+    48056320, 1411897400, 1814581248,
+  ];
+  const assertFilled = (planned, label) => {
+    assert.equal(planned.lineups[1], locked[1], label);
+    assert.equal(planned.lineups[2], locked[2], label);
+    [3, 4].forEach(q => {
+      const starters = planned.lineups[q].starters;
+      assert.equal(starters.length, slots.length, `${label} Q${q}`);
+      assert.equal(starters.every(slot => slot.player?.id), true, `${label} Q${q} has an empty slot`);
+      const ids = starters.map(slot => slot.player.id);
+      assert.equal(new Set(ids).size, ids.length, `${label} Q${q} repeats a player`);
+    });
+  };
+  const planFrom = (seed, lock) => scheduleHalfRotation(players, slots, {
+    minHalves: 4,
+    fromQuarter: 3,
+    lockedLineups: locked,
+    totalQuarters: 4,
+    rate,
+    seed,
+    lockGoalkeeperId: lock,
+  });
+  used.forEach(seed => {
+    const planned = planFrom(seed, "p0");
+    assertFilled(planned, `used ${seed}`);
+    assert.equal(goalkeeperId(planned.lineups[3]), "p0");
+    assert.equal(segmentAt(planned.segments, "p0", 3), null);
+    assertFilled(planFrom(seed, null), `open ${seed}`);
+  });
+  for (let s = 1; s <= 200; s++) {
+    const seed = Math.imul(s, 2654435761) >>> 0;
+    const planned = planFrom(seed, "p0");
+    assertFilled(planned, `seed ${seed}`);
+    assert.equal(goalkeeperId(planned.lineups[3]), "p0");
+    assert.equal(playCellKind({ onField: true, segment: segmentAt(planned.segments, "p0", 3) }), "full");
+    assertFilled(planFrom(seed, null), `unlocked ${seed}`);
+  }
+});
+
+test("a locked goalkeeper keeps every period full across seeds and shapes", () => {
+  const configs = [
+    { count: 8, slots: ["GK", "CD", "CM", "CF"], total: 4, from: 3, minHalves: 4 },
+    { count: 10, slots: ["GK", "LD", "RD", "LM", "RM", "CF"], total: 2, from: 2, minHalves: 2 },
+    { count: 9, slots: ["GK", "LD", "CD", "RD", "LM", "RM", "CF"], total: 3, from: 2, minHalves: 2 },
+    { count: 7, slots: ["GK", "LD", "RD", "CF"], total: 4, from: 1, minHalves: 4 },
+  ];
+  configs.forEach(cfg => {
+    const players = variedRoster(cfg.count);
+    const base = scheduleHalfRotation(players, cfg.slots, {
+      minHalves: cfg.minHalves,
+      totalQuarters: cfg.total,
+      seed: 1,
+    });
+    const gk = goalkeeperId(base.lineups[cfg.from]);
+    assert.ok(gk, `config ${cfg.count}`);
+    const locked = {};
+    for (let q = 1; q < cfg.from; q++) locked[q] = base.lineups[q];
+    for (let seed = 1; seed <= 30; seed++) {
+      const planned = scheduleHalfRotation(players, cfg.slots, {
+        minHalves: cfg.minHalves,
+        totalQuarters: cfg.total,
+        fromQuarter: cfg.from,
+        lockedLineups: locked,
+        lockedSegments: base.segments,
+        seed,
+        lockGoalkeeperId: gk,
+      });
+      for (let q = 1; q < cfg.from; q++) assert.equal(planned.lineups[q], locked[q]);
+      for (let q = cfg.from; q <= cfg.total; q++) {
+        const ids = planned.lineups[q].starters.map(slot => slot.player?.id);
+        assert.equal(ids.every(Boolean), true, `${cfg.count} players, seed ${seed}, period ${q}`);
+        assert.equal(new Set(ids).size, ids.length);
+      }
+      assert.equal(goalkeeperId(planned.lineups[cfg.from]), gk);
+      assert.equal(segmentAt(planned.segments, gk, cfg.from), null);
+    }
+  });
+});
+
+test("a full-mode replan clears replanned half marks and keeps earlier ones", () => {
+  const segments = {
+    p1: { 1: "left", 2: "entered", 3: "left" },
+    gk: { 1: "entered", 2: "left" },
+  };
+  const lineup = { starters: [{ pos: "GK", player: { id: "gk" } }], bench: [] };
+  const next = segmentsAfterFullReplan(segments, 2, lineup, 2);
+  assert.equal(segmentAt(next, "p1", 1), "left");
+  assert.equal(segmentAt(next, "p1", 2), null);
+  assert.equal(segmentAt(next, "p1", 3), null);
+  assert.equal(segmentAt(next, "gk", 1), "entered");
+  assert.equal(segmentAt(next, "gk", 2), null);
+  assert.deepEqual(segmentsAfterFullReplan(segments, 1, lineup, 1), {});
+});
+
+test("replan of a live first period pins the goalkeeper and keeps the clock", () => {
+  assert.deepEqual(
+    liveReplanClockDecision({ liveReplan: true, fromQuarter: 1, quarter: 1, clockStarted: true }),
+    { resetClock: false, pinGoalkeeper: true },
+  );
+  assert.deepEqual(
+    liveReplanClockDecision({ liveReplan: true, fromQuarter: 1, quarter: 1, clockStarted: false }),
+    { resetClock: true, pinGoalkeeper: false },
+  );
+  assert.deepEqual(
+    liveReplanClockDecision({ liveReplan: false, fromQuarter: 1, quarter: 3, clockStarted: true }),
+    { resetClock: true, pinGoalkeeper: false },
+  );
+  assert.deepEqual(
+    liveReplanClockDecision({ liveReplan: true, fromQuarter: 2, quarter: 2, clockStarted: true }),
+    { resetClock: false, pinGoalkeeper: true },
+  );
 });

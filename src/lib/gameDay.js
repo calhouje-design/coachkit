@@ -538,6 +538,21 @@ function assignHalfSlots(startersPool, slotNames, lockedGk = []) {
   });
 }
 
+/** An open slot is filled from the bench. A fair-play shortfall may remain; an empty slot may not. */
+function fillOpenField(starters, bench) {
+  const nextBench = [...(bench || [])];
+  const nextStarters = (starters || []).map(slot => {
+    if (slot?.player) return slot;
+    let idx = nextBench.findIndex(player => (player?.positions || []).includes(slot.pos));
+    if (idx < 0) idx = nextBench.findIndex(player => player?.id);
+    if (idx < 0) return slot;
+    const player = nextBench[idx];
+    nextBench.splice(idx, 1);
+    return { ...slot, player };
+  });
+  return { starters: nextStarters, bench: nextBench };
+}
+
 /** How many fresh seeds Plan / Replan may try before keeping the only valid sheet. */
 export const PLAN_VARIETY_ATTEMPTS = 24;
 
@@ -659,10 +674,11 @@ function wrapPlan(result, { unchanged, meetsMinimum }) {
 }
 
 /**
- * Call `plan(seed)` up to N times. Prefer the first sheet that differs from the
- * one on screen (and from the last few shown) and still meets fair play.
- * A shortfall is used only when every different sheet is short. If nothing
- * differs, the current sheet is returned. Non-finite attempt counts cannot spin.
+ * Call `plan(seed)` up to N times. Recent sheets are a preference, not a ban.
+ * Order: a different fair sheet that is not recent; any different sheet that is
+ * not recent; a different recent sheet (fair first, then the least recently
+ * shown); the current sheet only when nothing else differs. Non-finite attempt
+ * counts cannot spin.
  */
 export function firstDifferentPlan({
   plan,
@@ -678,28 +694,60 @@ export function firstDifferentPlan({
   if (typeof plan !== "function") throw new TypeError("firstDifferentPlan requires plan");
   const tries = resolveAttempts(attempts);
   const draw = typeof nextSeed === "function" ? nextSeed : freshPlanSeed;
-  const seen = new Set((recentKeys || []).filter(Boolean));
   const judge = typeof fairPlay === "function" ? fairPlay : null;
+  const recentRank = new Map();
+  (recentKeys || []).filter(Boolean).forEach((key, index) => {
+    if (!recentRank.has(key)) recentRank.set(key, index);
+  });
   let first = null;
-  let shortHit = null;
+  let freshShort = null;
+  let recentFair = null;
+  let recentShort = null;
+  const keepOlder = (slot, result, rank) => (
+    !slot || rank > slot.rank ? { result, rank } : slot
+  );
   for (let i = 0; i < tries; i++) {
     const seed = Number(draw()) >>> 0;
     const result = plan(seed);
     if (!first) first = result;
     const lineups = lineupsOf(result);
-    const repeat = !plansDiffer(currentLineups, lineups, fromQuarter)
-      || seen.has(planHistoryKey(lineups, historyFromQuarter));
-    if (repeat) continue;
-    const meets = judge ? judge(result) : true;
-    if (meets) return wrapPlan(result, { unchanged: false, meetsMinimum: true });
-    if (!shortHit) shortHit = result;
+    if (!plansDiffer(currentLineups, lineups, fromQuarter)) continue;
+    const key = planHistoryKey(lineups, historyFromQuarter);
+    const meets = judge ? !!judge(result) : true;
+    const rank = recentRank.has(key) ? recentRank.get(key) : -1;
+    if (rank < 0) {
+      if (meets) return wrapPlan(result, { unchanged: false, meetsMinimum: true });
+      if (!freshShort) freshShort = result;
+      continue;
+    }
+    if (meets) recentFair = keepOlder(recentFair, result, rank);
+    else recentShort = keepOlder(recentShort, result, rank);
   }
-  if (shortHit) return wrapPlan(shortHit, { unchanged: false, meetsMinimum: false });
+  if (freshShort) return wrapPlan(freshShort, { unchanged: false, meetsMinimum: false });
+  if (recentFair) return wrapPlan(recentFair.result, { unchanged: false, meetsMinimum: true });
+  if (recentShort) return wrapPlan(recentShort.result, { unchanged: false, meetsMinimum: false });
   if (currentPlan) return wrapPlan(currentPlan, { unchanged: true, meetsMinimum: null });
   if (currentLineups && planHistoryKey(currentLineups, fromQuarter)) {
     return wrapPlan({ lineups: currentLineups }, { unchanged: true, meetsMinimum: null });
   }
   return wrapPlan(first, { unchanged: false, meetsMinimum: judge && first ? judge(first) : null });
+}
+
+/**
+ * Plan full game resets the clock. Replan of the period already on the clock
+ * keeps the elapsed time and pins that period's goalkeeper, including period 1.
+ * A replan before the clock starts still resets period 1.
+ */
+export function liveReplanClockDecision({
+  liveReplan = false,
+  fromQuarter = 1,
+  quarter = 1,
+  clockStarted = false,
+} = {}) {
+  const fromQ = Math.max(1, Number(fromQuarter) || 1);
+  const q = Math.max(1, Number(quarter) || 1);
+  const pinGoalkeeper = !!(liveReplan && clockStarted && fromQ === q);
+  return { resetClock: fromQ === 1 && !pinGoalkeeper, pinGoalkeeper };
 }
 
 function pickQuarterGoalkeepers(active, slotNames, remaining, satLast, seed = null) {
@@ -776,6 +824,24 @@ export function scheduleHalfRotation(players, slots, {
     guard += 1;
   }
 
+  const lockedKeeper = lockGoalkeeperId
+    ? active.find(player => player.id === lockGoalkeeperId) || null
+    : null;
+  if (lockedKeeper && remainingQs.includes(fromQuarter)) {
+    const reserve = Math.min(halfCap, 2);
+    let short = Math.max(0, reserve - (quota[lockedKeeper.id] || 0));
+    const donors = active
+      .filter(player => player.id !== lockedKeeper.id)
+      .sort((a, b) => (quota[b.id] || 0) - (quota[a.id] || 0) || tieCompare(seed, a.id, b.id));
+    while (short > 0) {
+      const donor = donors.find(player => (quota[player.id] || 0) > 0);
+      if (!donor) break;
+      quota[donor.id] -= 1;
+      quota[lockedKeeper.id] = (quota[lockedKeeper.id] || 0) + 1;
+      short -= 1;
+    }
+  }
+
   const remaining = { ...quota };
   const byNeed = (a, b) => remaining[b.id] - remaining[a.id] || tieCompare(seed, a.id, b.id);
   const prevQ = fromQuarter - 1;
@@ -791,9 +857,6 @@ export function scheduleHalfRotation(players, slots, {
   remainingQs.forEach(q => { onHalf[q] = { 1: [], 2: [] }; });
 
   const gkByQuarter = {};
-  const lockedKeeper = lockGoalkeeperId
-    ? active.find(player => player.id === lockGoalkeeperId) || null
-    : null;
   remainingQs.forEach(q => {
     let keepers = pickQuarterGoalkeepers(active, slotNames, remaining, satLast, seed);
     if (q === fromQuarter && lockedKeeper) {
@@ -808,14 +871,23 @@ export function scheduleHalfRotation(players, slots, {
       chosen.forEach(id => {
         if (remaining[id] > 0) remaining[id] -= 1;
       });
-      const eligible = () => active.filter(p => remaining[p.id] > 0 && !chosen.includes(p.id));
-      eligible().filter(p => satLast.has(p.id)).sort(byNeed).forEach(p => {
-        if (chosen.length < slotNames.length) chosen.push(p.id);
+      const pushWhile = (pred, owesTime) => {
+        active
+          .filter(player => !chosen.includes(player.id) && pred(player) && (!owesTime || remaining[player.id] > 0))
+          .sort(byNeed)
+          .forEach(player => {
+            if (chosen.length < slotNames.length) chosen.push(player.id);
+          });
+      };
+      pushWhile(player => satLast.has(player.id), true);
+      pushWhile(() => true, true);
+      if (chosen.length < slotNames.length) {
+        pushWhile(player => satLast.has(player.id), false);
+        pushWhile(() => true, false);
+      }
+      chosen.filter(id => !keepers.some(player => player.id === id)).forEach(id => {
+        if (remaining[id] > 0) remaining[id] -= 1;
       });
-      eligible().sort(byNeed).forEach(p => {
-        if (chosen.length < slotNames.length) chosen.push(p.id);
-      });
-      chosen.filter(id => !keepers.some(player => player.id === id)).forEach(id => { remaining[id] -= 1; });
       onHalf[q][half] = chosen;
       satLast = new Set(active.filter(p => !chosen.includes(p.id)).map(p => p.id));
     });
@@ -840,14 +912,21 @@ export function scheduleHalfRotation(players, slots, {
     const first = new Set(onHalf[q][1]);
     const second = new Set(onHalf[q][2]);
     const startersPool = active.filter(p => second.has(p.id));
-    const bench = active.filter(p => !second.has(p.id));
+    const benchPool = active.filter(p => !second.has(p.id));
     const ordered = seed == null ? startersPool : shufflePlayers(startersPool, seed, `pos-${q}`);
-    lineups[q] = { starters: assignHalfSlots(ordered, namesFor(q), gkByQuarter[q] || []), bench };
+    const filled = fillOpenField(assignHalfSlots(ordered, namesFor(q), gkByQuarter[q] || []), benchPool);
+    const late = new Set(filled.starters.map(slot => slot.player?.id).filter(Boolean));
+    lineups[q] = { starters: filled.starters, bench: active.filter(p => !late.has(p.id)) };
     active.forEach(p => {
       const early = first.has(p.id);
-      const late = second.has(p.id);
-      if (early && !late) segments[p.id] = { ...(segments[p.id] || {}), [q]: "left" };
-      else if (!early && late) segments[p.id] = { ...(segments[p.id] || {}), [q]: "entered" };
+      const on = late.has(p.id);
+      const row = { ...(segments[p.id] || {}) };
+      delete row[q];
+      delete row[String(q)];
+      if (early && !on) row[q] = "left";
+      else if (!early && on) row[q] = "entered";
+      if (Object.keys(row).length) segments[p.id] = row;
+      else delete segments[p.id];
     });
   });
 
@@ -867,6 +946,17 @@ function creditPinnedGoalkeeper(segments, lineup, quarter) {
   if (Object.keys(row).length) next[gkId] = row;
   else delete next[gkId];
   return next;
+}
+
+/**
+ * Full-mode replan state: drop half marks from the replanned periods onward,
+ * and give the live period's goalkeeper a full period of credit.
+ */
+export function segmentsAfterFullReplan(segments, fromQuarter, lineup, quarter) {
+  const start = Math.max(1, Number(fromQuarter) || 1);
+  const cleared = start <= 1 ? {} : clearSubSegmentsFrom(segments, start);
+  if (!lineup || quarter == null) return cleared;
+  return creditPinnedGoalkeeper(cleared, lineup, quarter);
 }
 
 function pinNamedGoalkeeper(lineup, gkId, roster) {
