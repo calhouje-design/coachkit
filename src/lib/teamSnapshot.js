@@ -1,6 +1,7 @@
 /** Pure team snapshot shape. Cloud rows and localStorage both use this. */
 
 import { normalizeFormationOverrides } from "./formations.js";
+import { normalizeRealPeriodEvents } from "./gameDay.js";
 
 export function defaultSettings() {
   return {
@@ -21,6 +22,7 @@ export function defaultGameDay() {
     subSegments: {},
     pairPlan: {},
     subQueue: [],
+    realPeriodEvents: {},
   };
 }
 
@@ -90,6 +92,7 @@ export function normalizeGameDay(value) {
     pairPlan: base.pairPlan && typeof base.pairPlan === "object" ? base.pairPlan : {},
     subQueue: Array.isArray(base.subQueue) ? base.subQueue : [],
     formationOverrides: normalizeFormationOverrides(base.formationOverrides),
+    realPeriodEvents: normalizeRealPeriodEvents(base.realPeriodEvents),
   };
 }
 
