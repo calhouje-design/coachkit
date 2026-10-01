@@ -953,6 +953,19 @@ export function preservePeriodMarks(nextSegments, previousSegments, quarter, lin
 }
 
 /**
+ * A live first period keeps half marks that already happened.
+ * Later periods keep the planner's marks. Those were planned, not played.
+ */
+export function segmentsSavedForSubReplan(plannedSegments, previousSegments, lineups, {
+  fromQuarter = 1,
+  resetClock = false,
+} = {}) {
+  const fromQ = Number(fromQuarter) || 1;
+  if (resetClock || fromQ !== 1 || !lineups?.[1]?.starters) return plannedSegments;
+  return preservePeriodMarks(plannedSegments, previousSegments, 1, lineups[1]);
+}
+
+/**
  * Plan full game resets the clock. Replan of the period already on the clock
  * keeps the elapsed time and pins that period's goalkeeper, including period 1.
  * A replan before the clock starts still resets period 1.

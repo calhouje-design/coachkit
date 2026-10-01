@@ -45,7 +45,7 @@ import {
   liveReplanClockDecision,
   segmentsAfterFullReplan,
   replanCarryForward,
-  preservePeriodMarks,
+  segmentsSavedForSubReplan,
   gameLogFromStrategy,
   upsertGameLog,
   playerQuarterPresence,
@@ -1499,15 +1499,12 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
       totalQuarters,
       credit: creditForPlan,
     });
-    const savedSubSegments = (result) => {
-      const lineups = result?.lineups;
-      let segments = result?.segments;
-      if (decision.resetClock || fromQ !== 1 || !lineups) return segments;
-      for (let q = fromQ; q <= totalQuarters; q++) {
-        segments = preservePeriodMarks(segments, subSegments, q, lineups[q]);
-      }
-      return segments;
-    };
+    const savedSubSegments = (result) => segmentsSavedForSubReplan(
+      result?.segments,
+      subSegments,
+      result?.lineups,
+      { fromQuarter: fromQ, resetClock: decision.resetClock },
+    );
     if (subMode) {
       const chosen = firstDifferentPlan({
         currentLineups: lineupsByQuarter,
