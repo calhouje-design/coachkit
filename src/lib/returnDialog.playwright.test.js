@@ -87,6 +87,26 @@ test("the return dialog at 390px warns on a mismatch and stays closed until the 
   }
 });
 
+test("the return dialog covers the sticky header, and a tap there cancels", async () => {
+  const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
+  try {
+    await page.goto(`${base}/return-dialog.html`, { waitUntil: "networkidle" });
+    await page.getByTestId("return-sheet").waitFor();
+    const hit = await page.evaluate(() => {
+      const el = document.elementFromPoint(10, 10);
+      return el?.getAttribute?.("data-testid") || "";
+    });
+    assert.equal(hit, "return-backdrop");
+    await page.screenshot({ path: "/tmp/coachkit-return-dialog-header-390.png" });
+    await page.mouse.click(10, 10);
+    assert.match(await page.getByTestId("log").innerText(), /cancel/);
+    assert.equal(await page.getByTestId("return-sheet").count(), 0);
+    assert.equal(await page.getByTestId("app-header").innerText(), "CoachKit");
+  } finally {
+    await page.close();
+  }
+});
+
 test("escape and the backdrop leave the return dialog without a confirm", async () => {
   const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
   try {

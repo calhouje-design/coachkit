@@ -17,6 +17,23 @@ function Harness() {
   const [open, setOpen] = useState(true);
   return (
     <div style={{ minHeight: "100vh", background: "#0a0d0f", color: "#e8e4dc", fontFamily: "Georgia, serif" }}>
+      <header
+        id="ck-app-header"
+        data-testid="app-header"
+        style={{
+          position: "sticky",
+          top: 0,
+          zIndex: 100,
+          height: 52,
+          background: "#111810",
+          display: "flex",
+          alignItems: "center",
+          padding: "0 16px",
+          fontWeight: 800,
+        }}
+      >
+        CoachKit
+      </header>
       <div data-testid="viewing" style={{ padding: 16 }}>Viewing Q{quarter}</div>
       <button type="button" data-testid="reopen" onClick={() => { setOpen(true); }}>Open</button>
       <pre data-testid="log">{log.join("\n")}</pre>

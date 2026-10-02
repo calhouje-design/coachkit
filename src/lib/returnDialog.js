@@ -1,10 +1,8 @@
 import {
-  addLateArrival,
   equityHalves,
   formatQuarterEquity,
   periodClockState,
   periodHasRealEvent,
-  planAvailability,
   realEventPlayerIds,
   realEventsAfterReturn,
   returnToGame,
@@ -178,6 +176,8 @@ function clearedPlayer(player, extra = {}) {
 /**
  * Apply one dialog answer. Cancel returns the same state.
  * Live is judged for the chosen quarter. A Return does not set a real-event flag.
+ * Full mode with a live quarter and Yes uses returnToGame, the same path as main:
+ * that period is replanned with the returner on the field and the goalkeeper kept.
  */
 export function commitReturn(state, choice) {
   if (!choice || choice.type === "cancel") return unchanged(state);
@@ -247,10 +247,6 @@ export function commitReturn(state, choice) {
     };
   }
 
-  if (!state.subMode && live && available) {
-    return benchForManualSwap(state, player, quarter, total);
-  }
-
   const targetLive = quarterIsLive(returnQuarter, state);
   const result = returnToGame({
     source: state.source,
@@ -284,53 +280,6 @@ export function commitReturn(state, choice) {
   };
 }
 
-function benchForManualSwap(state, player, quarter, total) {
-  const returning = clearedPlayer(player, {
-    returnQuarter: quarter,
-    injuredInQuarter: player.injuredInQuarter || quarter,
-  });
-  const players = state.players.map(item => (item.id === player.id ? returning : item));
-  let lineups = { ...(state.lineups || {}) };
-  if (lineups[quarter]) lineups[quarter] = addLateArrival(lineups[quarter], returning);
-  let segments = state.segments;
-  let regenerated = false;
-  let realEvents = state.realEvents;
-  if (quarter < total) {
-    const planned = planAvailability({
-      autoRegen: true,
-      kind: "return",
-      players,
-      absentId: player.id,
-      quarter: quarter + 1,
-      totalQuarters: total,
-      lineups,
-      segments,
-      slots: state.slots,
-      slotsByQuarter: state.slotsByQuarter,
-      subMode: false,
-      minHalves: state.minHalves,
-      rate: state.rate,
-      livePeriod: false,
-      protectedIds: [],
-    });
-    lineups = planned.lineups;
-    segments = planned.segments;
-    regenerated = true;
-    realEvents = realEventsAfterReturn(state.realEvents, { quarter, regenerated: true });
-  }
-  const abbr = state.periodAbbrev || "Q";
-  return {
-    changed: true,
-    regenerated,
-    toast: `${firstName(player)} is on the ${abbr}${quarter} bench.`,
-    fairInfo: null,
-    players,
-    lineups,
-    segments,
-    realEvents,
-  };
-}
-
 export function returnToast({
   player,
   quarter,
@@ -343,7 +292,6 @@ export function returnToast({
   const name = firstName(player);
   const abbr = periodAbbrev || "Q";
   if (available === false && quarter >= total) return `${name} is done for today.`;
-  if (!subMode && live && available) return `${name} is on the ${abbr}${quarter} bench.`;
   if (subMode && available && live) return `${name} back for ${abbr}${quarter}, 2nd half.`;
   if (available === false) return `${name} held until ${abbr}${quarter + 1}.`;
   return `${name} back for ${abbr}${quarter}.`;

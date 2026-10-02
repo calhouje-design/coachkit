@@ -1,12 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  equityHalves,
   goalkeeperId,
   isGkPosition,
   periodHasRealEvent,
   planAvailability,
   playerQuarterPresence,
   realEventPlayerIds,
+  returnToGame,
   scheduleHalfRotation,
   scheduleWholeGame,
 } from "./gameDay.js";
@@ -270,17 +272,108 @@ test("each return answer maps onto the existing return path", () => {
     const gkSlot = (liveYes.lineups[2].starters || []).find(slot => isGkPosition(slot.pos));
     assert.notEqual(gkSlot?.player?.id, sheet.id);
     flagIdsDidNotGrow(liveState.realEvents, liveYes.realEvents);
+    assert.equal(periodHasRealEvent(liveYes.realEvents, 2), true);
     if (subMode) {
       assert.match(liveYes.toast, /2nd half/);
-      assert.equal(periodHasRealEvent(liveYes.realEvents, 2), true);
     } else {
       const name = sheet.players.find(player => player.id === sheet.id).name.split(" ")[0];
-      assert.equal(playerQuarterPresence(liveYes.lineups[2], sheet.id), "bench");
-      assert.deepEqual(starterIds(liveYes.lineups[2]), starterIds(sheet.lineups[2]));
-      assert.equal(liveYes.toast, `${name} is on the Q2 bench.`);
+      assert.equal(playerQuarterPresence(liveYes.lineups[2], sheet.id), "on");
+      assert.equal(liveYes.toast, `${name} back for Q2.`);
       assert.notEqual(playerQuarterPresence(liveYes.lineups[3], sheet.id), "blank");
+      assert.equal(realEventPlayerIds(liveYes.realEvents, 2).includes(sheet.id), false);
     }
   });
+});
+
+test("a full-mode live yes replans that period the same way main does", () => {
+  const slots = ["GK", "LD", "CD", "RD", "LM", "RM", "CF"];
+  const players = roster(10);
+  const opened = scheduleWholeGame({
+    players,
+    format: "7v7",
+    slotOverride: slots,
+    totalPeriods: 3,
+    minFraction: 0.5,
+    seed: 4,
+  });
+  const id = opened[1].bench[0].id;
+  const absent = players.map(player => (
+    player.id === id
+      ? { ...player, out: true, injured: false, injuredInQuarter: 1, returnQuarter: null }
+      : player
+  ));
+  const planned = planAvailability({
+    autoRegen: true,
+    kind: "absent",
+    players: absent,
+    slots,
+    lineups: opened,
+    segments: {},
+    absentId: id,
+    quarter: 1,
+    minHalves: 4,
+    subMode: false,
+    totalQuarters: 3,
+    livePeriod: false,
+  });
+  const gk = goalkeeperId(planned.lineups[3]);
+  const state = baseState({
+    id,
+    players: absent,
+    lineups: planned.lineups,
+    segments: planned.segments,
+    subMode: false,
+  }, {
+    totalQuarters: 3,
+    slots,
+    minHalves: 4,
+    minQ: 2,
+    quarters: [1, 2, 3],
+    viewingQuarter: 3,
+    viewingClock: 40,
+    realEvents: { 3: [gk] },
+  });
+  assert.equal(quarterIsLive(3, state), true);
+  const liveYes = commitReturn(state, { type: "confirm", quarter: 3, available: true });
+  const main = returnToGame({
+    source: state.source,
+    autoRegen: true,
+    players: state.players,
+    playerId: id,
+    quarter: 3,
+    totalQuarters: 3,
+    lineups: state.lineups,
+    segments: state.segments,
+    slots,
+    subMode: false,
+    minHalves: 4,
+    livePeriod: true,
+    protectedIds: realEventPlayerIds(state.realEvents, 3),
+  });
+  assert.equal(playerQuarterPresence(liveYes.lineups[3], id), "on");
+  assert.equal(playerQuarterPresence(main.lineups[3], id), "on");
+  assert.equal(goalkeeperId(liveYes.lineups[3]), gk);
+  assert.equal(goalkeeperId(main.lineups[3]), gk);
+  const gkSlot = (liveYes.lineups[3].starters || []).find(slot => isGkPosition(slot.pos));
+  assert.notEqual(gkSlot?.player?.id, id);
+  [1, 2, 3].forEach(quarter => {
+    assert.deepEqual(starterIds(liveYes.lineups[quarter]), starterIds(main.lineups[quarter]), `Q${quarter}`);
+  });
+  const quarters = [1, 2, 3];
+  absent.forEach(player => {
+    const dialogHalves = equityHalves(player.id, { lineups: liveYes.lineups, segments: liveYes.segments, credit: {}, quarters });
+    const mainHalves = equityHalves(player.id, { lineups: main.lineups, segments: main.segments, credit: {}, quarters });
+    assert.equal(dialogHalves, mainHalves, player.id);
+    assert.equal(Math.max(0, 4 - dialogHalves), Math.max(0, 4 - mainHalves), `${player.id} shortfall`);
+  });
+  const returnerHalves = equityHalves(id, { lineups: liveYes.lineups, segments: liveYes.segments, credit: {}, quarters });
+  assert.equal(Math.max(0, 4 - returnerHalves), Math.max(0, 4 - equityHalves(id, {
+    lineups: main.lineups, segments: main.segments, credit: {}, quarters,
+  })));
+  assert.deepEqual(realEventPlayerIds(liveYes.realEvents, 3), [gk]);
+  flagIdsDidNotGrow(state.realEvents, liveYes.realEvents);
+  assert.equal(liveYes.players.find(player => player.id === id).out, false);
+  assert.match(liveYes.toast, /back for Q3/);
 });
 
 test("the last quarter yes returns into that quarter and no means done for today", () => {

@@ -111,11 +111,12 @@ export function ReturnDialog({
 
   return (
     <div
+      data-testid="return-backdrop"
       onClick={onCancel}
       style={{
         position: "fixed",
         inset: 0,
-        zIndex: 80,
+        zIndex: 200,
         background: "rgba(0,0,0,0.55)",
         display: "flex",
         alignItems: "flex-end",

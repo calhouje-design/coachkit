@@ -57,7 +57,9 @@ import {
 import { FORMATION_TEMPLATES, clampPeriod, formationNameForPeriod, preservePlayedBase, reapplyBase, reshapeLineup, withPeriodOverride, withoutPeriodOverride, normalizeFormationOverrides } from "./lib/formations.js";
 import { CIRCLE_DIAMETER, LABEL_GAP, LABEL_LETTER_SPACING_EM, labelProbeCss, layoutFieldPlayers, labelWidth, roundLabelWidth } from "./lib/fieldLayout.js";
 import { commitReturn, finishedQuarterList, quarterIsLive } from "./lib/returnDialog.js";
+import { markInjured, markOut, settleAvailability, showDoneForToday } from "./lib/playerStatus.js";
 import { ReturnDialog } from "./components/ReturnDialog.jsx";
+import { AvailabilityMark, RosterAvailabilityButtons } from "./components/AvailabilityMark.js";
 import { usePitchSubLines, useReportFieldLayout } from "./lib/pitchSubLines.js";
 import { SAY_PLAY_TIME, sayDivision, sayDivisionKey } from "./lib/sayEastGuide.js";
 import { downloadCanvas, paintFieldSheet, paintPlayTimeSheet } from "./lib/sharePaint.js";
@@ -1268,7 +1270,7 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
   }, [format, setup?.gk, setup?.playersOnField]);
 
   // Roster helpers exposed inside the Play Time tracker
-  const updatePlayer = (p) => setPlayers(prev => prev.map(x => x.id === p.id ? p : x));
+  const updatePlayer = (p) => setPlayers(prev => prev.map(x => x.id === p.id ? settleAvailability(x, p) : x));
   const handleAddPlayer = () => {
     if (!newName.trim() || !addPlayer) return;
     addPlayer({
@@ -1722,8 +1724,8 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
     if (wasOn) bankLeave(playerId);
     const updatedPlayers = players.map(p => {
       if (p.id !== playerId) return p;
-      if (mode === "out") return { ...p, out: true, injured: false, midGameInjury: false, injuredInQuarter: quarter, returnQuarter: null };
-      return { ...p, injured: true, out: false, midGameInjury: true, injuredInQuarter: quarter, returnQuarter: null };
+      if (mode === "out") return markOut(p, { midGameInjury: false, injuredInQuarter: quarter, returnQuarter: null });
+      return markInjured(p, { midGameInjury: true, injuredInQuarter: quarter, returnQuarter: null });
     });
     setPlayers(updatedPlayers);
     dropQueued(playerId);
@@ -2329,8 +2331,8 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
                   <div style={{fontSize:13, fontWeight:700, color:C.text, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap"}}>
                     #{p.number} {p.name}
                   </div>
-                  <div style={{fontSize:11, color:p.doneForToday ? C.muted : p.out ? "#e67e22" : "#e74c3c"}}>
-                    {p.doneForToday ? "Done for today" : p.out ? "Out" : `Injured ${abbr}${p.injuredInQuarter || quarter}`}
+                  <div style={{fontSize:11, color:showDoneForToday(p) ? C.muted : p.out ? "#e67e22" : "#e74c3c"}}>
+                    {showDoneForToday(p) ? "Done for today" : p.out ? "Out" : `Injured ${abbr}${p.injuredInQuarter || quarter}`}
                   </div>
                 </div>
                 <button type="button" onClick={() => restorePlayer(p.id, "top")} style={{
@@ -2713,8 +2715,8 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
                         {p.name} <span style={{color:C.muted,fontWeight:600}}>#{p.number}</span>
                       </button>
                       <div style={{display:"flex",alignItems:"center",gap:6,flexShrink:0}}>
-                        {p.doneForToday ? (
-                          <span style={{fontSize:9,fontWeight:800,color:C.muted,background:"rgba(255,255,255,0.08)",padding:"2px 6px",borderRadius:3}}>Done for today</span>
+                        {showDoneForToday(p) ? (
+                          <AvailabilityMark player={p} />
                         ) : isInjured ? (
                           <span style={{fontSize:9,fontWeight:800,color:"#e74c3c",background:"rgba(231,76,60,0.15)",padding:"2px 6px",borderRadius:3}}>INJ</span>
                         ) : isOut ? (
@@ -2746,7 +2748,7 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
                       <button onClick={()=>{
                         if (p.injured) restorePlayer(p.id);
                         else if (Object.keys(lineupsByQuarter).length > 0) markUnavailable(p.id, "injury");
-                        else setPlayers(prev=>prev.map(x=>x.id===p.id?{...x,injured:true,out:false}:x));
+                        else setPlayers(prev=>prev.map(x=>x.id===p.id?markInjured(x):x));
                       }}
                         style={{...tinyBtn, minHeight:44, minWidth:44,
                           color:isInjured?"#fff":"#e74c3c",
@@ -2755,7 +2757,7 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
                       <button onClick={()=>{
                         if (p.out) restorePlayer(p.id);
                         else if (Object.keys(lineupsByQuarter).length > 0) markUnavailable(p.id, "out");
-                        else setPlayers(prev=>prev.map(x=>x.id===p.id?{...x,out:true,injured:false}:x));
+                        else setPlayers(prev=>prev.map(x=>x.id===p.id?markOut(x):x));
                       }}
                         style={{...tinyBtn, minHeight:44, minWidth:44,
                           color:isOut?"#0a0d0f":"#e67e22",
@@ -3218,7 +3220,7 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
       {returnToast && (
         <div role="status" style={{
           position:"fixed", left:"50%", bottom:24, transform:"translateX(-50%)",
-          zIndex:70, maxWidth:360, width:"calc(100% - 32px)",
+          zIndex:250, maxWidth:360, width:"calc(100% - 32px)",
           background:"#141a12", color:C.text, border:`1px solid ${C.gold}`,
           borderRadius:12, padding:"12px 14px", fontSize:14, fontWeight:700,
           textAlign:"center", boxShadow:"0 8px 24px rgba(0,0,0,0.45)",
@@ -3459,18 +3461,7 @@ function PlayerRow({ player, onUpdate, onRemove }) {
             cursor:"pointer",fontSize:11,fontWeight:700,fontFamily:"inherit",
             background:"rgba(255,255,255,0.08)",color:C.text,
           }}>{expanded?"Hide":"Edit"}</button>
-          <button onClick={()=>onUpdate({...player,injured:!player.injured,out:false})} style={{
-            padding:"5px 10px",borderRadius:6,border:`1px solid ${player.injured?"#e74c3c":"rgba(255,255,255,0.15)"}`,
-            cursor:"pointer",fontSize:11,fontWeight:700,fontFamily:"inherit",
-            background:player.injured?"rgba(231,76,60,0.25)":"rgba(255,255,255,0.08)",
-            color:player.injured?"#e74c3c":C.muted,
-          }}>{player.injured?"Return":"Inj"}</button>
-          <button onClick={()=>onUpdate({...player,out:!player.out,injured:false})} style={{
-            padding:"5px 10px",borderRadius:6,border:`1px solid ${player.out?"#e67e22":"rgba(255,255,255,0.15)"}`,
-            cursor:"pointer",fontSize:11,fontWeight:700,fontFamily:"inherit",
-            background:player.out?"rgba(230,126,34,0.25)":"rgba(255,255,255,0.08)",
-            color:player.out?"#e67e22":C.muted,
-          }}>{player.out?"Active":"Out"}</button>
+          <RosterAvailabilityButtons player={player} onUpdate={onUpdate} />
           <button onClick={onRemove} style={{
             padding:"5px 10px",borderRadius:6,border:"1px solid rgba(192,57,43,0.4)",
             cursor:"pointer",fontSize:11,fontWeight:700,fontFamily:"inherit",
@@ -4380,7 +4371,7 @@ function CoachKitLoaded() {
     setPlayers(prev => [...prev, {...p, id:pid}]);
     setPlayerStats(prev => ({...prev, [pid]:{goals:0,assists:0,gamesPlayed:0}}));
   };
-  const updatePlayer = p  => setPlayers(prev => prev.map(x => x.id===p.id?p:x));
+  const updatePlayer = p  => setPlayers(prev => prev.map(x => x.id===p.id ? settleAvailability(x, p) : x));
   const removePlayer = id => {
     setPlayers(prev => prev.filter(x=>x.id!==id));
     setPlayerStats(prev => { const n={...prev}; delete n[id]; return n; });
