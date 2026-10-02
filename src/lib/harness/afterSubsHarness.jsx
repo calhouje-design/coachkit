@@ -1,8 +1,8 @@
 import { useState } from "react";
 import { createRoot } from "react-dom/client";
-import { TabGame } from "./App.jsx";
-import { scheduleHalfRotation } from "./lib/gameDay.js";
-import { resolveSetup } from "./lib/leagueRules.js";
+import { TabGame } from "../../App.jsx";
+import { scheduleHalfRotation } from "../gameDay.js";
+import { resolveSetup } from "../leagueRules.js";
 
 const slots = ["GK", "LD", "RD", "LM", "RM", "CF"];
 const players = ["Ann", "Bea", "Cal", "Dee", "Eve", "Fay", "Gia", "Hal"].map((name, index) => ({

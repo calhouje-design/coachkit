@@ -41,7 +41,7 @@ test("Start and After subs at 390px stay independent, and the share sheet shows 
   const errors = [];
   page.on("pageerror", error => errors.push(String(error)));
   try {
-    await page.goto(`${base}/after-subs.html`, { waitUntil: "networkidle" });
+    await page.goto(`${base}/src/lib/harness/after-subs.html`, { waitUntil: "networkidle" });
     const toggle = page.getByTestId("phase-toggle");
     await toggle.waitFor();
     const box = await toggle.boundingBox();
@@ -74,6 +74,57 @@ test("Start and After subs at 390px stay independent, and the share sheet shows 
     assert.equal(await sheet.getAttribute("data-dual"), "true");
     await page.getByTestId("open-print-preview").click();
     await page.getByTestId("print-preview").waitFor();
+    assert.equal(errors.length, 0, errors.join("\n"));
+    const preview = sheet.locator("canvas").first();
+    assert.equal(await preview.getAttribute("data-view"), "start");
+    assert.equal(await preview.getAttribute("data-focused"), "false");
+    const file = page.getByTestId("share-file");
+    assert.equal(await file.getAttribute("data-view"), "both");
+    assert.equal(await file.getAttribute("data-focused"), "false");
+    const previewWidth = await preview.evaluate(node => node.width);
+    const fileWidth = await file.evaluate(node => node.width);
+    assert.ok(previewWidth < fileWidth, `narrow preview ${previewWidth} should be narrower than the saved sheet ${fileWidth}`);
+  } finally {
+    await page.close();
+  }
+});
+
+async function touchSwipe(page, from, to) {
+  const session = await page.context().newCDPSession(page);
+  const point = (x, y) => ({ x: Math.round(x), y: Math.round(y) });
+  await session.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [point(from.x, from.y)] });
+  const steps = 8;
+  for (let step = 1; step <= steps; step += 1) {
+    const x = from.x + ((to.x - from.x) * step) / steps;
+    const y = from.y + ((to.y - from.y) * step) / steps;
+    await session.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [point(x, y)] });
+  }
+  await session.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+  await session.detach();
+}
+
+test("a touch swipe on the share canvas switches phase both ways", async () => {
+  const page = await browser.newPage({ viewport: { width: 390, height: 844 }, hasTouch: true });
+  const errors = [];
+  page.on("pageerror", error => errors.push(String(error)));
+  try {
+    await page.goto(`${base}/src/lib/harness/after-subs.html`, { waitUntil: "networkidle" });
+    await page.getByRole("button", { name: "Share lineup" }).click();
+    const modal = page.getByTestId("share-modal");
+    const sheet = modal.getByTestId("share-sheet");
+    await sheet.waitFor();
+    const canvas = sheet.locator("canvas");
+    await canvas.scrollIntoViewIfNeeded();
+    const box = await canvas.boundingBox();
+    const y = box.y + Math.min(80, box.height / 3);
+    const mid = box.x + box.width / 2;
+    assert.equal(await modal.getByTestId("phase-start").getAttribute("aria-checked"), "true");
+    await touchSwipe(page, { x: mid + 100, y }, { x: mid - 120, y });
+    assert.equal(await modal.getByTestId("phase-after").getAttribute("aria-checked"), "true");
+    assert.equal(await canvas.getAttribute("data-view"), "after");
+    await touchSwipe(page, { x: mid - 100, y }, { x: mid + 120, y });
+    assert.equal(await modal.getByTestId("phase-start").getAttribute("aria-checked"), "true");
+    assert.equal(await canvas.getAttribute("data-view"), "start");
     assert.equal(errors.length, 0, errors.join("\n"));
   } finally {
     await page.close();

@@ -78,26 +78,47 @@ export function PhaseToggle({ phase = "start", onChange }) {
   );
 }
 
-/** Horizontal swipe on empty field. A drag that starts on a player is left alone. */
+/** Horizontal swipe. A drag that starts on a player or control is left alone. */
 export function usePhaseSwipe(enabled, onSwipe) {
   const start = useRef(null);
+  const remember = (event) => {
+    const origin = start.current;
+    if (!origin || origin.id !== event.pointerId) return;
+    origin.lastX = event.clientX;
+    origin.lastY = event.clientY;
+  };
   const onPointerDown = (event) => {
     if (!enabled) return;
     if (event.target?.closest?.("[data-drop],button,a,input,textarea,select")) return;
-    start.current = { x: event.clientX, y: event.clientY, id: event.pointerId };
+    start.current = {
+      x: event.clientX,
+      y: event.clientY,
+      lastX: event.clientX,
+      lastY: event.clientY,
+      id: event.pointerId,
+    };
+    try {
+      event.currentTarget.setPointerCapture?.(event.pointerId);
+    } catch {
+      /* capture can fail if the pointer is already gone */
+    }
   };
   const finish = (event) => {
     const origin = start.current;
     if (!origin || origin.id !== event.pointerId) return;
     start.current = null;
     if (!enabled) return;
-    const dx = event.clientX - origin.x;
-    const dy = event.clientY - origin.y;
+    const endX = Number.isFinite(event.clientX) ? event.clientX : origin.lastX;
+    const endY = Number.isFinite(event.clientY) ? event.clientY : origin.lastY;
+    const dx = (endX === origin.x && endY === origin.y ? origin.lastX : endX) - origin.x;
+    const dy = (endX === origin.x && endY === origin.y ? origin.lastY : endY) - origin.y;
     if (Math.abs(dx) < 48 || Math.abs(dx) < Math.abs(dy) * 1.2) return;
     onSwipe?.(dx < 0 ? "after" : "start");
   };
-  const onPointerCancel = (event) => {
-    if (start.current && event.pointerId === start.current.id) start.current = null;
+  return {
+    onPointerDown,
+    onPointerMove: remember,
+    onPointerUp: finish,
+    onPointerCancel: finish,
   };
-  return { onPointerDown, onPointerUp: finish, onPointerCancel };
 }

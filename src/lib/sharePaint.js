@@ -254,12 +254,19 @@ function paintDualPeriod(ctx, x, y, w, h, panel, focus) {
   ctx.restore();
 }
 
-/** Sheet 1. One field panel per period. Sub mode with pairs shows Start and After subs side by side. */
-export function paintFieldSheet(canvas, { field, league, opponent, homeScore, awayScore, focus = null } = {}) {
+/**
+ * Sheet 1. One field panel per period.
+ * `view: "both"` draws Start and After subs side by side.
+ * `view: "start" | "after"` draws that phase alone, at the single-field size.
+ * `focus` draws the on-screen gold box and is left off the saved image.
+ */
+export function paintFieldSheet(canvas, { field, league, opponent, homeScore, awayScore, focus = null, view = "both" } = {}) {
   if (!canvas) return;
   const panels = (field?.quarters || []).length ? field.quarters : [{ quarter: 1, label: "Q1", starters: [], bench: [], pairs: [] }];
   const count = panels.length;
-  const dual = panels.some(panel => panel.after);
+  const hasAfter = panels.some(panel => panel.after);
+  const singlePhase = hasAfter && (view === "start" || view === "after");
+  const dual = hasAfter && !singlePhase;
   const cols = count === 3 ? 3 : count === 1 ? 1 : 2;
   const rows = Math.ceil(count / cols);
   const pad = 10;
@@ -294,7 +301,8 @@ export function paintFieldSheet(canvas, { field, league, opponent, homeScore, aw
   ctx.font = "11px Arial, sans-serif";
   const firstLabel = panels[0]?.label || `Q${panels[0]?.quarter || 1}`;
   const lastLabel = panels[panels.length - 1]?.label || firstLabel;
-  ctx.fillText(`${dual ? "Start and after subs" : "Field, bench, and sub lines"} · ${firstLabel}–${lastLabel}`, 50, 40);
+  const phaseTitle = singlePhase ? (view === "after" ? "After subs" : "Start") : (dual ? "Start and after subs" : "Field, bench, and sub lines");
+  ctx.fillText(`${phaseTitle} · ${firstLabel}–${lastLabel}`, 50, 40);
   ctx.textAlign = "right";
   ctx.fillStyle = "#e8a020";
   ctx.font = "bold 12px Arial, sans-serif";
@@ -316,9 +324,16 @@ export function paintFieldSheet(canvas, { field, league, opponent, homeScore, aw
     const row = Math.floor(index / cols);
     const px = pad + col * (cellW + pad);
     const py = header + pad + row * (cellH + pad);
-    if (panel.after) paintDualPeriod(ctx, px, py, cellW, cellH, panel, focus);
+    if (singlePhase && panel.after) {
+      const source = view === "after"
+        ? { ...panel.after, quarter: panel.quarter, label: panel.label || panel.after.label }
+        : panel;
+      paintQuarterPanel(ctx, px, py, cellW, cellH, source);
+    } else if (panel.after) paintDualPeriod(ctx, px, py, cellW, cellH, panel, focus);
     else paintQuarterPanel(ctx, px, py, cellW, cellH, panel);
   });
+  canvas.dataset.view = singlePhase ? view : "both";
+  canvas.dataset.focused = focus === "start" || focus === "after" ? "true" : "false";
 
   ctx.fillStyle = "#666";
   ctx.font = "bold 10px Arial, sans-serif";

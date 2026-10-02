@@ -1342,7 +1342,7 @@ export function TabGame({ format, league, players, setPlayers, addPlayer, remove
   }, [returnToast]);
   useEffect(() => {
     if (!phaseToast) return undefined;
-    const id = setTimeout(() => setPhaseToast(null), 4200);
+    const id = setTimeout(() => setPhaseToast(null), 2500);
     return () => clearTimeout(id);
   }, [phaseToast]);
   useEffect(() => { bankRef.current = minuteBank || {}; }, [minuteBank]);
@@ -3229,6 +3229,7 @@ export function TabGame({ format, league, players, setPlayers, addPlayer, remove
               ref={pitchWrapRef}
               data-phase={phase}
               onPointerDown={phaseSwipe.onPointerDown}
+              onPointerMove={phaseSwipe.onPointerMove}
               onPointerUp={phaseSwipe.onPointerUp}
               onPointerCancel={phaseSwipe.onPointerCancel}
               style={{position:"relative", zIndex:1, display:"flex", gap:6, alignItems:"stretch", touchAction: controlOn ? "pan-y" : "auto"}}
@@ -3509,23 +3510,43 @@ const sheetSaveBtn = {
   fontFamily: "inherit",
 };
 
-function SheetCanvases({ field, playTime, league, opponent, homeScore, awayScore, periodAbbrev = "Q", periodCount = 4, focus = null, showPrint = false }) {
+function useMaxWidth(max) {
+  const query = `(max-width: ${max}px)`;
+  const [matches, setMatches] = useState(() => typeof window !== "undefined" && window.matchMedia(query).matches);
+  useEffect(() => {
+    const media = window.matchMedia(query);
+    const apply = () => setMatches(media.matches);
+    apply();
+    media.addEventListener("change", apply);
+    return () => media.removeEventListener("change", apply);
+  }, [query]);
+  return matches;
+}
+
+function SheetCanvases({ field, playTime, league, opponent, homeScore, awayScore, periodAbbrev = "Q", periodCount = 4, focus = null, view = "both", showPrint = false }) {
   const fieldRef = useRef(null);
+  const fileRef = useRef(null);
   const playRef = useRef(null);
   const printRef = useRef(null);
   const dual = (field?.quarters || []).some(panel => panel.after);
+  const previewTitle = view === "after" ? "Sheet 1 · After subs" : view === "start" ? "Sheet 1 · Start" : (dual ? "Sheet 1 · Start and after subs" : "Sheet 1 · Field, bench, and sub lines");
   useEffect(() => {
-    if (fieldRef.current) paintFieldSheet(fieldRef.current, { field, league, opponent, homeScore, awayScore, focus });
+    if (fieldRef.current) paintFieldSheet(fieldRef.current, { field, league, opponent, homeScore, awayScore, focus: view === "both" ? focus : null, view });
+    if (fileRef.current) {
+      paintFieldSheet(fileRef.current, { field, league, opponent, homeScore, awayScore });
+      fileRef.current.style.cssText = "position:absolute;width:0;height:0;opacity:0;pointer-events:none;";
+    }
     if (printRef.current) paintFieldSheet(printRef.current, { field, league, opponent, homeScore, awayScore });
     if (playRef.current) paintPlayTimeSheet(playRef.current, { playTime, league });
-  }, [field, playTime, league, opponent, homeScore, awayScore, focus, showPrint]);
+  }, [field, playTime, league, opponent, homeScore, awayScore, focus, view, showPrint]);
   return (
     <div>
-      <div style={{fontSize:12,fontWeight:800,color:"#e8a020",marginBottom:6}}>{dual ? "Sheet 1 · Start and after subs" : "Sheet 1 · Field, bench, and sub lines"}</div>
-      <div data-testid="share-sheet" data-dual={dual ? "true" : "false"} style={{borderRadius:8,overflow:"hidden",marginBottom:8,border:"1px solid rgba(255,255,255,0.08)",background:"#0c1409"}}>
-        <canvas ref={fieldRef} style={{width:"100%",height:"auto",display:"block"}} />
+      <div style={{fontSize:12,fontWeight:800,color:"#e8a020",marginBottom:6}}>{previewTitle}</div>
+      <div data-testid="share-sheet" data-dual={dual ? "true" : "false"} data-preview={view} style={{borderRadius:8,overflow:"hidden",marginBottom:8,border:"1px solid rgba(255,255,255,0.08)",background:"#0c1409",touchAction:dual ? "pan-y" : "auto"}}>
+        <canvas ref={fieldRef} style={{width:"100%",height:"auto",display:"block",touchAction:dual ? "pan-y" : "auto"}} />
       </div>
-      <button type="button" onClick={() => downloadCanvas(fieldRef.current, `CoachKit_Field_${periodAbbrev}1-${periodAbbrev}${periodCount}.png`)} style={{...sheetSaveBtn, width:"100%", marginBottom:16}}>
+      <canvas ref={fileRef} data-testid="share-file" aria-hidden="true" />
+      <button type="button" onClick={() => downloadCanvas(fileRef.current, `CoachKit_Field_${periodAbbrev}1-${periodAbbrev}${periodCount}.png`)} style={{...sheetSaveBtn, width:"100%", marginBottom:16}}>
         Save field image
       </button>
       {showPrint && (
@@ -3561,12 +3582,14 @@ function ShareLineupModal({ players, lineupsByQuarter, pairPlan, afterSubs, star
     [players, lineupsByQuarter, segments, credit, minQ, quarters, periodAbbrev],
   );
   const dual = (field?.quarters || []).some(panel => panel.after);
+  const narrow = useMaxWidth(479);
+  const preview = dual && narrow ? focus : "both";
   const swipe = usePhaseSwipe(dual, setFocus);
   return (
     <div style={{position:"fixed",inset:0,zIndex:9999,background:"rgba(0,0,0,0.88)",
       display:"flex",alignItems:"center",justifyContent:"center",padding:16}}
       onClick={onClose}>
-      <div style={{background:"#141a12",borderRadius:16,width:"100%",maxWidth:560,
+      <div data-testid="share-modal" style={{background:"#141a12",borderRadius:16,width:"100%",maxWidth:560,
         border:"1px solid rgba(255,255,255,0.08)",overflow:"hidden",maxHeight:"92vh",display:"flex",flexDirection:"column"}}
         onClick={e => e.stopPropagation()}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",
@@ -3578,14 +3601,17 @@ function ShareLineupModal({ players, lineupsByQuarter, pairPlan, afterSubs, star
           }}>Close</button>
         </div>
         <div
-          style={{padding:"14px 16px",overflow:"auto"}}
+          style={{padding:"14px 16px",overflow:"auto",touchAction:dual ? "pan-y" : "auto"}}
           onPointerDown={swipe.onPointerDown}
+          onPointerMove={swipe.onPointerMove}
           onPointerUp={swipe.onPointerUp}
           onPointerCancel={swipe.onPointerCancel}
         >
           <div style={{fontSize:11,color:"#7a7570",marginBottom:12,lineHeight:1.5}}>
             {dual
-              ? "Each period shows Start, with the sub lines, and After subs beside it. The saved image and print include both. Swipe the sheet to move the highlight."
+              ? (narrow
+                ? "The preview shows one phase at a time. Swipe the sheet to switch. The saved image and print include Start and After subs side by side."
+                : "Each period shows Start, with the sub lines, and After subs beside it. Swipe to move the highlight. The saved image and print include both, without the highlight.")
               : "Sheet 1 is the field for every period, with the bench and dotted lines to who they sub for. Sheet 2 is the green play-time bars. Save strategy to game day keeps both in the Season log."}
           </div>
           {dual && <PhaseToggle phase={focus} onChange={setFocus} />}
@@ -3598,7 +3624,8 @@ function ShareLineupModal({ players, lineupsByQuarter, pairPlan, afterSubs, star
             awayScore={awayScore}
             periodAbbrev={periodAbbrev}
             periodCount={quarters.length || 4}
-            focus={dual ? focus : null}
+            focus={dual && !narrow ? focus : null}
+            view={preview}
             showPrint={showPrint}
           />
           {dual && (
