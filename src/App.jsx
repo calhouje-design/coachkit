@@ -54,6 +54,19 @@ import {
   playerQuarterPresence,
   planAvailability,
 } from "./lib/gameDay.js";
+import {
+  applyPhaseDrag,
+  clearOverride,
+  clearSnapshotsFrom,
+  decorateShareSheet,
+  lineupFromSnapshot,
+  phaseControlVisible,
+  reconcileAfterSubsMap,
+  replanPhaseState,
+  runAfterSubs,
+  viewAfterSubs,
+} from "./lib/afterSubs.js";
+import { PhaseToggle, usePhaseSwipe } from "./components/PhaseToggle.jsx";
 import { FORMATION_TEMPLATES, clampPeriod, formationNameForPeriod, preservePlayedBase, reapplyBase, reshapeLineup, withPeriodOverride, withoutPeriodOverride, normalizeFormationOverrides } from "./lib/formations.js";
 import { CIRCLE_DIAMETER, LABEL_GAP, LABEL_LETTER_SPACING_EM, labelProbeCss, layoutFieldPlayers, labelWidth, roundLabelWidth } from "./lib/fieldLayout.js";
 import { commitReturn, finishedQuarterList, quarterIsLive } from "./lib/returnDialog.js";
@@ -692,7 +705,7 @@ function usePitchDrag(onResolve) {
   return { pointerDown, pointerMove, pointerUp, ghost, hover, activeSource };
 }
 
-function SoccerField({ lineup, onTap, selectedIdx, quarter, periodAbbrev = "Q", drag, hoverToken, activeSource, onLayout }) {
+function SoccerField({ lineup, onTap, selectedIdx, quarter, periodAbbrev = "Q", drag, hoverToken, activeSource, onLayout, lockGk = false, readOnly = false, phaseLabel = "" }) {
   const rootRef = useRef(null);
   const slots = lineup?.starters || [];
   const slotKey = slots.map(slot => `${slot.pos}:${slot.player?.id || ""}:${slot.player?.name || ""}`).join("|");
@@ -805,17 +818,27 @@ function SoccerField({ lineup, onTap, selectedIdx, quarter, periodAbbrev = "Q", 
         const isSelected = selectedIdx === idx;
         const isSource = activeSource?.type === "field" && activeSource.idx === idx;
         const fullName = slot.player?.name || "";
+        const gkFixed = lockGk && isGkPosition(pos);
+        const frozen = readOnly || gkFixed;
+        const phaseBit = phaseLabel ? `, ${phaseLabel}` : "";
+        const aria = fullName
+          ? `${fullName}, ${pos}${phaseBit}${gkFixed ? ", goalkeeper, fixed" : ""}`
+          : `${pos}${phaseBit}`;
 
         return (
           <div key={idx}
             data-drop={`field:${idx}`}
-            aria-label={fullName ? `${fullName}, ${pos}` : pos}
+            data-testid={`field-player-${idx}`}
+            data-player-id={slot.player?.id || ""}
+            aria-label={aria}
             onPointerDown={e => {
-              if (!slot.player) return;
+              if (!slot.player || frozen) return;
               drag?.pointerDown(e, { type: "field", idx }, `#${slot.player.number}`);
             }}
             onPointerMove={drag?.pointerMove}
             onPointerUp={e => {
+              if (readOnly) return;
+              if (gkFixed) { onTap?.(idx); return; }
               if (drag?.pointerUp(e) === "tap") onTap?.(idx);
             }}
             onPointerCancel={e => { drag?.pointerUp(e); }}
@@ -825,7 +848,7 @@ function SoccerField({ lineup, onTap, selectedIdx, quarter, periodAbbrev = "Q", 
               top: spot.y - CIRCLE_DIAMETER / 2,
               transform: "translateX(-50%)",
               textAlign:"center", width: CIRCLE_DIAMETER,
-              cursor: slot.player ? "grab" : "default",
+              cursor: slot.player && !frozen ? "grab" : "default",
               zIndex: isSelected || isHovered || isSource ? 12 : 6,
               touchAction: "none",
               opacity: isSource ? 0.55 : 1,
@@ -1230,7 +1253,7 @@ function shapesFor(format, gk, slots) {
   return [{ name: "Standard", label: "Standard", desc: "Default shape for this player count.", slots }];
 }
 
-function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer, lineupsByQuarter, setLineupsByQuarter, storagePrefix = "ck_guest_", setGames, subMode = true, autoRegen = true, quarterMinutes = null, gameDay, setGameDay, setup }) {
+export function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer, lineupsByQuarter, setLineupsByQuarter, storagePrefix = "ck_guest_", setGames, subMode = true, autoRegen = true, quarterMinutes = null, gameDay, setGameDay, setup }) {
   const [quarter,       setQuarterRaw]    = useState(1);
   const [injuryAlerts,  setInjuryAlerts]  = useState([]);
   const [justRegenned,  setJustRegenned]  = useState(false);
@@ -1248,6 +1271,8 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
   const [fairInfo, setFairInfo] = useState(null);
   const [returnAsk, setReturnAsk] = useState(null);
   const [returnToast, setReturnToast] = useState(null);
+  const [phaseToast, setPhaseToast] = useState(null);
+  const [fieldPhase, setFieldPhase] = useState("start");
   const [scrambleNote, setScrambleNote] = useState(null);
   const [planNote, setPlanNote] = useState(null);
   const recentPlanKeys = useRef([]);
@@ -1259,6 +1284,7 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
   const [stintStart, setStintStart] = useState({});
   const [shapeOnly, setShapeOnly] = useState(false);
   const applyDragRef = useRef(() => {});
+  const phaseRef = useRef({ phase: "start", ran: false, pairs: [], override: null, readOnly: false });
   const drag = usePitchDrag(result => applyDragRef.current(result));
 
   // When the player count or goalkeeper flag changes, reset to a valid shape
@@ -1294,6 +1320,8 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
   const [pairPlan, setPairPlan] = [live.pairPlan, bindField(setGameDay, "pairPlan", normalizeGameDay)];
   const [subQueue, setSubQueue] = [live.subQueue, bindField(setGameDay, "subQueue", normalizeGameDay)];
   const [realPeriodEvents, setRealPeriodEvents] = [live.realPeriodEvents, bindField(setGameDay, "realPeriodEvents", normalizeGameDay)];
+  const [afterSubs, setAfterSubs] = [live.afterSubs, bindField(setGameDay, "afterSubs", normalizeGameDay)];
+  const [startSnapshots, setStartSnapshots] = [live.startSnapshots, bindField(setGameDay, "startSnapshots", normalizeGameDay)];
   const [chartFocusId, setChartFocusId] = useState(null);
   const [clockSec, setClockSec] = usePersistedState(storagePrefix+"clockSec", 0);
   const [clockByPeriod, setClockByPeriod] = usePersistedState(storagePrefix+"clockByPeriod", {});
@@ -1312,6 +1340,11 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
     const id = setTimeout(() => setReturnToast(null), 4200);
     return () => clearTimeout(id);
   }, [returnToast]);
+  useEffect(() => {
+    if (!phaseToast) return undefined;
+    const id = setTimeout(() => setPhaseToast(null), 2500);
+    return () => clearTimeout(id);
+  }, [phaseToast]);
   useEffect(() => { bankRef.current = minuteBank || {}; }, [minuteBank]);
   useEffect(() => { quarterRef.current = quarter; }, [quarter]);
   useEffect(() => { lineupsRef.current = lineupsByQuarter; }, [lineupsByQuarter]);
@@ -1376,7 +1409,7 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
     ? players.filter(p => !p.injured && !p.out && !p.midGameInjury && halvesFor(p.id) < minHalves)
     : [];
 
-  useEffect(() => { setSwapSel(null); }, [quarter]);
+  useEffect(() => { setSwapSel(null); }, [quarter, fieldPhase]);
 
   const writeBank = (bank) => {
     bankRef.current = bank || {};
@@ -1602,6 +1635,20 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
       result,
       { fromQuarter: fromQ, resetClock: decision.resetClock, livePeriod: decision.pinGoalkeeper },
     );
+    const applyReplanPhase = (nextLineups) => {
+      const pairsByQuarter = {};
+      for (let q = fromQ; q <= totalQuarters; q++) pairsByQuarter[q] = pairsForQuarter(q, nextLineups);
+      const phased = replanPhaseState(afterSubs, {
+        fromQuarter: fromQ,
+        live: decision.pinGoalkeeper,
+        total: totalQuarters,
+        lineups: nextLineups,
+        pairsByQuarter,
+      });
+      setAfterSubs(phased.afterSubs);
+      setStartSnapshots(prev => clearSnapshotsFrom(prev, fromQ, totalQuarters));
+      if (phased.reset) setPhaseToast("After-subs positions reset.");
+    };
     if (subMode) {
       const chosen = firstDifferentPlan({
         currentLineups: lineupsByQuarter,
@@ -1631,6 +1678,7 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
       const storedHalfSegments = savedSubSegments(planned);
       setRealPeriodEvents(keptRealEvents);
       setSubSegments(storedHalfSegments);
+      applyReplanPhase(planned.lineups);
       notePlanResult(planned.lineups, players, creditForPlan, storedHalfSegments);
       if (!decision.resetClock && fromQ === quarter && running) {
         const next = {};
@@ -1674,6 +1722,7 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
     const storedSegments = savedFullSegments(result);
     setRealPeriodEvents(keptRealEvents);
     setSubSegments(storedSegments);
+    applyReplanPhase(result);
     notePlanResult(result, players, creditForPlan, storedSegments);
     if (!decision.resetClock && fromQ === quarter && running) {
       const next = {};
@@ -1941,8 +1990,48 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
     setQueueNote(null);
   };
 
+  const commitAfterMove = (idxA, idxB) => {
+    const viewing = phaseRef.current;
+    const decision = applyPhaseDrag({
+      phase: "after",
+      ran: viewing.ran,
+      start: currentLineup,
+      pairs: viewing.pairs,
+      override: viewing.override,
+      a: idxA,
+      b: idxB,
+    });
+    if (decision.type === "live-positions") {
+      handleSwap(idxA, idxB);
+      return;
+    }
+    if (!decision.ok) {
+      refuseGoalkeeper();
+      return;
+    }
+    setAfterSubs(prev => ({ ...(prev || {}), [String(quarter)]: decision.override }));
+    setSwapSel(null);
+    setFairWarn(null);
+  };
+
   const onFieldTap = (idx) => {
+    const viewing = phaseRef.current;
     if (!currentLineup) return;
+    if (viewing.readOnly) {
+      setSwapSel(null);
+      setQueueNote(`This is how ${abbr}${quarter} started. Switch to After subs to move players.`);
+      return;
+    }
+    if (viewing.phase === "after") {
+      if (isGkPosition(currentLineup.starters[idx]?.pos)) { refuseGoalkeeper(); return; }
+      if (swapSel?.type === "field") {
+        if (swapSel.idx === idx) { setSwapSel(null); return; }
+        commitAfterMove(swapSel.idx, idx);
+        return;
+      }
+      setSwapSel({ type: "field", idx });
+      return;
+    }
     if (!subMode && planSub) setPlanSub(false);
     if (subMode && planSub) {
       const player = currentLineup.starters[idx]?.player;
@@ -1974,6 +2063,11 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
   };
 
   const onBenchTap = (playerId) => {
+    if (phaseRef.current.phase === "after") {
+      setSwapSel(null);
+      setQueueNote("Switch to Start to change who comes on. After subs only rearranges the field.");
+      return;
+    }
     if (!subMode) {
       if (swapSel?.type === "field") {
         swapBenchAndField(swapSel.idx, playerId);
@@ -2018,7 +2112,12 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
   };
 
   const applyDrag = (result) => {
-    if (!result || result.action === "none" || !currentLineup) return;
+    const viewing = phaseRef.current;
+    if (!result || result.action === "none" || !currentLineup || viewing.readOnly) return;
+    if (viewing.phase === "after") {
+      if (result.action === "swap-field") commitAfterMove(result.a, result.b);
+      return;
+    }
     if (result.action === "swap-field") { handleSwap(result.a, result.b); return; }
     if (result.action === "swap-bench") { swapBenchAndField(result.fieldIdx, result.playerId); return; }
     if (result.action === "bench-zone") {
@@ -2103,19 +2202,56 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
     return [...on].sort((a, b) => (minutesById[b.id] || 0) - (minutesById[a.id] || 0) || String(a.name || "").localeCompare(String(b.name || "")))[0];
   };
   const playerName = (id) => players.find(p => p.id === id)?.name || "Player";
-  const plannedNext = quarter < totalQuarters ? lineupsByQuarter[quarter + 1] : null;
-  const benchPairs = currentLineup
-    ? planBenchRotation(currentLineup, { minutesById, nextLineup: plannedNext })
-    : [];
-  const subPairs = pairsForDisplay(benchPairs, pairPlan?.[quarter], currentLineup);
-  const shownPairs = subMode ? subPairs : [];
+  const pairsForQuarter = (q, lineups = lineupsByQuarter) => {
+    const lineup = lineups?.[q] || lineups?.[String(q)];
+    if (!subMode || !lineup) return [];
+    const next = q < totalQuarters ? (lineups?.[q + 1] || lineups?.[String(q + 1)] || null) : null;
+    const auto = planBenchRotation(lineup, { minutesById, nextLineup: next });
+    return pairsForDisplay(auto, pairPlan?.[q] || pairPlan?.[String(q)], lineup);
+  };
+  const shownPairs = pairsForQuarter(quarter);
+  const snapshot = startSnapshots?.[quarter] || startSnapshots?.[String(quarter)] || null;
+  const ran = !!(snapshot?.starters?.length);
+  const periodOverride = afterSubs?.[String(quarter)] || afterSubs?.[quarter] || null;
+  const controlOn = phaseControlVisible({
+    subMode,
+    pairs: ran ? (snapshot?.pairs || []) : shownPairs,
+    bench: ran ? (snapshot?.bench || []) : (currentLineup?.bench || []),
+    snapshot: ran ? snapshot : null,
+  });
+  const phase = controlOn && fieldPhase === "after" ? "after" : "start";
+  const afterView = phase === "after" && !ran && currentLineup
+    ? viewAfterSubs(currentLineup, shownPairs, periodOverride)
+    : null;
+  const displayLineup = phase === "after"
+    ? (ran ? currentLineup : afterView?.lineup || currentLineup)
+    : (ran ? lineupFromSnapshot(snapshot, players) : currentLineup);
+  const linePairs = phase === "start" ? (ran ? (snapshot?.pairs || []) : shownPairs) : [];
+  const readOnlyStart = phase === "start" && ran;
+  phaseRef.current = { phase, ran, pairs: shownPairs, override: periodOverride, readOnly: readOnlyStart };
+  const pairsKey = periodList.map(q => pairsForQuarter(q).map(pair => `${pair.inId}>${pair.outId}`).join(",")).join(";");
+  const lineupKeyAll = periodList.map(q => {
+    const lineup = lineupsByQuarter[q];
+    return (lineup?.starters || []).map(slot => `${slot.pos}:${slot.player?.id || ""}`).join(",");
+  }).join("|");
+  useEffect(() => {
+    if (!subMode) return;
+    const reconciled = reconcileAfterSubsMap(afterSubs, periodList, q => ({
+      lineup: lineupsByQuarter[q],
+      pairs: pairsForQuarter(q),
+    }));
+    if (reconciled.reset) setPhaseToast("After-subs positions reset.");
+    if (reconciled.next !== afterSubs) setAfterSubs(reconciled.next);
+  }, [subMode, pairsKey, lineupKeyAll]);
+  const phaseSwipe = usePhaseSwipe(controlOn, setFieldPhase);
   const lineupKey = [
-    (currentLineup?.starters || []).map(slot => `${slot.pos}:${slot.player?.id || ""}`).join(","),
-    (currentLineup?.bench || []).map(player => player?.id || "").join(","),
+    (displayLineup?.starters || []).map(slot => `${slot.pos}:${slot.player?.id || ""}`).join(","),
+    (displayLineup?.bench || []).map(player => player?.id || "").join(","),
+    phase,
   ].join("#");
   const pitchWrapRef = useRef(null);
   const [fieldLayout, setFieldLayout] = useState("");
-  const subLines = usePitchSubLines(pitchWrapRef, { shownPairs, lineupKey, quarter, swapSel, fieldLayout });
+  const subLines = usePitchSubLines(pitchWrapRef, { shownPairs: linePairs, lineupKey, quarter, swapSel, fieldLayout });
   const [headerOffset, setHeaderOffset] = useState(120);
   useEffect(() => {
     const el = document.getElementById("ck-app-header");
@@ -2149,7 +2285,16 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
       return;
     }
     const live = running || (clockRef.current || 0) > 0;
-    const rotated = applyBenchRotation(currentLineup, shownPairs);
+    const viewing = phaseRef.current;
+    let rotated;
+    if (!viewing.ran) {
+      const applied = runAfterSubs({ start: currentLineup, pairs: shownPairs, override: viewing.override });
+      rotated = applied.lineup;
+      setStartSnapshots(prev => ({ ...(prev || {}), [String(quarter)]: applied.snapshot }));
+      setAfterSubs(prev => clearOverride(prev, quarter));
+    } else {
+      rotated = applyBenchRotation(currentLineup, shownPairs);
+    }
     let credit = appearanceCredit || {};
     let segments = subSegments || {};
     shownPairs.forEach(pair => {
@@ -2285,7 +2430,14 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
       lineups: lineupsByQuarter,
       savedAt: new Date().toISOString(),
       sheets: {
-        field: shareFieldSheet({ ...sheetInput, quarters: periodList, periodAbbrev: abbr }),
+        field: decorateShareSheet(shareFieldSheet({ ...sheetInput, quarters: periodList, periodAbbrev: abbr }), {
+          lineups: lineupsByQuarter,
+          afterSubs,
+          snapshots: startSnapshots,
+          subMode,
+          periodAbbrev: abbr,
+          roster: players,
+        }),
         playTime: sharePlayTimeSheet({ ...sheetInput, quarters: periodList, periodAbbrev: abbr }),
       },
     });
@@ -3016,7 +3168,7 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
               <Btn primary disabled={!gate.ok} onClick={() => planWholeGame(1)}>Plan full game</Btn>
             </div>
           )}
-          <div style={{position:"relative",userSelect:"none"}}>
+          <div data-testid="field-stage" style={{position:"relative",userSelect:"none"}}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6,padding:"0 2px"}}>
               <button onClick={()=>setQuarter(q=>Math.max(1,q-1))} disabled={quarter===1} style={{
                 background:"none",border:"none",cursor:quarter===1?"default":"pointer",
@@ -3036,9 +3188,34 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
                 <Btn sm secondary onClick={scrambleMembership}>Redraw who plays {abbr}{quarter}</Btn>
               </div>
             )}
+            {controlOn && (
+              <>
+                <PhaseToggle phase={phase} onChange={setFieldPhase} />
+                {phase === "after" && (
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,margin:"-2px 2px 8px",flexWrap:"wrap"}}>
+                    <div data-testid="phase-caption" style={{fontSize:12,color:C.text,fontWeight:700}}>
+                      After subs · {abbr}{quarter} 2nd half
+                    </div>
+                    {periodOverride && !ran && (
+                      <button
+                        type="button"
+                        data-testid="reset-after-subs"
+                        onClick={() => setAfterSubs(prev => clearOverride(prev, quarter))}
+                        style={{
+                          background:"none", border:"none", padding:"8px 0", minHeight:44,
+                          color:C.gold, fontWeight:800, fontSize:13, cursor:"pointer", fontFamily:"inherit",
+                        }}
+                      >Reset to auto</button>
+                    )}
+                  </div>
+                )}
+              </>
+            )}
             {swapSel && (
               <div style={{fontSize:12,color:C.text,textAlign:"center",marginBottom:6,lineHeight:1.4}}>
-                {planSub && swapSel.type==="field"
+                {phase === "after" && swapSel.type==="field"
+                  ? `${playerName(displayLineup?.starters?.[swapSel.idx]?.player?.id)} selected. Tap who they swap with.`
+                  : planSub && swapSel.type==="field"
                   ? `${playerName(swapSel.playerId)} off. Tap who comes on for ${playerName(swapSel.playerId)}.`
                   : swapSel.type==="field"
                     ? `${playerName(currentLineup?.starters?.[swapSel.idx]?.player?.id)} selected. Tap who they swap with.`
@@ -3048,13 +3225,21 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
             {scrambleNote && (
               <div style={{fontSize:11,color:C.muted,textAlign:"center",marginBottom:6,lineHeight:1.4}}>{scrambleNote}</div>
             )}
-            <div ref={pitchWrapRef} style={{position:"relative", zIndex:1, display:"flex", gap:6, alignItems:"stretch"}}>
-              {currentLineup && (
+            <div
+              ref={pitchWrapRef}
+              data-phase={phase}
+              onPointerDown={phaseSwipe.onPointerDown}
+              onPointerMove={phaseSwipe.onPointerMove}
+              onPointerUp={phaseSwipe.onPointerUp}
+              onPointerCancel={phaseSwipe.onPointerCancel}
+              style={{position:"relative", zIndex:1, display:"flex", gap:6, alignItems:"stretch", touchAction: controlOn ? "pan-y" : "auto"}}
+            >
+              {displayLineup && (
                 <div
-                  data-drop="bench-zone"
+                  data-drop={phase === "after" ? undefined : "bench-zone"}
                   style={{
                     width:76, flexShrink:0, display:"flex", flexDirection:"column",
-                    justifyContent:(currentLineup.bench||[]).length ? "space-evenly" : "center",
+                    justifyContent:(displayLineup.bench||[]).length ? "space-evenly" : "center",
                     gap:6, padding:"8px 4px", borderRadius:10, position:"relative", zIndex:5,
                     border: drag.hover==="bench-zone" ? "2px solid #2ecc71" : "1px dashed rgba(255,255,255,0.22)",
                     background: drag.hover==="bench-zone" ? "rgba(46,204,113,0.14)" : "rgba(10,13,15,0.55)",
@@ -3063,6 +3248,10 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
                 >
                   <button
                     onClick={() => {
+                      if (readOnlyStart) {
+                        setQueueNote(`This is how ${abbr}${quarter} started. Switch to After subs to move players.`);
+                        return;
+                      }
                       if (!subMode) {
                         setQueueNote(`Full ${noun}. Turn on sub mode to run the listed swaps.`);
                         return;
@@ -3094,27 +3283,33 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
                     </div>
                   </button>
                   <div style={{fontSize:9, color:C.muted, fontWeight:800, textAlign:"center", letterSpacing:"0.06em"}}>BENCH</div>
-                  {(currentLineup.bench||[]).length === 0 && (
+                  {(displayLineup.bench||[]).length === 0 && (
                     <div style={{fontSize:10, color:C.muted, textAlign:"center", lineHeight:1.3}}>All on</div>
                   )}
-                  {(currentLineup.bench||[]).map(p => {
+                  {(displayLineup.bench||[]).map(p => {
                     const selected = swapSel?.type==="bench" && swapSel.playerId===p.id;
-                    const hovered = drag.hover===`bench:${p.id}`;
-                    const sourced = drag.activeSource?.type==="bench" && drag.activeSource.playerId===p.id;
-                    const partner = shownPairs.find(pair => pair.inId === p.id);
+                    const hovered = phase !== "after" && drag.hover===`bench:${p.id}`;
+                    const sourced = phase !== "after" && drag.activeSource?.type==="bench" && drag.activeSource.playerId===p.id;
+                    const partner = linePairs.find(pair => pair.inId === p.id);
                     return (
                       <div key={p.id}
-                        data-drop={`bench:${p.id}`}
-                        onPointerDown={e => drag.pointerDown(e, { type:"bench", playerId:p.id }, `#${p.number}`)}
+                        data-drop={phase === "after" ? undefined : `bench:${p.id}`}
+                        onPointerDown={e => {
+                          if (phase === "after") return;
+                          drag.pointerDown(e, { type:"bench", playerId:p.id }, `#${p.number}`);
+                        }}
                         onPointerMove={drag.pointerMove}
-                        onPointerUp={e => { if (drag.pointerUp(e) === "tap") onBenchTap(p.id); }}
+                        onPointerUp={e => {
+                          if (phase === "after") { onBenchTap(p.id); return; }
+                          if (drag.pointerUp(e) === "tap") onBenchTap(p.id);
+                        }}
                         onPointerCancel={e => { drag.pointerUp(e); }}
                         style={{
                           minHeight:48, borderRadius:8, padding:"6px 4px",
                           border: hovered || sourced ? "2px solid #2ecc71" : selected ? "2px solid #2ecc71" : `1px solid ${C.border}`,
                           boxShadow: hovered ? "0 0 0 4px rgba(46,204,113,0.45)" : "none",
                           background: selected ? "rgba(46,204,113,0.16)" : "rgba(0,0,0,0.25)",
-                          color:C.text, textAlign:"center", cursor:"grab", touchAction:"none",
+                          color:C.text, textAlign:"center", cursor: phase === "after" ? "default" : "grab", touchAction:"none",
                           opacity: sourced ? 0.55 : 1,
                         }}
                       >
@@ -3147,7 +3342,7 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
               )}
               <div style={{flex:"1 1 auto", minWidth:0, position:"relative"}}>
                 <SoccerField
-                  lineup={currentLineup}
+                  lineup={displayLineup}
                   onTap={onFieldTap}
                   selectedIdx={swapSel?.type==="field" ? swapSel.idx : null}
                   quarter={quarter}
@@ -3156,6 +3351,9 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
                   hoverToken={drag.hover}
                   activeSource={drag.activeSource}
                   onLayout={setFieldLayout}
+                  lockGk={phase === "after" || gkLocked()}
+                  readOnly={readOnlyStart}
+                  phaseLabel={controlOn ? (phase === "after" ? "after subs" : "start") : ""}
                 />
               </div>
               {subLines.length > 0 && (
@@ -3169,9 +3367,13 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
                 </svg>
               )}
             </div>
-            {currentLineup && (
+            {displayLineup && (
               <div style={{fontSize:11, color:C.muted, lineHeight:1.4, marginTop:8, textAlign:"center"}}>
-                {subMode
+                {phase === "after"
+                  ? "Drag two field players to rearrange this half only. The goalkeeper stays in goal. Switch to Start to change who comes on."
+                  : readOnlyStart
+                  ? `This is how ${abbr}${quarter} started.`
+                  : subMode
                   ? "SUB runs the listed swaps. Tap a bench player, then a field player, to move a line. A green ring means release will swap."
                   : `Full ${noun}. SUB stays off until sub mode is on. Drag still swaps a player.`}
               </div>
@@ -3227,6 +3429,15 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
           textAlign:"center", boxShadow:"0 8px 24px rgba(0,0,0,0.45)",
         }}>{returnToast}</div>
       )}
+      {phaseToast && (
+        <div role="status" style={{
+          position:"fixed", left:"50%", bottom: returnToast ? 84 : 24, transform:"translateX(-50%)",
+          zIndex:150, maxWidth:360, width:"calc(100% - 32px)",
+          background:"#141a12", color:C.text, border:`1px solid ${C.gold}`,
+          borderRadius:12, padding:"12px 14px", fontSize:14, fontWeight:700,
+          textAlign:"center", boxShadow:"0 8px 24px rgba(0,0,0,0.45)",
+        }}>{phaseToast}</div>
+      )}
       {drag.ghost && (
         <div style={{
           position:"fixed", left:drag.ghost.x, top:drag.ghost.y, transform:"translate(-50%,-50%)",
@@ -3266,6 +3477,8 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
           players={players}
           lineupsByQuarter={lineupsByQuarter}
           pairPlan={pairPlan}
+          afterSubs={afterSubs}
+          startSnapshots={startSnapshots}
           subMode={subMode}
           segments={subSegments}
           credit={appearanceCredit}
@@ -3297,22 +3510,52 @@ const sheetSaveBtn = {
   fontFamily: "inherit",
 };
 
-function SheetCanvases({ field, playTime, league, opponent, homeScore, awayScore, periodAbbrev = "Q", periodCount = 4 }) {
-  const fieldRef = useRef(null);
-  const playRef = useRef(null);
+function useMaxWidth(max) {
+  const query = `(max-width: ${max}px)`;
+  const [matches, setMatches] = useState(() => typeof window !== "undefined" && window.matchMedia(query).matches);
   useEffect(() => {
-    if (fieldRef.current) paintFieldSheet(fieldRef.current, { field, league, opponent, homeScore, awayScore });
+    const media = window.matchMedia(query);
+    const apply = () => setMatches(media.matches);
+    apply();
+    media.addEventListener("change", apply);
+    return () => media.removeEventListener("change", apply);
+  }, [query]);
+  return matches;
+}
+
+function SheetCanvases({ field, playTime, league, opponent, homeScore, awayScore, periodAbbrev = "Q", periodCount = 4, focus = null, view = "both", showPrint = false }) {
+  const fieldRef = useRef(null);
+  const fileRef = useRef(null);
+  const playRef = useRef(null);
+  const printRef = useRef(null);
+  const dual = (field?.quarters || []).some(panel => panel.after);
+  const previewTitle = view === "after" ? "Sheet 1 · After subs" : view === "start" ? "Sheet 1 · Start" : (dual ? "Sheet 1 · Start and after subs" : "Sheet 1 · Field, bench, and sub lines");
+  useEffect(() => {
+    if (fieldRef.current) paintFieldSheet(fieldRef.current, { field, league, opponent, homeScore, awayScore, focus: view === "both" ? focus : null, view });
+    if (fileRef.current) {
+      paintFieldSheet(fileRef.current, { field, league, opponent, homeScore, awayScore });
+      fileRef.current.style.cssText = "position:absolute;width:0;height:0;opacity:0;pointer-events:none;";
+    }
+    if (printRef.current) paintFieldSheet(printRef.current, { field, league, opponent, homeScore, awayScore });
     if (playRef.current) paintPlayTimeSheet(playRef.current, { playTime, league });
-  }, [field, playTime, league, opponent, homeScore, awayScore]);
+  }, [field, playTime, league, opponent, homeScore, awayScore, focus, view, showPrint]);
   return (
     <div>
-      <div style={{fontSize:12,fontWeight:800,color:"#e8a020",marginBottom:6}}>Sheet 1 · Field, bench, and sub lines</div>
-      <div style={{borderRadius:8,overflow:"hidden",marginBottom:8,border:"1px solid rgba(255,255,255,0.08)",background:"#0c1409"}}>
-        <canvas ref={fieldRef} style={{width:"100%",height:"auto",display:"block"}} />
+      <div style={{fontSize:12,fontWeight:800,color:"#e8a020",marginBottom:6}}>{previewTitle}</div>
+      <div data-testid="share-sheet" data-dual={dual ? "true" : "false"} data-preview={view} style={{borderRadius:8,overflow:"hidden",marginBottom:8,border:"1px solid rgba(255,255,255,0.08)",background:"#0c1409",touchAction:dual ? "pan-y" : "auto"}}>
+        <canvas ref={fieldRef} style={{width:"100%",height:"auto",display:"block",touchAction:dual ? "pan-y" : "auto"}} />
       </div>
-      <button type="button" onClick={() => downloadCanvas(fieldRef.current, `CoachKit_Field_${periodAbbrev}1-${periodAbbrev}${periodCount}.png`)} style={{...sheetSaveBtn, width:"100%", marginBottom:16}}>
+      <canvas ref={fileRef} data-testid="share-file" aria-hidden="true" />
+      <button type="button" onClick={() => downloadCanvas(fileRef.current, `CoachKit_Field_${periodAbbrev}1-${periodAbbrev}${periodCount}.png`)} style={{...sheetSaveBtn, width:"100%", marginBottom:16}}>
         Save field image
       </button>
+      {showPrint && (
+        <div data-testid="print-preview" style={{background:"#fff", color:"#1a1a1a", borderRadius:8, padding:12, marginBottom:16}}>
+          <div style={{fontSize:14, fontWeight:800, marginBottom:8}}>Print preview</div>
+          <div style={{fontSize:12, marginBottom:8, lineHeight:1.4}}>Start and After subs, side by side, for each period that has subs.</div>
+          <canvas ref={printRef} style={{width:"100%",height:"auto",display:"block",background:"#fff"}} />
+        </div>
+      )}
       <div style={{fontSize:12,fontWeight:800,color:"#2ecc71",marginBottom:6}}>Sheet 2 · Play time</div>
       <div style={{borderRadius:8,overflow:"hidden",marginBottom:8,border:"1px solid rgba(255,255,255,0.08)",background:"#0c1409"}}>
         <canvas ref={playRef} style={{width:"100%",height:"auto",display:"block"}} />
@@ -3324,20 +3567,29 @@ function SheetCanvases({ field, playTime, league, opponent, homeScore, awayScore
   );
 }
 
-function ShareLineupModal({ players, lineupsByQuarter, pairPlan, subMode, segments, credit, minQ, quarters = [1, 2, 3, 4], periodAbbrev = "Q", homeScore, awayScore, opponent, league, onClose }) {
+function ShareLineupModal({ players, lineupsByQuarter, pairPlan, afterSubs, startSnapshots, subMode, segments, credit, minQ, quarters = [1, 2, 3, 4], periodAbbrev = "Q", homeScore, awayScore, opponent, league, onClose }) {
+  const [focus, setFocus] = useState("start");
+  const [showPrint, setShowPrint] = useState(false);
   const field = useMemo(
-    () => shareFieldSheet({ lineups: lineupsByQuarter, pairPlan, subMode, quarters, periodAbbrev }),
-    [lineupsByQuarter, pairPlan, subMode, quarters, periodAbbrev],
+    () => decorateShareSheet(
+      shareFieldSheet({ lineups: lineupsByQuarter, pairPlan, subMode, quarters, periodAbbrev }),
+      { lineups: lineupsByQuarter, afterSubs, snapshots: startSnapshots, subMode, periodAbbrev, roster: players },
+    ),
+    [lineupsByQuarter, pairPlan, afterSubs, startSnapshots, subMode, quarters, periodAbbrev, players],
   );
   const playTime = useMemo(
     () => sharePlayTimeSheet({ players, lineups: lineupsByQuarter, segments, credit, minQ, quarters, periodAbbrev }),
     [players, lineupsByQuarter, segments, credit, minQ, quarters, periodAbbrev],
   );
+  const dual = (field?.quarters || []).some(panel => panel.after);
+  const narrow = useMaxWidth(479);
+  const preview = dual && narrow ? focus : "both";
+  const swipe = usePhaseSwipe(dual, setFocus);
   return (
     <div style={{position:"fixed",inset:0,zIndex:9999,background:"rgba(0,0,0,0.88)",
       display:"flex",alignItems:"center",justifyContent:"center",padding:16}}
       onClick={onClose}>
-      <div style={{background:"#141a12",borderRadius:16,width:"100%",maxWidth:560,
+      <div data-testid="share-modal" style={{background:"#141a12",borderRadius:16,width:"100%",maxWidth:560,
         border:"1px solid rgba(255,255,255,0.08)",overflow:"hidden",maxHeight:"92vh",display:"flex",flexDirection:"column"}}
         onClick={e => e.stopPropagation()}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",
@@ -3348,10 +3600,21 @@ function ShareLineupModal({ players, lineupsByQuarter, pairPlan, subMode, segmen
             borderRadius:6,cursor:"pointer",color:"#e8e4dc",fontSize:13,fontWeight:700,padding:"4px 12px",fontFamily:"inherit",
           }}>Close</button>
         </div>
-        <div style={{padding:"14px 16px",overflow:"auto"}}>
+        <div
+          style={{padding:"14px 16px",overflow:"auto",touchAction:dual ? "pan-y" : "auto"}}
+          onPointerDown={swipe.onPointerDown}
+          onPointerMove={swipe.onPointerMove}
+          onPointerUp={swipe.onPointerUp}
+          onPointerCancel={swipe.onPointerCancel}
+        >
           <div style={{fontSize:11,color:"#7a7570",marginBottom:12,lineHeight:1.5}}>
-            Sheet 1 is the field for every period, with the bench and dotted lines to who they sub for. Sheet 2 is the green play-time bars. Save strategy to game day keeps both in the Season log.
+            {dual
+              ? (narrow
+                ? "The preview shows one phase at a time. Swipe the sheet to switch. The saved image and print include Start and After subs side by side."
+                : "Each period shows Start, with the sub lines, and After subs beside it. Swipe to move the highlight. The saved image and print include both, without the highlight.")
+              : "Sheet 1 is the field for every period, with the bench and dotted lines to who they sub for. Sheet 2 is the green play-time bars. Save strategy to game day keeps both in the Season log."}
           </div>
+          {dual && <PhaseToggle phase={focus} onChange={setFocus} />}
           <SheetCanvases
             field={field}
             playTime={playTime}
@@ -3361,7 +3624,15 @@ function ShareLineupModal({ players, lineupsByQuarter, pairPlan, subMode, segmen
             awayScore={awayScore}
             periodAbbrev={periodAbbrev}
             periodCount={quarters.length || 4}
+            focus={dual && !narrow ? focus : null}
+            view={preview}
+            showPrint={showPrint}
           />
+          {dual && (
+            <button type="button" data-testid="open-print-preview" onClick={() => setShowPrint(true)} style={{...sheetSaveBtn, width:"100%", marginTop:12, background:"#fff", color:"#1a1a1a"}}>
+              Print preview
+            </button>
+          )}
         </div>
       </div>
     </div>
