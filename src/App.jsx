@@ -34,6 +34,9 @@ import {
   GK_FULL_QUARTER_REASON,
   shareFieldSheet,
   sharePlayTimeSheet,
+  withBackHalfShare,
+  isBackHalfReturn,
+  quarterHalfPresentation,
   scheduleHalfRotation,
   scheduleWholeGame,
   firstDifferentPlan,
@@ -2209,7 +2212,13 @@ export function TabGame({ format, league, players, setPlayers, addPlayer, remove
     const auto = planBenchRotation(lineup, { minutesById, nextLineup: next });
     return pairsForDisplay(auto, pairPlan?.[q] || pairPlan?.[String(q)], lineup);
   };
-  const shownPairs = pairsForQuarter(quarter);
+  const backHalfPlayer = subMode
+    ? (players || []).find(player => isBackHalfReturn(player, quarter))
+    : null;
+  const halfView = backHalfPlayer && currentLineup
+    ? quarterHalfPresentation(currentLineup, subSegments, quarter, { returnerId: backHalfPlayer.id })
+    : null;
+  const shownPairs = halfView?.pairs?.length ? halfView.pairs : pairsForQuarter(quarter);
   const snapshot = startSnapshots?.[quarter] || startSnapshots?.[String(quarter)] || null;
   const ran = !!(snapshot?.starters?.length);
   const periodOverride = afterSubs?.[String(quarter)] || afterSubs?.[quarter] || null;
@@ -2220,12 +2229,13 @@ export function TabGame({ format, league, players, setPlayers, addPlayer, remove
     snapshot: ran ? snapshot : null,
   });
   const phase = controlOn && fieldPhase === "after" ? "after" : "start";
-  const afterView = phase === "after" && !ran && currentLineup
-    ? viewAfterSubs(currentLineup, shownPairs, periodOverride)
+  const phaseStart = halfView?.start || currentLineup;
+  const afterView = phase === "after" && !ran && phaseStart
+    ? viewAfterSubs(phaseStart, shownPairs, periodOverride)
     : null;
   const displayLineup = phase === "after"
     ? (ran ? currentLineup : afterView?.lineup || currentLineup)
-    : (ran ? lineupFromSnapshot(snapshot, players) : currentLineup);
+    : (ran ? lineupFromSnapshot(snapshot, players) : phaseStart);
   const linePairs = phase === "start" ? (ran ? (snapshot?.pairs || []) : shownPairs) : [];
   const readOnlyStart = phase === "start" && ran;
   phaseRef.current = { phase, ran, pairs: shownPairs, override: periodOverride, readOnly: readOnlyStart };
@@ -2288,7 +2298,11 @@ export function TabGame({ format, league, players, setPlayers, addPlayer, remove
     const viewing = phaseRef.current;
     let rotated;
     if (!viewing.ran) {
-      const applied = runAfterSubs({ start: currentLineup, pairs: shownPairs, override: viewing.override });
+      const applied = runAfterSubs({
+        start: halfView?.start || currentLineup,
+        pairs: shownPairs,
+        override: viewing.override,
+      });
       rotated = applied.lineup;
       setStartSnapshots(prev => ({ ...(prev || {}), [String(quarter)]: applied.snapshot }));
       setAfterSubs(prev => clearOverride(prev, quarter));
@@ -2430,13 +2444,18 @@ export function TabGame({ format, league, players, setPlayers, addPlayer, remove
       lineups: lineupsByQuarter,
       savedAt: new Date().toISOString(),
       sheets: {
-        field: decorateShareSheet(shareFieldSheet({ ...sheetInput, quarters: periodList, periodAbbrev: abbr }), {
+        field: withBackHalfShare(decorateShareSheet(shareFieldSheet({ ...sheetInput, quarters: periodList, periodAbbrev: abbr }), {
           lineups: lineupsByQuarter,
           afterSubs,
           snapshots: startSnapshots,
           subMode,
           periodAbbrev: abbr,
           roster: players,
+        }), {
+          players,
+          lineups: lineupsByQuarter,
+          segments: subSegments,
+          periodAbbrev: abbr,
         }),
         playTime: sharePlayTimeSheet({ ...sheetInput, quarters: periodList, periodAbbrev: abbr }),
       },
@@ -3415,6 +3434,15 @@ export function TabGame({ format, league, players, setPlayers, addPlayer, remove
             viewingClock: clockSec,
             running,
           })}
+          clocks={clockByPeriod}
+          viewingClock={clockSec}
+          running={running}
+          periodSeconds={periodMin * 60}
+          halfApplied={q => {
+            const snap = startSnapshots?.[q] || startSnapshots?.[String(q)];
+            const onAfter = Number(q) === Number(quarter) && fieldPhase === "after";
+            return !!(snap?.starters?.length) || onAfter;
+          }}
           onCancel={() => applyReturnChoice({ type: "cancel" })}
           onConfirm={applyReturnChoice}
           onSwitchQuarter={setQuarter}
@@ -3571,11 +3599,16 @@ function ShareLineupModal({ players, lineupsByQuarter, pairPlan, afterSubs, star
   const [focus, setFocus] = useState("start");
   const [showPrint, setShowPrint] = useState(false);
   const field = useMemo(
-    () => decorateShareSheet(
+    () => withBackHalfShare(decorateShareSheet(
       shareFieldSheet({ lineups: lineupsByQuarter, pairPlan, subMode, quarters, periodAbbrev }),
       { lineups: lineupsByQuarter, afterSubs, snapshots: startSnapshots, subMode, periodAbbrev, roster: players },
-    ),
-    [lineupsByQuarter, pairPlan, afterSubs, startSnapshots, subMode, quarters, periodAbbrev, players],
+    ), {
+      players,
+      lineups: lineupsByQuarter,
+      segments,
+      periodAbbrev,
+    }),
+    [lineupsByQuarter, pairPlan, afterSubs, startSnapshots, subMode, quarters, periodAbbrev, players, segments],
   );
   const playTime = useMemo(
     () => sharePlayTimeSheet({ players, lineups: lineupsByQuarter, segments, credit, minQ, quarters, periodAbbrev }),

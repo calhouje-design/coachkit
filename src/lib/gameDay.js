@@ -339,6 +339,49 @@ export function shareFieldSheet({ lineups, pairPlan, subMode = true, quarters = 
 }
 
 /**
+ * Share/print for a back-half return: Start is the first half (returner off),
+ * After is the second half (returner on for the player who came off).
+ * Other quarters stay as the sheet already drew them.
+ */
+export function withBackHalfShare(sheet, {
+  players,
+  lineups,
+  segments,
+  periodAbbrev = "Q",
+} = {}) {
+  if (!sheet?.quarters) return sheet;
+  let changed = false;
+  const quarters = sheet.quarters.map(panel => {
+    const q = panel.quarter;
+    const returner = (players || []).find(player => isBackHalfReturn(player, q));
+    if (!returner) return panel;
+    const lineup = lineups?.[q] || lineups?.[String(q)];
+    const view = quarterHalfPresentation(lineup, segments, q, { returnerId: returner.id });
+    if (!view?.pairs?.length) return panel;
+    changed = true;
+    const start = shareFieldSheet({
+      lineups: { [q]: view.start },
+      subMode: false,
+      quarters: [q],
+      periodAbbrev,
+    }).quarters[0];
+    const after = shareFieldSheet({
+      lineups: { [q]: view.after },
+      subMode: false,
+      quarters: [q],
+      periodAbbrev,
+    }).quarters[0];
+    return {
+      ...start,
+      label: panel.label,
+      pairs: view.pairs.map(pair => ({ inId: pair.inId, outId: pair.outId })),
+      after: { ...after, label: panel.label, pairs: [] },
+    };
+  });
+  return changed ? { ...sheet, quarters } : sheet;
+}
+
+/**
  * Sheet 2. One row per active player, with the same full / split / bench cells
  * as the Play Time chart.
  */
@@ -484,6 +527,65 @@ export function pairsForDisplay(autoPairs, manualPairs, lineup) {
     extra.push({ inId: openBench[i], outId: openField[i], fromPlan: false });
   }
   return [...manual, ...auto, ...extra];
+}
+
+/**
+ * Saved return. A bare quarter number, or an object with no half, is the whole quarter.
+ * `{ quarter, half: "back" }` is the second half only.
+ */
+export function readReturn(player) {
+  const stored = player?.returnAt;
+  if (stored && typeof stored === "object" && !Array.isArray(stored)) {
+    const quarter = Number(stored.quarter) || Number(player?.returnQuarter) || null;
+    if (!quarter) return null;
+    return { quarter, half: stored.half === "back" ? "back" : "whole" };
+  }
+  const quarter = Number(player?.returnQuarter);
+  if (!quarter) return null;
+  return { quarter, half: player?.returnHalf === "back" ? "back" : "whole" };
+}
+
+/** True when this player is back for the second half of this quarter only. */
+export function isBackHalfReturn(player, quarter) {
+  if (!player || player.out || player.injured) return false;
+  const record = readReturn(player);
+  return !!record && record.half === "back" && record.quarter === Number(quarter);
+}
+
+/**
+ * Start is the end lineup with the returner still on the bench.
+ * After is the stored end lineup. One pair brings the returner on for the player who sat the second half.
+ * The donor is the first bench player marked "left" — installBackHalfReturn places that player first.
+ */
+export function quarterHalfPresentation(lineup, segments, quarter, { returnerId } = {}) {
+  if (!lineup?.starters || !returnerId) return null;
+  const q = Number(quarter);
+  if (segmentAt(segments, returnerId, q) !== "entered") return null;
+  const index = lineup.starters.findIndex(slot => (
+    slot.player?.id === returnerId && !isGkPosition(slot.pos)
+  ));
+  if (index < 0) return null;
+  const donor = (lineup.bench || []).find(player => (
+    player?.id && segmentAt(segments, player.id, q) === "left"
+  ));
+  if (!donor) return null;
+  const starters = lineup.starters.map((slot, i) => (
+    i === index ? { ...slot, player: donor } : { ...slot }
+  ));
+  const on = new Set(starters.map(slot => slot.player?.id).filter(Boolean));
+  const bench = [];
+  const push = (player) => {
+    if (!player?.id || on.has(player.id) || bench.some(item => item.id === player.id)) return;
+    bench.push(player);
+  };
+  push(lineup.starters[index].player);
+  (lineup.bench || []).forEach(push);
+  lineup.starters.forEach(slot => push(slot.player));
+  return {
+    start: { starters, bench },
+    after: lineup,
+    pairs: [{ inId: returnerId, outId: donor.id, fromPlan: false }],
+  };
 }
 
 /** Which halves of a quarter a player is on. End-of-quarter lineup plus the split mark. */
@@ -1654,10 +1756,132 @@ export function regenerateForAbsence({
   return { lineups: returned, segments: returnSegments };
 }
 
+function halvesPlayed(playerId, lineups, segments, totalQuarters) {
+  const quarters = [];
+  for (let q = 1; q <= totalQuarters; q++) quarters.push(q);
+  return equityHalves(playerId, { lineups, segments, credit: {}, quarters });
+}
+
+/**
+ * Who gives up the second half. Most time first, then the higher rating, then id.
+ * A full-quarter outfield player can come off at the half and keep the first half.
+ * The goalkeeper is never a candidate.
+ */
+function pickBackHalfDonor(lineup, segments, quarter, {
+  excludeIds = [],
+  lineups,
+  totalQuarters = 4,
+  rate = () => 0,
+} = {}) {
+  const q = Number(quarter);
+  const skip = new Set((excludeIds || []).filter(Boolean).map(id => String(id)));
+  const gkId = goalkeeperId(lineup);
+  if (gkId) skip.add(String(gkId));
+  const ranked = (lineup?.starters || [])
+    .map((slot, index) => ({ slot, index }))
+    .filter(({ slot }) => {
+      const id = slot.player?.id;
+      if (!id || skip.has(String(id)) || isGkPosition(slot.pos)) return false;
+      const mark = segmentAt(segments, id, q);
+      return mark !== "entered" && mark !== "left";
+    })
+    .map(item => ({
+      ...item,
+      halves: halvesPlayed(item.slot.player.id, lineups, segments, totalQuarters),
+      rate: Number(rate(item.slot.player)) || 0,
+    }))
+    .sort((a, b) => (
+      b.halves - a.halves
+      || b.rate - a.rate
+      || String(a.slot.player.id).localeCompare(String(b.slot.player.id))
+    ));
+  return ranked[0] || null;
+}
+
+/**
+ * After a whole-quarter return plan, keep every later quarter and change only
+ * the return quarter: the returner enters at the half for one outfield player.
+ * The stored lineup is the end of the quarter. The donor sits the second half
+ * and is placed first on the bench so Start | After can find them.
+ */
+export function installBackHalfReturn({
+  lineups,
+  segments,
+  priorLineups,
+  priorSegments,
+  returning,
+  quarter,
+  totalQuarters = 4,
+  rate = () => 0,
+  protectedIds = [],
+} = {}) {
+  if (!returning?.id) return { lineups: lineups || {}, segments: segments || {} };
+  const q = Number(quarter);
+  const prior = priorLineups?.[q] || priorLineups?.[String(q)];
+  if (!prior?.starters) return { lineups: lineups || {}, segments: segments || {} };
+  let base = {
+    starters: prior.starters.map(slot => ({ ...slot })),
+    bench: [...(prior.bench || [])],
+  };
+  if (base.starters.some(slot => slot.player?.id === returning.id)) {
+    base = pullFromQuarter(base, returning.id);
+  } else {
+    base = { ...base, bench: base.bench.filter(player => player?.id !== returning.id) };
+  }
+  const gkId = goalkeeperId(base);
+  const picked = pickBackHalfDonor(base, priorSegments, q, {
+    excludeIds: [returning.id, gkId, ...(protectedIds || [])],
+    lineups: priorLineups,
+    totalQuarters,
+    rate,
+  });
+  if (!picked?.slot?.player || isGkPosition(picked.slot.pos)) {
+    return { lineups: lineups || {}, segments: segments || {} };
+  }
+  const donor = picked.slot.player;
+  const starters = base.starters.map((slot, index) => {
+    if (index === picked.index) return { ...slot, player: returning };
+    if (slot.player?.id === returning.id) return { ...slot, player: null };
+    return slot;
+  });
+  const bench = [
+    donor,
+    ...base.bench.filter(player => player?.id && player.id !== donor.id && player.id !== returning.id),
+  ];
+  const nextLineups = { ...(lineups || {}), [q]: { starters, bench } };
+  let nextSegments = {};
+  Object.entries(segments || {}).forEach(([playerId, row]) => {
+    const kept = {};
+    Object.entries(row || {}).forEach(([period, kind]) => {
+      if (Number(period) !== q) kept[period] = kind;
+    });
+    if (Object.keys(kept).length) nextSegments[playerId] = kept;
+  });
+  Object.entries(priorSegments || {}).forEach(([playerId, row]) => {
+    if (playerId === returning.id || playerId === donor.id) return;
+    const kind = segmentAt(priorSegments, playerId, q);
+    if (!kind) return;
+    nextSegments = writePeriodSegment(nextSegments, playerId, q, kind);
+  });
+  nextSegments = writePeriodSegment(nextSegments, donor.id, q, "left");
+  nextSegments = writePeriodSegment(nextSegments, returning.id, q, "entered");
+  if (gkId) nextSegments = writePeriodSegment(nextSegments, gkId, q, null);
+  return { lineups: nextLineups, segments: nextSegments };
+}
+
+function clearReturnAt(player) {
+  if (!player || !Object.prototype.hasOwnProperty.call(player, "returnAt")) return player;
+  const next = { ...player };
+  delete next.returnAt;
+  return next;
+}
+
 /**
  * Top-of-screen and roster Return buttons both use this.
  * The player becomes available. When auto-regenerate is on, the sheet rebuilds
  * from the current period forward. When it is off, only the status changes.
+ * `half: "back"` keeps the whole-quarter plan for later periods and brings the
+ * player on at this period's half. Omit half, or pass "whole", for today's return.
  */
 export function returnToGame({
   source = "roster",
@@ -1675,11 +1899,13 @@ export function returnToGame({
   rate = () => 0,
   livePeriod = false,
   protectedIds = [],
+  half = "whole",
 } = {}) {
   const q = Math.max(1, Number(quarter) || 1);
+  const halfKind = half === "back" ? "back" : "whole";
   const nextPlayers = (players || []).map(player => {
     if (player?.id !== playerId) return player;
-    return {
+    const next = {
       ...player,
       injured: false,
       midGameInjury: false,
@@ -1687,6 +1913,9 @@ export function returnToGame({
       returnQuarter: q,
       injuredInQuarter: player.injuredInQuarter || player.returnQuarter || q,
     };
+    if (halfKind === "back") next.returnAt = { quarter: q, half: "back" };
+    else return clearReturnAt(next);
+    return next;
   });
   if (!autoRegen) {
     return { source, players: nextPlayers, lineups, segments, regenerated: false };
@@ -1708,11 +1937,31 @@ export function returnToGame({
     livePeriod,
     protectedIds,
   });
+  if (halfKind !== "back") {
+    return {
+      source,
+      players: nextPlayers,
+      lineups: planned.lineups,
+      segments: planned.segments,
+      regenerated: true,
+    };
+  }
+  const adjusted = installBackHalfReturn({
+    lineups: planned.lineups,
+    segments: planned.segments,
+    priorLineups: lineups,
+    priorSegments: segments,
+    returning: nextPlayers.find(player => player?.id === playerId),
+    quarter: q,
+    totalQuarters,
+    rate,
+    protectedIds,
+  });
   return {
     source,
     players: nextPlayers,
-    lineups: planned.lineups,
-    segments: planned.segments,
+    lineups: adjusted.lineups,
+    segments: adjusted.segments,
     regenerated: true,
   };
 }

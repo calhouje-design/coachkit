@@ -40,6 +40,34 @@ function quarterElapsed(quarter, clockState) {
   return { clock, started };
 }
 
+/** This quarter's own clock, using the same on-screen rule as quarterIsLive. */
+export function quarterClockSec(quarter, state = {}) {
+  return quarterElapsed(quarter, state).clock;
+}
+
+/**
+ * Which return choices are open.
+ * A finished or too-early quarter closes both.
+ * A live quarter before its own half offers both.
+ * At or past the half, with the half sub still pending, only the 2nd half is open.
+ * Once the clock is past the half and that half sub is active or applied, both close.
+ */
+export function returnOptionAvailability({
+  disabled = false,
+  live = false,
+  clock = 0,
+  periodSeconds = 0,
+  halfApplied = false,
+} = {}) {
+  if (disabled) return { whole: false, back: false };
+  if (!live) return { whole: true, back: true };
+  const half = (Number(periodSeconds) || 0) / 2;
+  const sec = Number(clock) || 0;
+  if (!(half > 0) || sec < half) return { whole: true, back: true };
+  if (sec > half && halfApplied) return { whole: false, back: false };
+  return { whole: false, back: true };
+}
+
 /**
  * A quarter is finished when its own clock has run to the end of the period,
  * or a later quarter's own clock has started (the period was advanced past).
@@ -114,6 +142,15 @@ export function mismatchCopy({ selectedQuarter, chosenQuarter, periodAbbrev = "Q
   };
 }
 
+/**
+ * A mismatch is about the quarter on screen, not which half.
+ * Back half of Q2 while viewing Q2 is the same quarter, so the first half is not a mismatch.
+ */
+export function returnMismatch({ selectedQuarter, chosenQuarter, periodAbbrev = "Q" } = {}) {
+  if (Number(selectedQuarter) === Number(chosenQuarter)) return null;
+  return mismatchCopy({ selectedQuarter, chosenQuarter, periodAbbrev });
+}
+
 export function availabilityCopy({
   quarter,
   subMode = true,
@@ -121,10 +158,24 @@ export function availabilityCopy({
   periodAbbrev = "Q",
   live = false,
   name = "",
+  half = "whole",
 } = {}) {
   const abbr = periodAbbrev || "Q";
   const q = Number(quarter);
   const who = String(name || "them").trim().split(/\s+/)[0] || "them";
+  const no = q >= Number(totalQuarters)
+    ? "No — sit out the rest of the game."
+    : `No — hold until ${abbr}${q + 1}`;
+  if (half === "back") {
+    const question = subMode
+      ? `Available to sub in at the half in ${abbr}${q}?`
+      : `Ready for the 2nd half of ${abbr}${q}?`;
+    const yes = subMode
+      ? `Yes — eligible for the 2nd half of ${abbr}${q}`
+      : `Yes — available for the 2nd half of ${abbr}${q}`;
+    const helper = `Comes on at the half of ${abbr}${q}. The goalkeeper stays in goal.`;
+    return { question, yes, no, helper };
+  }
   const question = subMode
     ? `Available to sub in at the next rotation in ${abbr}${q}?`
     : `Ready to play in ${abbr}${q}?`;
@@ -134,9 +185,6 @@ export function availabilityCopy({
   const helper = subMode && live
     ? `Re-plans this quarter with ${who} on the field. Keeps the goalkeeper.`
     : null;
-  const no = q >= Number(totalQuarters)
-    ? "No — sit out the rest of the game."
-    : `No — hold until ${abbr}${q + 1}`;
   return { question, yes, no, helper };
 }
 
@@ -173,7 +221,7 @@ function unchanged(state) {
 }
 
 function clearedPlayer(player, extra = {}) {
-  return {
+  const next = {
     ...player,
     injured: false,
     out: false,
@@ -181,6 +229,8 @@ function clearedPlayer(player, extra = {}) {
     doneForToday: false,
     ...extra,
   };
+  delete next.returnAt;
+  return next;
 }
 
 /**
@@ -220,12 +270,17 @@ export function commitReturn(state, choice) {
       regenerated: false,
       toast: `${firstName(player)} is done for today.`,
       fairInfo: fairPlayNote(state, player),
-      players: state.players.map(item => (item.id === player.id ? {
-        ...item,
-        doneForToday: true,
-        out: stayOut ? true : item.out,
-        returnQuarter: null,
-      } : item)),
+      players: state.players.map(item => {
+        if (item.id !== player.id) return item;
+        const next = {
+          ...item,
+          doneForToday: true,
+          out: stayOut ? true : item.out,
+          returnQuarter: null,
+        };
+        delete next.returnAt;
+        return next;
+      }),
       lineups: state.lineups,
       segments: state.segments,
       realEvents: state.realEvents,
@@ -233,6 +288,7 @@ export function commitReturn(state, choice) {
   }
 
   const returnQuarter = available ? quarter : quarter + 1;
+  const half = available && choice.half === "back" ? "back" : "whole";
 
   if (!state.autoRegen) {
     const result = returnToGame({
@@ -244,6 +300,7 @@ export function commitReturn(state, choice) {
       totalQuarters: total,
       lineups: state.lineups,
       segments: state.segments,
+      half,
     });
     return {
       changed: true,
@@ -274,6 +331,7 @@ export function commitReturn(state, choice) {
     rate: state.rate,
     livePeriod: targetLive,
     protectedIds: realEventPlayerIds(state.realEvents, returnQuarter),
+    half,
   });
   const events = result.regenerated
     ? realEventsAfterReturn(state.realEvents, { quarter: returnQuarter, regenerated: true })
@@ -281,7 +339,16 @@ export function commitReturn(state, choice) {
   return {
     changed: true,
     regenerated: !!result.regenerated,
-    toast: returnToast({ player, quarter, available, subMode: state.subMode !== false, live, total, periodAbbrev: state.periodAbbrev }),
+    toast: returnToast({
+      player,
+      quarter,
+      available,
+      subMode: state.subMode !== false,
+      live,
+      total,
+      periodAbbrev: state.periodAbbrev,
+      half,
+    }),
     fairInfo: null,
     players: result.players.map(item => (item.id === player.id ? { ...item, doneForToday: false } : item)),
     lineups: result.lineups,
@@ -298,10 +365,12 @@ export function returnToast({
   live = false,
   total = 4,
   periodAbbrev = "Q",
+  half = "whole",
 }) {
   const name = firstName(player);
   const abbr = periodAbbrev || "Q";
   if (available === false && quarter >= total) return `${name} is done for today.`;
+  if (half === "back" && available) return `${name} is back for the 2nd half of ${abbr}${quarter}.`;
   if (subMode && available && live) return `${name} is back. ${abbr}${quarter} re-planned.`;
   if (available === false) return `${name} held until ${abbr}${quarter + 1}.`;
   return `${name} back for ${abbr}${quarter}.`;

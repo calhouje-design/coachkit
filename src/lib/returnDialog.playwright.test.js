@@ -217,6 +217,91 @@ test("tab and shift-tab stay inside the return sheet on Pixel 7 and iPhone 13", 
   }
 });
 
+test("both quarter choices fit at 320 and 390 and the focus trap stays shut", async () => {
+  for (const width of [320, 390]) {
+    const page = await browser.newPage({ viewport: { width, height: 700 } });
+    try {
+      await page.goto(`${base}/return-dialog.html`, { waitUntil: "networkidle" });
+      const sheet = page.getByTestId("return-sheet");
+      await sheet.waitFor();
+      const whole = page.getByTestId("return-whole-2");
+      const back = page.getByTestId("return-back-2");
+      await whole.waitFor();
+      await back.waitFor();
+      assert.match(await whole.innerText(), /Q2/);
+      assert.match(await back.innerText(), /Q2 · 2nd half/);
+      const wholeBox = await whole.boundingBox();
+      const backBox = await back.boundingBox();
+      assert.ok(wholeBox.height >= 44, `whole height ${wholeBox.height} at ${width}`);
+      assert.ok(backBox.height >= 44, `back height ${backBox.height} at ${width}`);
+      assert.ok(wholeBox.width >= 44, `whole width ${wholeBox.width} at ${width}`);
+      assert.ok(backBox.width >= 44, `back width ${backBox.width} at ${width}`);
+      const overflow = await page.evaluate(() => {
+        const root = document.documentElement;
+        const dialog = document.querySelector("[data-testid='return-sheet']");
+        const row = document.querySelector("[data-testid='return-quarter-row-2']");
+        return {
+          doc: root.scrollWidth > root.clientWidth + 1,
+          sheet: dialog.scrollWidth > dialog.clientWidth + 1,
+          row: row.scrollWidth > row.clientWidth + 1,
+        };
+      });
+      assert.deepEqual(overflow, { doc: false, sheet: false, row: false });
+      assert.equal(await page.locator("input[name='return-quarter'][value='1']").isDisabled(), true);
+      assert.equal(await page.locator("input[name='return-quarter'][value='1-back']").isDisabled(), true);
+      assert.equal(await page.locator("input[name='return-quarter'][value='2']").isChecked(), true);
+      await page.locator("input[name='return-quarter'][value='2-back']").check();
+      assert.match(await page.locator("body").innerText(), /2nd half of Q2/);
+      assert.equal(await page.getByTestId("return-mismatch").count(), 0);
+      const inside = await page.evaluate(() => {
+        const root = document.querySelector("[data-testid='return-sheet']");
+        const list = [...root.querySelectorAll("button:not([disabled]), input:not([disabled])")];
+        list[0].focus();
+        return root.contains(document.activeElement);
+      });
+      assert.equal(inside, true);
+      for (let i = 0; i < 12; i++) await page.keyboard.press("Tab");
+      const still = await page.evaluate(() => {
+        const root = document.querySelector("[data-testid='return-sheet']");
+        return !!root && root.contains(document.activeElement);
+      });
+      assert.equal(still, true, `focus left the sheet at ${width}`);
+    } finally {
+      await page.close();
+    }
+  }
+});
+
+test("the After view shows a back-half returner who is off at the start", async () => {
+  const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
+  const errors = [];
+  page.on("pageerror", error => errors.push(String(error)));
+  try {
+    await page.goto(`${base}/src/lib/harness/back-half.html`, { waitUntil: "networkidle" });
+    const returner = await page.getByTestId("returner-id").getAttribute("data-player-id");
+    const toggle = page.getByTestId("phase-toggle");
+    await toggle.scrollIntoViewIfNeeded();
+    await toggle.waitFor();
+    const ids = () => page.locator("[data-testid^='field-player-']").evaluateAll(nodes => (
+      nodes.map(node => node.getAttribute("data-player-id"))
+    ));
+    const startIds = await ids();
+    assert.equal(startIds.includes(returner), false);
+    await page.getByTestId("phase-after").click();
+    await page.getByTestId("phase-caption").waitFor();
+    const afterIds = await ids();
+    assert.equal(afterIds.includes(returner), true);
+    assert.notDeepEqual(afterIds, startIds);
+    await page.getByRole("button", { name: "Share lineup" }).click();
+    const sheet = page.getByTestId("share-sheet");
+    await sheet.waitFor();
+    assert.equal(await sheet.getAttribute("data-dual"), "true");
+    assert.equal(errors.length, 0, errors.join("\n"));
+  } finally {
+    await page.close();
+  }
+});
+
 test("escape and the backdrop leave the return dialog without a confirm", async () => {
   const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
   try {

@@ -1,17 +1,27 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  applyBenchRotation,
   equityHalves,
   goalkeeperId,
+  isBackHalfReturn,
   isGkPosition,
   periodHasRealEvent,
   planAvailability,
+  playCellKind,
+  playerHalfMask,
   playerQuarterPresence,
+  quarterHalfPresentation,
+  readReturn,
   realEventPlayerIds,
   returnToGame,
   scheduleHalfRotation,
   scheduleWholeGame,
+  segmentAt,
+  withBackHalfShare,
+  shareFieldSheet,
 } from "./gameDay.js";
+import { viewAfterSubs } from "./afterSubs.js";
 import {
   availabilityCopy,
   commitReturn,
@@ -21,6 +31,8 @@ import {
   quarterChoices,
   quarterIsLive,
   returnHeading,
+  returnMismatch,
+  returnOptionAvailability,
 } from "./returnDialog.js";
 
 const SLOTS = ["GK", "LD", "RD", "LM", "RM", "CF"];
@@ -557,5 +569,166 @@ test("the last quarter yes returns into that quarter and no means done for today
     assert.equal(no.toast, `${player.name.split(" ")[0]} is done for today.`);
     assert.match(no.fairInfo, /information only, not a fair-play violation/);
     assert.equal(no.fairInfo.includes("Fair-play warning"), false);
+  });
+});
+
+function quarterHalves(playerId, lineups, segments, quarter) {
+  return equityHalves(playerId, { lineups, segments, credit: {}, quarters: [quarter] });
+}
+
+function sameLaterQuarters(back, whole, fromQuarter, total = 4) {
+  for (let q = fromQuarter + 1; q <= total; q++) {
+    assert.deepEqual(starterIds(back.lineups[q]), starterIds(whole.lineups[q]), `Q${q} lineup`);
+    const ids = new Set([
+      ...Object.keys(back.segments || {}),
+      ...Object.keys(whole.segments || {}),
+    ]);
+    ids.forEach(id => {
+      assert.equal(segmentAt(back.segments, id, q), segmentAt(whole.segments, id, q), `${id} Q${q}`);
+    });
+  }
+}
+
+test("old saved returns with no half field read as the whole quarter", () => {
+  assert.deepEqual(readReturn({ returnQuarter: 2 }), { quarter: 2, half: "whole" });
+  assert.deepEqual(readReturn({ returnQuarter: 3, returnHalf: "back" }), { quarter: 3, half: "back" });
+  assert.deepEqual(readReturn({ returnAt: { quarter: 2 } }), { quarter: 2, half: "whole" });
+  assert.deepEqual(readReturn({ returnQuarter: 2, returnAt: { quarter: 2, half: "back" } }), { quarter: 2, half: "back" });
+  assert.equal(readReturn({ returnQuarter: null }), null);
+  assert.equal(isBackHalfReturn({ id: "p1", out: true, returnAt: { quarter: 2, half: "back" } }, 2), false);
+});
+
+test("back-half copy, greying, and mismatch understand halves without changing whole-quarter copy", () => {
+  const sub = availabilityCopy({ quarter: 3, subMode: true, totalQuarters: 4, live: true, name: "Wes Johnson" });
+  assert.equal(sub.question, "Available to sub in at the next rotation in Q3?");
+  assert.equal(sub.yes, "Yes — eligible for Q3");
+  assert.equal(sub.helper, "Re-plans this quarter with Wes on the field. Keeps the goalkeeper.");
+  const back = availabilityCopy({ quarter: 2, subMode: true, totalQuarters: 4, half: "back", name: "Remi" });
+  assert.equal(back.question, "Available to sub in at the half in Q2?");
+  assert.equal(back.yes, "Yes — eligible for the 2nd half of Q2");
+  assert.match(back.helper, /half of Q2/);
+  assert.match(back.helper, /goalkeeper stays/);
+  assert.equal(back.no, "No — hold until Q3");
+  const last = availabilityCopy({ quarter: 4, subMode: false, totalQuarters: 4, half: "back" });
+  assert.equal(last.no, "No — sit out the rest of the game.");
+  assert.equal(last.yes, "Yes — available for the 2nd half of Q4");
+  assert.equal(returnMismatch({ selectedQuarter: 2, chosenQuarter: 2 }), null);
+  assert.equal(returnMismatch({ selectedQuarter: 1, chosenQuarter: 2 }).text, "You're viewing Q1.");
+  assert.deepEqual(returnOptionAvailability({ disabled: true, live: true, clock: 10, periodSeconds: 600 }), { whole: false, back: false });
+  assert.deepEqual(returnOptionAvailability({ live: false, clock: 500, periodSeconds: 600, halfApplied: true }), { whole: true, back: true });
+  assert.deepEqual(returnOptionAvailability({ live: true, clock: 100, periodSeconds: 600 }), { whole: true, back: true });
+  assert.deepEqual(returnOptionAvailability({ live: true, clock: 300, periodSeconds: 600 }), { whole: false, back: true });
+  assert.deepEqual(returnOptionAvailability({ live: true, clock: 301, periodSeconds: 600, halfApplied: false }), { whole: false, back: true });
+  assert.deepEqual(returnOptionAvailability({ live: true, clock: 301, periodSeconds: 600, halfApplied: true }), { whole: false, back: false });
+});
+
+test("a whole-quarter return stays byte-identical when half is omitted or whole", () => {
+  [true, false].forEach(subMode => {
+    const sheet = sheetWithAbsence({ subMode, outFrom: 1 });
+    const state = baseState(sheet, { viewingQuarter: 2 });
+    const plain = commitReturn(state, { type: "confirm", quarter: 2, available: true });
+    const explicit = commitReturn(state, { type: "confirm", quarter: 2, available: true, half: "whole" });
+    assert.deepEqual(explicit.lineups, plain.lineups);
+    assert.deepEqual(explicit.segments, plain.segments);
+    assert.equal(explicit.toast, plain.toast);
+    assert.equal(explicit.players.find(player => player.id === sheet.id).returnQuarter, 2);
+    assert.equal(explicit.players.find(player => player.id === sheet.id).returnAt, undefined);
+    assert.deepEqual(readReturn(explicit.players.find(player => player.id === sheet.id)), { quarter: 2, half: "whole" });
+  });
+});
+
+test("a back-half return gives 0.5, keeps the goalkeeper, and leaves later quarters on the whole-quarter plan", () => {
+  [true, false].forEach(subMode => {
+    const sheet = sheetWithAbsence({ subMode, outFrom: 1 });
+    const state = baseState(sheet, { viewingQuarter: 1, realEvents: { 1: ["early"] } });
+    const whole = commitReturn(state, { type: "confirm", quarter: 2, available: true });
+    const back = commitReturn(state, { type: "confirm", quarter: 2, available: true, half: "back" });
+    const id = sheet.id;
+    const player = back.players.find(item => item.id === id);
+    assert.equal(player.out, false);
+    assert.equal(player.returnQuarter, 2);
+    assert.deepEqual(player.returnAt, { quarter: 2, half: "back" });
+    assert.equal(back.toast, `${player.name.split(" ")[0]} is back for the 2nd half of Q2.`);
+    assert.equal(quarterHalves(id, back.lineups, back.segments, 2), 1);
+    assert.equal(playCellKind({
+      onField: true,
+      segment: segmentAt(back.segments, id, 2),
+    }), "partial-on");
+    assert.deepEqual(playerHalfMask(id, back.lineups[2], segmentAt(back.segments, id, 2)), [false, true]);
+    const gk = goalkeeperId(sheet.lineups[2]);
+    assert.equal(goalkeeperId(back.lineups[2]), gk);
+    assert.notEqual(gk, id);
+    const gkSlot = back.lineups[2].starters.find(slot => isGkPosition(slot.pos));
+    assert.notEqual(gkSlot?.player?.id, id);
+    assert.equal(segmentAt(back.segments, gk, 2), null);
+    const donorId = back.lineups[2].bench.find(item => segmentAt(back.segments, item.id, 2) === "left")?.id
+      || back.lineups[2].bench[0]?.id;
+    const ranked = (sheet.lineups[2].starters || [])
+      .filter(slot => {
+        const slotId = slot.player?.id;
+        if (!slotId || slotId === id || slotId === gk || isGkPosition(slot.pos)) return false;
+        const mark = segmentAt(sheet.segments, slotId, 2);
+        return mark !== "entered" && mark !== "left";
+      })
+      .map(slot => ({
+        id: slot.player.id,
+        halves: equityHalves(slot.player.id, {
+          lineups: sheet.lineups,
+          segments: sheet.segments,
+          credit: {},
+          quarters: [1, 2, 3, 4],
+        }),
+      }))
+      .sort((a, b) => b.halves - a.halves || String(a.id).localeCompare(String(b.id)));
+    assert.equal(donorId, ranked[0].id);
+    assert.notEqual(donorId, gk);
+    assert.equal(segmentAt(back.segments, donorId, 2), "left");
+    assert.equal(quarterHalves(donorId, back.lineups, back.segments, 2), 1);
+    assert.equal(playCellKind({ onField: false, segment: "left" }), "partial-off");
+    assert.equal(playerQuarterPresence(back.lineups[2], id), "on");
+    assert.equal(playerQuarterPresence(back.lineups[1], id), "blank");
+    sameLaterQuarters(back, whole, 2);
+    const view = quarterHalfPresentation(back.lineups[2], back.segments, 2, { returnerId: id });
+    assert.equal(view.start.starters.some(slot => slot.player?.id === id), false);
+    assert.equal(view.after.starters.some(slot => slot.player?.id === id), true);
+    assert.equal(view.pairs[0].inId, id);
+    assert.equal(view.pairs[0].outId, donorId);
+    assert.equal(view.start.starters.some(slot => slot.player?.id === donorId), true);
+    const restored = applyBenchRotation(view.start, view.pairs);
+    assert.deepEqual(starterIds(restored), starterIds(back.lineups[2]));
+    const after = viewAfterSubs(view.start, view.pairs, null);
+    assert.equal(after.lineup.starters.some(slot => slot.player?.id === id), true);
+    assert.equal(goalkeeperId(after.lineup), gk);
+    const sheetShare = withBackHalfShare(
+      shareFieldSheet({ lineups: back.lineups, subMode, quarters: [1, 2, 3, 4] }),
+      { players: back.players, lineups: back.lineups, segments: back.segments },
+    );
+    const panel = sheetShare.quarters.find(item => item.quarter === 2);
+    assert.equal(panel.starters.some(slot => slot.id === id), false);
+    assert.equal(panel.after.starters.some(slot => slot.id === id), true);
+    assert.equal(panel.pairs[0].inId, id);
+    assert.equal(panel.pairs[0].outId, donorId);
+  });
+});
+
+test("a live back-half return waits for the pending half sub and still keeps the goalkeeper", () => {
+  [true, false].forEach(subMode => {
+    const sheet = sheetWithAbsence({ subMode, outFrom: 1 });
+    const gk = goalkeeperId(sheet.lineups[2]);
+    const state = baseState(sheet, {
+      viewingQuarter: 2,
+      viewingClock: 400,
+      clocks: { 2: { sec: 400, stints: {} } },
+      realEvents: { 2: [gk] },
+    });
+    assert.equal(quarterIsLive(2, state), true);
+    const back = commitReturn(state, { type: "confirm", quarter: 2, available: true, half: "back" });
+    assert.equal(goalkeeperId(back.lineups[2]), gk);
+    assert.equal(quarterHalves(sheet.id, back.lineups, back.segments, 2), 1);
+    assert.deepEqual(playerHalfMask(sheet.id, back.lineups[2], segmentAt(back.segments, sheet.id, 2)), [false, true]);
+    assert.match(back.toast, /2nd half of Q2/);
+    const done = commitReturn(state, { type: "confirm", quarter: 4, available: false, half: "back" });
+    assert.equal(done.players.find(player => player.id === sheet.id).doneForToday, true);
+    assert.equal(done.toast.endsWith("is done for today."), true);
   });
 });
