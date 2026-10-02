@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import { FORMATION_TEMPLATES } from "./formations.js";
 import {
   CIRCLE_DIAMETER,
-  FOUR_WIDE_OFFSET,
+  FOUR_WIDE_MIN_NUDGE,
+  FOUR_WIDE_OFFSET_CAP,
   SIDE_MARGIN,
   fitPlayerLabel,
   labelWidth,
@@ -125,22 +126,23 @@ test("4-2-1 spreads the back four and keeps the long names readable", () => {
   const layout = layoutFieldPlayers(startersFor(positions, names), { fieldWidth: 360, fieldHeight: 540 });
   const defense = layout.filter(spot => spot.line === "def").sort((a, b) => a.x - b.x);
   assert.deepEqual(defense.map(spot => spot.pos), ["LD", "CD", "CD", "RD"]);
-  assert.deepEqual(defense.map(spot => spot.dy), [-FOUR_WIDE_OFFSET, FOUR_WIDE_OFFSET, FOUR_WIDE_OFFSET, -FOUR_WIDE_OFFSET]);
+  assert.deepEqual(defense.map(spot => spot.dy), tinyFourWide());
   assertOutsidePairHigher(defense, "4-2-1");
+  assert.ok(ySpan(defense) <= FOUR_WIDE_OFFSET_CAP);
   defense.forEach(spot => assert.equal(spot.label, spot.fullName));
   assert.ok(defense[defense.length - 1].x - defense[0].x > 360 * 0.7);
 });
 
-test("a 4-wide line always drops the center pair and a 5-wide line alternates only when needed", () => {
+test("a tight 4-wide line shortens names before the nudge grows, and a 5-wide line alternates only when needed", () => {
   const wide = Array.from({ length: 4 }, () => "Maddox Anderson");
   const four = layoutFieldPlayers(startersFor(["LD", "CD", "CD", "RD"], wide), {
-    fieldWidth: 320,
-    fieldHeight: 480,
+    fieldWidth: 240,
+    fieldHeight: 360,
   });
-  assert.deepEqual(four.map(spot => spot.dy), [-FOUR_WIDE_OFFSET, FOUR_WIDE_OFFSET, FOUR_WIDE_OFFSET, -FOUR_WIDE_OFFSET]);
+  assert.deepEqual(four.map(spot => spot.dy), tinyFourWide());
   assertOutsidePairHigher(four, "crowded 4");
-  assert.equal(four[1].label, "Maddox Anderson");
-  assert.notEqual(four[0].label, "Maddox Anderson");
+  assert.ok(ySpan(four) <= FOUR_WIDE_OFFSET_CAP);
+  four.forEach(spot => assert.notEqual(spot.label, spot.fullName));
 
   const five = layoutFieldPlayers(startersFor(["LB", "CB", "CB", "CB", "RB"], Array(5).fill("Maddox Anderson")), {
     fieldWidth: 320,
@@ -149,7 +151,6 @@ test("a 4-wide line always drops the center pair and a 5-wide line alternates on
   assert.deepEqual(five.map(spot => spot.dy), [0, -16, 0, -16, 0]);
   assertNoOverlap(five);
   assertInsideField(five, 320, 480);
-  assert.ok(ySpan(four) <= CIRCLE_DIAMETER / 2 + 0.5);
   assert.ok(ySpan(five) <= 16.5);
 });
 
@@ -162,7 +163,8 @@ test("a phone-width field keeps each line together and the 4-2-1 names readable"
   assertInsideField(four, 266, 399);
   const defense = four.filter(spot => spot.line === "def").sort((a, b) => a.x - b.x);
   assertOutsidePairHigher(defense, "phone 4-2-1");
-  assert.ok(ySpan(defense) <= CIRCLE_DIAMETER / 2 + 0.5, `defense span ${ySpan(defense)}`);
+  assert.ok(ySpan(defense) <= FOUR_WIDE_OFFSET_CAP, `defense span ${ySpan(defense)}`);
+  assert.deepEqual(defense.map(spot => spot.dy), tinyFourWide());
   defense.forEach(spot => assert.equal(spot.label, spot.fullName));
 
   const five = layoutFieldPlayers(startersFor(
@@ -174,6 +176,10 @@ test("a phone-width field keeps each line together and the 4-2-1 names readable"
   const back = five.filter(spot => spot.line === "def");
   assert.ok(ySpan(back) <= 16.5, `back span ${ySpan(back)}`);
 });
+
+function tinyFourWide() {
+  return [-FOUR_WIDE_MIN_NUDGE, FOUR_WIDE_MIN_NUDGE, FOUR_WIDE_MIN_NUDGE, -FOUR_WIDE_MIN_NUDGE];
+}
 
 function ySpan(spots) {
   const ys = spots.map(spot => spot.y);
@@ -196,6 +202,8 @@ function assertOutsidePairHigher(layout, label) {
     assert.ok(group[0].y < group[1].y, `${label} left outside should sit above the center`);
     assert.ok(group[3].y < group[2].y, `${label} right outside should sit above the center`);
     assert.ok(group[0].y < group[2].y, `${label} outside pair should sit above the center pair`);
+    const offset = Math.max(group[1].y, group[2].y) - Math.min(group[0].y, group[3].y);
+    assert.ok(offset <= FOUR_WIDE_OFFSET_CAP + 0.05, `${label} offset ${offset} exceeds ${FOUR_WIDE_OFFSET_CAP}`);
   });
   if (layout.length && layout.every(spot => spot.lineCount === 4)) assert.ok(seen > 0, label);
 }

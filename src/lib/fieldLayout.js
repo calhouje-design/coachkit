@@ -6,13 +6,12 @@ export const LABEL_HEIGHT = 13;
 export const LABEL_GAP = 2;
 export const BOX_GAP = 2;
 export const SIDE_MARGIN = 8;
-/** Small enough that a staggered row still reads as one line. */
+/** 5-wide alternate stagger, used only when the names do not fit. */
 export const LINE_STAGGER = 16;
-/**
- * 4-wide lines always use this. Outside pair moves up, center pair moves
- * down. Twice this gap stays within about one circle radius.
- */
-export const FOUR_WIDE_OFFSET = 11;
+/** Each side of a 4-wide line when even spacing already clears the labels. */
+export const FOUR_WIDE_MIN_NUDGE = 2;
+/** Largest outside-to-center gap on a 4-wide line. Well under one circle radius. */
+export const FOUR_WIDE_OFFSET_CAP = 8;
 
 const CHAR_W = {
   A: 6.5, B: 6.02, C: 6.5, D: 6.5, E: 6.02, F: 5.5, G: 7.02, H: 7.02, I: 3.52, J: 4.5,
@@ -89,13 +88,33 @@ function verticalOverlap(top, height, otherTop, otherHeight, gap) {
 }
 
 function staggerFor(count, amount, needed) {
-  if (count === 4 && amount > 0) {
-    const lift = Math.min(amount, FOUR_WIDE_OFFSET);
-    return [-lift, lift, lift, -lift];
-  }
   if (!needed || amount <= 0) return Array.from({ length: count }, () => 0);
   if (count >= 5) return Array.from({ length: count }, (_, i) => (i % 2 === 1 ? -amount : 0));
   return Array.from({ length: count }, () => 0);
+}
+
+/**
+ * Even spacing first. Shorten a name that does not fit that slot, then use
+ * the smallest outside-up / center-down nudge that still clears the boxes.
+ * A line that already clears only moves a few pixels.
+ */
+function fourWideDy(group, xs, lineY, { width, circle, labelHeight, labelGap, boxGap, measureLabel }) {
+  const straight = group.map((item, i) => ({ ...item, x: xs[i], y: lineY, fieldWidth: width }));
+  const caps = maxWidths(straight, { width, circle, labelHeight, labelGap, boxGap });
+  const boxes = group.map((item, i) => {
+    const label = fitPlayerLabel(item.name, caps[i], measureLabel);
+    const measured = label ? measureLabel(label) : 0;
+    return Math.min(measured, Math.max(0, caps[i]));
+  });
+  let crowded = false;
+  for (let i = 0; i < boxes.length - 1; i++) {
+    const gap = xs[i + 1] - xs[i] - boxes[i] / 2 - boxes[i + 1] / 2;
+    if (gap < boxGap - 0.01) crowded = true;
+  }
+  const wanted = crowded ? labelHeight + boxGap : FOUR_WIDE_MIN_NUDGE * 2;
+  const separation = Math.min(FOUR_WIDE_OFFSET_CAP, wanted);
+  const nudge = separation / 2;
+  return [-nudge, nudge, nudge, -nudge];
 }
 
 function markerRects(item, circle, labelGap, labelHeight) {
@@ -125,10 +144,11 @@ function markerRects(item, circle, labelGap, labelHeight) {
 
 /**
  * Spread each horizontal line across the field and keep circles and name
- * labels from overlapping. Every 4-wide line puts the outside pair higher
- * and the center pair lower. A 5-wide line staggers alternate players only
- * when the names do not fit. Long names shorten to a first name and last
- * initial, then an ellipsis.
+ * labels from overlapping. A 4-wide line stays nearly straight: even spacing
+ * first, then the smallest outside-up / center-down nudge that clears the
+ * labels. A 5-wide line staggers alternate players only when the names do
+ * not fit. Long names shorten to a first name and last initial, then an
+ * ellipsis, before that nudge grows.
  */
 export function layoutFieldPlayers(starters, {
   fieldWidth,
@@ -174,11 +194,18 @@ export function layoutFieldPlayers(starters, {
     const ys = group.map(item => item.baseY);
     const lineY = ys.reduce((sum, y) => sum + y, 0) / ys.length;
     const xs = lineCenters(group.length, width, { circle, sideMargin });
-    const unstaggered = maxWidths(group.map((item, i) => ({ ...item, x: xs[i], y: lineY })), {
-      width, circle, labelHeight, labelGap, boxGap,
-    });
-    const needed = group.some((item, i) => item.name && measureLabel(item.name) > unstaggered[i] + 0.01);
-    const offsets = staggerFor(group.length, stagger, needed);
+    let offsets;
+    if (group.length === 4) {
+      offsets = fourWideDy(group, xs, lineY, {
+        width, circle, labelHeight, labelGap, boxGap, measureLabel,
+      });
+    } else {
+      const unstaggered = maxWidths(group.map((item, i) => ({ ...item, x: xs[i], y: lineY })), {
+        width, circle, labelHeight, labelGap, boxGap,
+      });
+      const needed = group.some((item, i) => item.name && measureLabel(item.name) > unstaggered[i] + 0.01);
+      offsets = staggerFor(group.length, stagger, needed);
+    }
     group.forEach((item, i) => {
       item.x = xs[i];
       item.lineIndex = i;
