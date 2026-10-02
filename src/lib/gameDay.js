@@ -1103,6 +1103,22 @@ export function realEventsAfterUnavailable(flags, {
   return noteRealPeriodEvent(kept, quarter, [playerId]);
 }
 
+/**
+ * A Return is not a real event by itself.
+ * When auto-regen rebuilds this period and the ones after it, later real-event
+ * flags are dropped, including on a live Return. The current period keeps the
+ * flag it already had. Earlier periods stay. A Return that does not rebuild
+ * leaves the flags untouched.
+ */
+export function realEventsAfterReturn(flags, {
+  quarter,
+  regenerated = true,
+} = {}) {
+  const normalized = normalizeRealPeriodEvents(flags);
+  if (!regenerated) return normalized;
+  return realEventsThrough(normalized, quarter);
+}
+
 function pickQuarterGoalkeepers(active, slotNames, remaining, satLast, seed = null) {
   const count = slotNames.filter(isGkPosition).length;
   if (!count) return [];
