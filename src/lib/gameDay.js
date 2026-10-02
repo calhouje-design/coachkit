@@ -482,6 +482,228 @@ export function lineStopAtCircle(x1, y1, cx, cy, radius) {
   return { x: cx + (dx / len) * r, y: cy + (dy / len) * r };
 }
 
+function pointOnSegment(px, py, x1, y1, x2, y2) {
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  const len2 = dx * dx + dy * dy;
+  const t = len2 === 0 ? 0 : Math.max(0, Math.min(1, ((px - x1) * dx + (py - y1) * dy) / len2));
+  const x = x1 + t * dx;
+  const y = y1 + t * dy;
+  return { x, y, t, d: Math.hypot(px - x, py - y) };
+}
+
+function segmentsIntersect(ax, ay, bx, by, cx, cy, dx, dy) {
+  const den = (bx - ax) * (dy - cy) - (by - ay) * (dx - cx);
+  if (Math.abs(den) < 1e-9) return false;
+  const t = ((cx - ax) * (dy - cy) - (cy - ay) * (dx - cx)) / den;
+  const u = ((cx - ax) * (by - ay) - (cy - ay) * (bx - ax)) / den;
+  return t >= 0 && t <= 1 && u >= 0 && u <= 1;
+}
+
+function segmentDistance(x1, y1, x2, y2, x3, y3, x4, y4) {
+  if (segmentsIntersect(x1, y1, x2, y2, x3, y3, x4, y4)) return 0;
+  return Math.min(
+    pointOnSegment(x1, y1, x3, y3, x4, y4).d,
+    pointOnSegment(x2, y2, x3, y3, x4, y4).d,
+    pointOnSegment(x3, y3, x1, y1, x2, y2).d,
+    pointOnSegment(x4, y4, x1, y1, x2, y2).d,
+  );
+}
+
+function segmentRectDistance(x1, y1, x2, y2, rect) {
+  const rx = rect.x;
+  const ry = rect.y;
+  const rw = rect.w;
+  const rh = rect.h;
+  const inside = (x, y) => x >= rx && x <= rx + rw && y >= ry && y <= ry + rh;
+  if (inside(x1, y1) || inside(x2, y2)) return 0;
+  const edges = [
+    [rx, ry, rx + rw, ry],
+    [rx + rw, ry, rx + rw, ry + rh],
+    [rx + rw, ry + rh, rx, ry + rh],
+    [rx, ry + rh, rx, ry],
+  ];
+  return Math.min(...edges.map(edge => segmentDistance(x1, y1, x2, y2, edge[0], edge[1], edge[2], edge[3])));
+}
+
+function isCircleObstacle(obstacle) {
+  return Number.isFinite(obstacle?.r);
+}
+
+/** Negative when the segment enters the keep-out around a circle or a name box. */
+function obstacleClearance(x1, y1, x2, y2, obstacle, gap) {
+  if (isCircleObstacle(obstacle)) {
+    return pointOnSegment(obstacle.cx, obstacle.cy, x1, y1, x2, y2).d - obstacle.r - gap;
+  }
+  const box = {
+    x: obstacle.x - gap,
+    y: obstacle.y - gap,
+    w: obstacle.w + gap * 2,
+    h: obstacle.h + gap * 2,
+  };
+  const dist = segmentRectDistance(x1, y1, x2, y2, box);
+  return dist === 0 ? -1 : dist;
+}
+
+function segmentBlocked(x1, y1, x2, y2, obstacle, gap) {
+  return obstacleClearance(x1, y1, x2, y2, obstacle, gap) < -0.05;
+}
+
+function circleDetours(x1, y1, x2, y2, obstacle, gap) {
+  const hit = pointOnSegment(obstacle.cx, obstacle.cy, x1, y1, x2, y2);
+  let ux;
+  let uy;
+  if (hit.d < 0.001) {
+    const dx = x2 - x1;
+    const dy = y2 - y1;
+    const len = Math.hypot(dx, dy) || 1;
+    ux = -dy / len;
+    uy = dx / len;
+  } else {
+    ux = (hit.x - obstacle.cx) / hit.d;
+    uy = (hit.y - obstacle.cy) / hit.d;
+  }
+  const detours = [];
+  [1, -1].forEach(side => {
+    for (let extra = 0; extra <= 80; extra += 2) {
+      const dist = obstacle.r + gap + extra;
+      const wx = obstacle.cx + ux * side * dist;
+      const wy = obstacle.cy + uy * side * dist;
+      if (!segmentBlocked(x1, y1, wx, wy, obstacle, gap) && !segmentBlocked(wx, wy, x2, y2, obstacle, gap)) {
+        detours.push({ x: wx, y: wy });
+        break;
+      }
+    }
+  });
+  return detours;
+}
+
+function rectDetours(x1, y1, x2, y2, obstacle, gap) {
+  const box = {
+    x: obstacle.x - gap,
+    y: obstacle.y - gap,
+    w: obstacle.w + gap * 2,
+    h: obstacle.h + gap * 2,
+  };
+  let inside = null;
+  for (let step = 1; step < 24; step += 1) {
+    const t = step / 24;
+    const x = x1 + (x2 - x1) * t;
+    const y = y1 + (y2 - y1) * t;
+    if (x >= box.x && x <= box.x + box.w && y >= box.y && y <= box.y + box.h) {
+      inside = { x, y };
+      break;
+    }
+  }
+  if (!inside) inside = pointOnSegment(box.x + box.w / 2, box.y + box.h / 2, x1, y1, x2, y2);
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  const len = Math.hypot(dx, dy) || 1;
+  const nx = -dy / len;
+  const ny = dx / len;
+  const detours = [];
+  [1, -1].forEach(side => {
+    for (let extra = 4; extra <= 96; extra += 4) {
+      const point = { x: inside.x + nx * side * extra, y: inside.y + ny * side * extra };
+      if (!segmentBlocked(x1, y1, point.x, point.y, obstacle, gap) && !segmentBlocked(point.x, point.y, x2, y2, obstacle, gap)) {
+        detours.push(point);
+        break;
+      }
+    }
+  });
+  return detours;
+}
+
+function pathHits(points, obstacles, gap) {
+  let count = 0;
+  for (let i = 1; i < points.length; i += 1) {
+    obstacles.forEach(obstacle => {
+      if (segmentBlocked(points[i - 1].x, points[i - 1].y, points[i].x, points[i].y, obstacle, gap)) count += 1;
+    });
+  }
+  return count;
+}
+
+function pathLength(points) {
+  let length = 0;
+  for (let i = 1; i < points.length; i += 1) {
+    length += Math.hypot(points[i].x - points[i - 1].x, points[i].y - points[i - 1].y);
+  }
+  return length;
+}
+
+/**
+ * A sub line from the bench to a circle. Straight when the lane is open.
+ * When the straight line would cross another circle or a name, one bend
+ * takes the shorter side that still clears.
+ */
+export function routeClearOfObstacles(x1, y1, x2, y2, obstacles = [], gap = 3) {
+  const blocks = (obstacles || []).filter(obstacle => (
+    isCircleObstacle(obstacle) ? obstacle.r > 0 : obstacle.w > 0 && obstacle.h > 0
+  ));
+  const points = [{ x: x1, y: y1 }, { x: x2, y: y2 }];
+  if (!blocks.length || pathHits(points, blocks, gap) === 0) return points;
+  const routed = bendClear(points, blocks, gap, 0, new Set());
+  if (pathHits(routed, blocks, gap) === 0) return routed;
+  // A phone pitch can leave only a hair of room between a circle and the name
+  // under it. Take the widest gap that still stays out of both.
+  for (const looser of [2, 1, 0]) {
+    if (looser >= gap) continue;
+    const attempt = bendClear([{ x: x1, y: y1 }, { x: x2, y: y2 }], blocks, looser, 0, new Set());
+    if (pathHits(attempt, blocks, looser) === 0) return attempt;
+  }
+  return routed;
+}
+
+function pathSignature(points) {
+  return points.map(point => `${point.x.toFixed(1)},${point.y.toFixed(1)}`).join("|");
+}
+
+function bendClear(points, obstacles, gap, depth, seen) {
+  if (depth > 6) return points;
+  const signature = pathSignature(points);
+  if (seen.has(signature)) return points;
+  const segment = worstSegment(points, obstacles, gap);
+  if (!segment) return points;
+  const detours = isCircleObstacle(segment.blocker)
+    ? circleDetours(segment.from.x, segment.from.y, segment.to.x, segment.to.y, segment.blocker, gap)
+    : rectDetours(segment.from.x, segment.from.y, segment.to.x, segment.to.y, segment.blocker, gap);
+  let best = points;
+  let bestHits = pathHits(points, obstacles, gap);
+  let bestLength = pathLength(points);
+  detours.forEach(point => {
+    const next = points.slice(0, segment.index + 1).concat([point], points.slice(segment.index + 1));
+    const branch = new Set(seen);
+    branch.add(signature);
+    const resolved = pathHits(next, obstacles, gap) === 0
+      ? next
+      : bendClear(next, obstacles, gap, depth + 1, branch);
+    const hits = pathHits(resolved, obstacles, gap);
+    const length = pathLength(resolved);
+    if (hits < bestHits || (hits === bestHits && length < bestLength)) {
+      best = resolved;
+      bestHits = hits;
+      bestLength = length;
+    }
+  });
+  return best;
+}
+
+function worstSegment(points, obstacles, gap) {
+  let found = null;
+  for (let index = 0; index < points.length - 1; index += 1) {
+    const from = points[index];
+    const to = points[index + 1];
+    obstacles.forEach(obstacle => {
+      const clearance = obstacleClearance(from.x, from.y, to.x, to.y, obstacle, gap);
+      if (clearance < -0.05 && (!found || clearance < found.clearance)) {
+        found = { index, from, to, blocker: obstacle, clearance };
+      }
+    });
+  }
+  return found;
+}
+
 function byMinutesThenName(minutesById, direction) {
   return (a, b) => {
     const diff = ((minutesById?.[a.id] || 0) - (minutesById?.[b.id] || 0)) * direction;

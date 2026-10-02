@@ -1,4 +1,4 @@
-import { lineStopAtCircle } from "./gameDay.js";
+import { lineStopAtCircle, routeClearOfObstacles } from "./gameDay.js";
 
 const Q_COLORS = {
   1: ["#f4c442", "#b87818"],
@@ -149,17 +149,31 @@ function paintQuarterPanel(ctx, x, y, w, h, panel) {
     }
   });
   ctx.save();
+  ctx.font = "bold 8px Arial, sans-serif";
+  const nameBoxFor = (slot) => {
+    const px = sx(slot.x);
+    const py = sy(slot.y);
+    const nameW = Math.max(18, ctx.measureText(firstName(slot.name).slice(0, 10)).width + 8);
+    return { x: px - nameW / 2, y: py + rim + 2, w: nameW, h: 12 };
+  };
+  const obstaclesFor = (target) => starters.flatMap(slot => {
+    const blocks = [nameBoxFor(slot)];
+    if (slot !== target) blocks.unshift({ cx: sx(slot.x), cy: sy(slot.y), r: rim });
+    return blocks;
+  });
   ctx.setLineDash([3, 3]);
   ctx.strokeStyle = "#2ecc71";
   ctx.lineWidth = 1.6;
+  ctx.lineJoin = "round";
   cards.forEach(({ player, cardY }) => {
     const target = starterById[pairByIn[player.id]?.outId];
     if (!target) return;
     const dot = dotAt(cardY);
     const stop = lineStopAtCircle(dot.x, dot.y, sx(target.x), sy(target.y), rim);
+    const points = routeClearOfObstacles(dot.x, dot.y, stop.x, stop.y, obstaclesFor(target));
     ctx.beginPath();
-    ctx.moveTo(dot.x, dot.y);
-    ctx.lineTo(stop.x, stop.y);
+    ctx.moveTo(points[0].x, points[0].y);
+    for (let i = 1; i < points.length; i += 1) ctx.lineTo(points[i].x, points[i].y);
     ctx.stroke();
   });
   ctx.restore();

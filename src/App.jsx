@@ -3359,9 +3359,10 @@ export function TabGame({ format, league, players, setPlayers, addPlayer, remove
               {subLines.length > 0 && (
                 <svg style={{position:"absolute", inset:0, width:"100%", height:"100%", pointerEvents:"none", zIndex:5, overflow:"visible"}}>
                   {subLines.map(line => (
-                    <line key={line.key}
-                      x1={line.x1} y1={line.y1} x2={line.x2} y2={line.y2}
-                      stroke="#2ecc71" strokeWidth="2" strokeDasharray="5 4" strokeLinecap="round"
+                    <polyline key={line.key}
+                      points={(line.points || [{ x: line.x1, y: line.y1 }, { x: line.x2, y: line.y2 }]).map(point => `${point.x},${point.y}`).join(" ")}
+                      fill="none"
+                      stroke="#2ecc71" strokeWidth="2" strokeDasharray="5 4" strokeLinecap="round" strokeLinejoin="round"
                     />
                   ))}
                 </svg>

@@ -30,6 +30,7 @@ import {
   equityHalves,
   formatQuarterEquity,
   lineStopAtCircle,
+  routeClearOfObstacles,
   fieldMarker,
   shareFieldSheet,
   sharePlayTimeSheet,
@@ -321,6 +322,70 @@ test("a connector stops on the circle rim, not the center", () => {
   const diagonal = lineStopAtCircle(0, 0, 30, 40, 10);
   const dist = Math.hypot(diagonal.x - 30, diagonal.y - 40);
   assert.ok(Math.abs(dist - 10) < 0.001);
+});
+
+test("a sub line bends around another circle and the name under it", () => {
+  const open = routeClearOfObstacles(0, 0, 40, 0, [{ cx: 20, cy: 40, r: 10 }]);
+  assert.deepEqual(open, [{ x: 0, y: 0 }, { x: 40, y: 0 }]);
+
+  const circle = { cx: 191.3, cy: 319.8, r: 23 };
+  const name = { x: 167.3, y: 344.8, w: 48, h: 12.8 };
+  const routed = routeClearOfObstacles(72, 359, 268, 324, [circle, name]);
+  assert.ok(routed.length >= 3, "the line needs a bend");
+  assert.deepEqual(routed[0], { x: 72, y: 359 });
+  assert.deepEqual(routed[routed.length - 1], { x: 268, y: 324 });
+  const gap = 3;
+  for (let i = 1; i < routed.length; i += 1) {
+    const from = routed[i - 1];
+    const to = routed[i];
+    const dx = to.x - from.x;
+    const dy = to.y - from.y;
+    const len2 = dx * dx + dy * dy;
+    let nearest = Infinity;
+    for (let step = 0; step <= 32; step += 1) {
+      const t = step / 32;
+      const x = from.x + dx * t;
+      const y = from.y + dy * t;
+      nearest = Math.min(nearest, Math.hypot(x - circle.cx, y - circle.cy));
+      const insideName = x >= name.x - gap && x <= name.x + name.w + gap && y >= name.y - gap && y <= name.y + name.h + gap;
+      assert.equal(insideName, false, `bend crosses the name at ${x.toFixed(1)},${y.toFixed(1)}`);
+    }
+    assert.ok(nearest >= circle.r + gap - 0.2, `bend comes within ${nearest.toFixed(1)}px of the circle`);
+  }
+});
+
+test("a crowded 320px line skirts the circle instead of cutting through it", () => {
+  const blocks = [
+    { cx: 206, cy: 298.3, r: 23 },
+    { x: 181, y: 323.3, w: 50, h: 12.8 },
+    { cx: 168, cy: 235.3, r: 23 },
+    { x: 144, y: 260.3, w: 48, h: 12.8 },
+    { x: 220.5, y: 260.3, w: 47, h: 12.8 },
+    { cx: 151.1, cy: 171, r: 23 },
+    { x: 127.1, y: 196, w: 48, h: 12.8 },
+    { cx: 260.9, cy: 171, r: 23 },
+    { x: 236.9, y: 196, w: 48, h: 12.8 },
+    { cx: 206, cy: 63.8, r: 23 },
+    { x: 182, y: 88.8, w: 48, h: 12.8 },
+  ];
+  const routed = routeClearOfObstacles(72, 275, 222, 240, blocks);
+  assert.ok(routed.length >= 3);
+  const circle = blocks[2];
+  for (let i = 1; i < routed.length; i += 1) {
+    const from = routed[i - 1];
+    const to = routed[i];
+    let nearest = Infinity;
+    for (let step = 0; step <= 40; step += 1) {
+      const t = step / 40;
+      const x = from.x + (to.x - from.x) * t;
+      const y = from.y + (to.y - from.y) * t;
+      nearest = Math.min(nearest, Math.hypot(x - circle.cx, y - circle.cy));
+      const name = blocks[3];
+      const inName = x >= name.x && x <= name.x + name.w && y >= name.y && y <= name.y + name.h;
+      assert.equal(inName, false);
+    }
+    assert.ok(nearest >= circle.r - 0.05, `segment comes within ${nearest.toFixed(1)} of the defender`);
+  }
 });
 
 test("bringing the bench on keeps positions and does not touch the original lineup", () => {

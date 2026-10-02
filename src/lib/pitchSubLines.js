@@ -1,5 +1,5 @@
 import { useLayoutEffect, useRef, useState } from "react";
-import { lineStopAtCircle } from "./gameDay.js";
+import { lineStopAtCircle, routeClearOfObstacles } from "./gameDay.js";
 
 /** Circle positions plus the field size. A change means the sub lines should be measured again. */
 export function fieldLayoutSignature(placed, fieldWidth, fieldHeight) {
@@ -15,6 +15,38 @@ function cssEscape(value) {
   return text;
 }
 
+function roundTenth(value) {
+  return Math.round(value * 10) / 10;
+}
+
+/** Circles and name boxes a sub line has to miss. The target circle is the endpoint, so it is left out. */
+function subLineObstacles(root, box, targetId) {
+  return [...root.querySelectorAll("[data-sub-to]")].flatMap(node => {
+    const id = node.getAttribute("data-sub-to");
+    const bounds = node.getBoundingClientRect();
+    const obstacles = [];
+    if (id !== targetId) {
+      obstacles.push({
+        cx: bounds.left + bounds.width / 2 - box.left,
+        cy: bounds.top + bounds.height / 2 - box.top,
+        r: Math.min(bounds.width, bounds.height) / 2,
+      });
+    }
+    const label = node.parentElement?.querySelector("[title]");
+    if (!label) return obstacles;
+    const labelBox = label.getBoundingClientRect();
+    if (labelBox.width > 0 && labelBox.height > 0) {
+      obstacles.push({
+        x: labelBox.left - box.left,
+        y: labelBox.top - box.top,
+        w: labelBox.width,
+        h: labelBox.height,
+      });
+    }
+    return obstacles;
+  });
+}
+
 /** Dashed sub lines from the bench dots to the field circles currently in the pitch. */
 export function readSubLines(root, pairs) {
   if (!root) return [];
@@ -25,24 +57,37 @@ export function readSubLines(root, pairs) {
     if (!from || !to) return null;
     const a = from.getBoundingClientRect();
     const b = to.getBoundingClientRect();
-    const x1 = a.left + a.width / 2 - box.left;
-    const y1 = a.top + a.height / 2 - box.top;
+    const x1 = Math.round(a.left + a.width / 2 - box.left);
+    const y1 = Math.round(a.top + a.height / 2 - box.top);
     const cx = b.left + b.width / 2 - box.left;
     const cy = b.top + b.height / 2 - box.top;
     const end = lineStopAtCircle(x1, y1, cx, cy, Math.min(b.width, b.height) / 2);
+    const x2 = Math.round(end.x);
+    const y2 = Math.round(end.y);
+    const routed = routeClearOfObstacles(x1, y1, x2, y2, subLineObstacles(root, box, pair.outId));
+    const points = routed.map(point => ({ x: roundTenth(point.x), y: roundTenth(point.y) }));
+    points[0] = { x: x1, y: y1 };
+    points[points.length - 1] = { x: x2, y: y2 };
     return {
       key: `${pair.inId}-${pair.outId}`,
-      x1: Math.round(x1),
-      y1: Math.round(y1),
-      x2: Math.round(end.x),
-      y2: Math.round(end.y),
+      x1,
+      y1,
+      x2,
+      y2,
+      points,
     };
   }).filter(Boolean);
+}
+
+function samePoints(prev, next) {
+  if (!prev || !next || prev.length !== next.length) return false;
+  return prev.every((point, i) => point.x === next[i].x && point.y === next[i].y);
 }
 
 function sameLines(prev, next) {
   return prev.length === next.length && prev.every((line, i) =>
     line.key === next[i].key && line.x1 === next[i].x1 && line.y1 === next[i].y1 && line.x2 === next[i].x2 && line.y2 === next[i].y2
+    && samePoints(line.points, next[i].points)
   );
 }
 
