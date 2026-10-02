@@ -1789,6 +1789,7 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
   };
 
   const restorePlayer = (playerId, source = "roster") => {
+    setReturnToast(null);
     setReturnAsk({ playerId, source });
   };
 
@@ -3220,7 +3221,7 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
       {returnToast && (
         <div role="status" style={{
           position:"fixed", left:"50%", bottom:24, transform:"translateX(-50%)",
-          zIndex:250, maxWidth:360, width:"calc(100% - 32px)",
+          zIndex:150, maxWidth:360, width:"calc(100% - 32px)",
           background:"#141a12", color:C.text, border:`1px solid ${C.gold}`,
           borderRadius:12, padding:"12px 14px", fontSize:14, fontWeight:700,
           textAlign:"center", boxShadow:"0 8px 24px rgba(0,0,0,0.45)",

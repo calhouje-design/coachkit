@@ -107,6 +107,40 @@ test("the return dialog covers the sticky header, and a tap there cancels", asyn
   }
 });
 
+test("a second return opened immediately is not covered by the first toast", async () => {
+  const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
+  try {
+    await page.goto(`${base}/return-dialog.html`, { waitUntil: "networkidle" });
+    await page.getByTestId("return-sheet").waitFor();
+    await page.getByText("Yes — eligible for Q2", { exact: true }).click();
+    await page.getByTestId("return-confirm").click();
+    const toast = page.getByTestId("return-toast");
+    await toast.waitFor();
+    assert.equal(await toast.evaluate(el => getComputedStyle(el).zIndex), "150");
+    assert.match(await page.getByTestId("log").innerText(), /"playerId":"p7"/);
+    await page.getByTestId("open-b").click();
+    const sheet = page.getByTestId("return-sheet");
+    await sheet.waitFor();
+    assert.equal(await toast.count(), 0);
+    await page.getByText("Yes — eligible for Q2", { exact: true }).click();
+    const confirm = page.getByTestId("return-confirm");
+    const box = await confirm.boundingBox();
+    const hit = await page.evaluate(({ x, y }) => {
+      const el = document.elementFromPoint(x, y);
+      return el?.closest?.("[data-testid='return-confirm']")?.getAttribute("data-testid") || el?.getAttribute?.("data-testid") || "";
+    }, { x: box.x + box.width / 2, y: box.y + box.height / 2 });
+    assert.equal(hit, "return-confirm");
+    await confirm.click();
+    assert.equal(await sheet.count(), 0);
+    const log = await page.getByTestId("log").innerText();
+    assert.match(log, /"playerId":"p8"/);
+    assert.match(log, /"type":"confirm"/);
+    assert.match(log, /"available":true/);
+  } finally {
+    await page.close();
+  }
+});
+
 test("escape and the backdrop leave the return dialog without a confirm", async () => {
   const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
   try {
