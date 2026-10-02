@@ -58,7 +58,7 @@ import {
   returnToGame,
 } from "./lib/gameDay.js";
 import { FORMATION_TEMPLATES, clampPeriod, formationNameForPeriod, preservePlayedBase, reapplyBase, reshapeLineup, withPeriodOverride, withoutPeriodOverride, normalizeFormationOverrides } from "./lib/formations.js";
-import { CIRCLE_DIAMETER, LABEL_GAP, layoutFieldPlayers, labelWidth } from "./lib/fieldLayout.js";
+import { CIRCLE_DIAMETER, LABEL_GAP, LABEL_LETTER_SPACING_EM, LABEL_WIDTH_GUARD, labelProbeCss, layoutFieldPlayers, labelWidth } from "./lib/fieldLayout.js";
 import { usePitchSubLines, useReportFieldLayout } from "./lib/pitchSubLines.js";
 import { SAY_PLAY_TIME, sayDivision, sayDivisionKey } from "./lib/sayEastGuide.js";
 import { downloadCanvas, paintFieldSheet, paintPlayTimeSheet } from "./lib/sharePaint.js";
@@ -709,10 +709,11 @@ function SoccerField({ lineup, onTap, selectedIdx, quarter, periodAbbrev = "Q", 
       if (cache.has(key)) return cache.get(key);
       const probe = document.createElement("span");
       const fontFamily = getComputedStyle(el).fontFamily;
-      probe.style.cssText = `position:absolute;visibility:hidden;white-space:nowrap;pointer-events:none;font-family:${fontFamily};font-size:9px;font-weight:800;line-height:1.2;padding:1px 4px;`;
+      probe.style.cssText = labelProbeCss(fontFamily);
       probe.textContent = key;
       el.appendChild(probe);
-      const width = Math.ceil(probe.getBoundingClientRect().width) || labelWidth(key);
+      const measured = probe.getBoundingClientRect().width;
+      const width = measured > 0 ? Math.ceil(measured) + LABEL_WIDTH_GUARD : labelWidth(key);
       probe.remove();
       cache.set(key, width);
       return width;
@@ -870,7 +871,7 @@ function SoccerField({ lineup, onTap, selectedIdx, quarter, periodAbbrev = "Q", 
                   background:"rgba(10,13,15,0.78)",
                   borderRadius:4, padding:"1px 4px",
                   textShadow:"0 1px 2px rgba(0,0,0,0.9)",
-                  letterSpacing:"0.02em", whiteSpace:"nowrap", lineHeight:1.2,
+                  letterSpacing:`${LABEL_LETTER_SPACING_EM}em`, whiteSpace:"nowrap", lineHeight:1.2,
                   textAlign:"center",
                   boxSizing:"border-box",
                   pointerEvents:"none",
@@ -1800,15 +1801,12 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
     });
     setPlayers(result.players);
     if (!result.regenerated) return;
-    // A non-live Return rebuilds later periods, so a manual swap on a later
-    // tab must not keep that period pinned. A live Return leaves the flags as they are.
-    if (!liveReturn) {
-      setRealPeriodEvents(prev => realEventsAfterReturn(prev, {
-        quarter,
-        live: false,
-        regenerated: true,
-      }));
-    }
+    // The rebuild drops manual-change flags on later periods. A live Return
+    // still keeps the flag already on this period.
+    setRealPeriodEvents(prev => realEventsAfterReturn(prev, {
+      quarter,
+      regenerated: true,
+    }));
     setSubSegments(result.segments);
     notePlanResult(result.lineups, result.players, appearanceCredit, result.segments);
     syncStints(result.lineups[quarter]);

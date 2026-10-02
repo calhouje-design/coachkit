@@ -11,6 +11,14 @@ globalThis.Element = window.Element;
 globalThis.getComputedStyle = window.getComputedStyle.bind(window);
 globalThis.MutationObserver = window.MutationObserver;
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+// Node 22 already defines navigator. Node 20 does not, and React reads it while loading.
+if (typeof globalThis.navigator === "undefined") {
+  Object.defineProperty(globalThis, "navigator", {
+    configurable: true,
+    enumerable: true,
+    get() { return window.navigator; },
+  });
+}
 
 const observers = [];
 globalThis.ResizeObserver = class ResizeObserver {

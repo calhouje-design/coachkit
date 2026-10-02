@@ -33,11 +33,29 @@ const BANDS = [
   { id: "fwd", minY: 0 },
 ];
 
-/** Outer width of a 9px bold name label, including its horizontal padding. */
+/** Matches the name label drawn on the circle. */
+export const LABEL_FONT_SIZE = 9;
+export const LABEL_LETTER_SPACING_EM = 0.02;
+/** Subpixel rounding and letter-spacing can exceed a tight box by a pixel or two. */
+export const LABEL_WIDTH_GUARD = 2;
+
+/** Outer width of a 9px bold name label, including padding, letter-spacing, and a rounding guard. */
 export function labelWidth(text) {
+  const value = String(text || "");
   let width = 8;
-  for (const ch of String(text || "")) width += CHAR_W[ch] ?? 9;
-  return Math.ceil(width);
+  let count = 0;
+  for (const ch of value) {
+    width += CHAR_W[ch] ?? 9;
+    count += 1;
+  }
+  if (count > 1) width += LABEL_LETTER_SPACING_EM * LABEL_FONT_SIZE * (count - 1);
+  return Math.ceil(width) + LABEL_WIDTH_GUARD;
+}
+
+/** Hidden probe that uses the same font rules as the rendered name. */
+export function labelProbeCss(fontFamily) {
+  const family = fontFamily || "Georgia, serif";
+  return `position:absolute;visibility:hidden;white-space:nowrap;pointer-events:none;font-family:${family};font-size:${LABEL_FONT_SIZE}px;font-weight:800;line-height:1.2;letter-spacing:${LABEL_LETTER_SPACING_EM}em;padding:1px 4px;`;
 }
 
 export function lineBand(pos) {

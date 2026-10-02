@@ -52,7 +52,7 @@ function fieldHtml(sheet, fieldWidth, fieldHeight) {
   .mark { position: absolute; width: 46px; transform: translateX(-50%); text-align: center; }
   .circle { width: 46px; height: 46px; border-radius: 50%; box-sizing: border-box; border: 2px solid rgba(255,255,255,0.8); background: linear-gradient(135deg,#f4b942,#d99820); color: #1a1a1a; font-size: 9px; font-weight: 800; display: flex; flex-direction: column; align-items: center; justify-content: center; }
   .circle span { font-size: 8px; }
-  .name { position: absolute; left: 50%; transform: translateX(-50%); box-sizing: border-box; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: center; font-size: 9px; font-weight: 800; line-height: 1.2; padding: 1px 4px; color: #fff; background: rgba(10,13,15,0.78); border-radius: 4px; }
+  .name { position: absolute; left: 50%; transform: translateX(-50%); box-sizing: border-box; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: center; font-size: 9px; font-weight: 800; line-height: 1.2; letter-spacing: 0.02em; padding: 1px 4px; color: #fff; background: rgba(10,13,15,0.78); border-radius: 4px; }
   h1 { font-size: 13px; margin: 0 0 8px; letter-spacing: 0.04em; }
 </style></head>
 <body><div class="page"><h1>${sheet.title} · 390px</h1><div class="row"><div class="bench"><button class="sub">SUB</button><b>BENCH</b></div>
@@ -101,6 +101,9 @@ for (const sheet of sheets) {
         right: r.right - field.left,
         bottom: r.bottom - field.top,
         full: el.getAttribute("title") || "",
+        text: el.className === "name" ? el.textContent : "",
+        scroll: el.className === "name" ? el.scrollWidth : 0,
+        client: el.className === "name" ? el.clientWidth : 0,
       };
     });
     return { field: { width: field.width, height: field.height }, boxes };
@@ -114,12 +117,14 @@ for (const sheet of sheets) {
     }
   }
   const outside = result.boxes.filter(box => box.x < -0.5 || box.y < -0.5 || box.right > result.field.width + 0.5 || box.bottom > result.field.height + 0.5);
+  const clipped = result.boxes.filter(box => box.kind === "name" && box.text === box.full && box.scroll > box.client + 0.5);
   const shot = `${OUT}/${sheet.file}`;
   await page.screenshot({ path: shot, clip: { x: 0, y: 0, width: VIEW_W, height: Math.min(VIEW_H, 760) } });
   await writeFile(`${OUT}/${sheet.file.replace(".png", ".json")}`, JSON.stringify({ size, field: result.field, hits, outside, boxes: result.boxes }, null, 2));
-  report.push({ file: shot, formation: sheet.title, field: result.field, hits, outside: outside.map(box => box.name) });
+  report.push({ file: shot, formation: sheet.title, field: result.field, hits, clipped: clipped.map(box => box.full), outside: outside.map(box => box.name) });
   await page.close();
 }
 await browser.close();
+// Dev-only CLI report for this headless check.
 console.log(JSON.stringify(report, null, 2));
-if (report.some(row => row.hits.length || row.outside.length)) process.exit(1);
+if (report.some(row => row.hits.length || row.outside.length || row.clipped.length)) process.exit(1);

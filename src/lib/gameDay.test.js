@@ -3252,21 +3252,109 @@ test("a non-live return clears a later real swap so replan can change that perio
   });
 });
 
-test("a live return keeps later flags, and a return that does not rebuild keeps them too", () => {
-  const setup = returnAfterLaterSwap({ subMode: true });
-  const kept = realEventsAfterReturn(setup.events, { quarter: 2, live: true, regenerated: true });
-  assert.equal(periodHasRealEvent(kept, 3), true);
-  assert.deepEqual(realEventPlayerIds(kept, 1), [setup.q1Id]);
-  assert.equal(periodHasRealEvent(kept, 2), false);
-  const decision = liveReplanClockDecision({
-    liveReplan: true,
-    fromQuarter: 3,
-    quarter: 3,
-    clockStarted: false,
-    realEvent: periodHasRealEvent(kept, 3),
+test("a live return clears later flags, keeps this period's flag, and replan can change Q3", () => {
+  [true, false].forEach(subMode => {
+    const setup = returnAfterLaterSwap({ subMode });
+    assert.equal(periodHasRealEvent(setup.events, 1), true);
+    const returned = returnToGame({
+      autoRegen: true,
+      players: setup.outPlayers,
+      playerId: setup.benchId,
+      quarter: 1,
+      totalQuarters: 4,
+      lineups: setup.swapped,
+      segments: setup.segments,
+      slots: setup.slots,
+      subMode,
+      minHalves: 4,
+      livePeriod: true,
+      protectedIds: realEventPlayerIds(setup.events, 1),
+    });
+    assert.equal(returned.regenerated, true);
+    assert.equal(returned.players.find(player => player.id === setup.benchId).out, false);
+    const flags = realEventsAfterReturn(setup.events, {
+      quarter: 1,
+      live: true,
+      regenerated: true,
+    });
+    assert.equal(periodHasRealEvent(flags, 3), false, subMode ? "sub Q3" : "full Q3");
+    assert.equal(periodHasRealEvent(flags, 4), false);
+    assert.deepEqual(realEventPlayerIds(flags, 1), [setup.q1Id]);
+    const decision = liveReplanClockDecision({
+      liveReplan: true,
+      fromQuarter: 3,
+      quarter: 3,
+      clockStarted: false,
+      realEvent: periodHasRealEvent(flags, 3),
+    });
+    assert.deepEqual(decision, { resetClock: false, pinGoalkeeper: false });
+    const carried = replanCarryForward({
+      resetClock: decision.resetClock,
+      fromQuarter: 3,
+      livePeriod: decision.pinGoalkeeper,
+      segments: returned.segments,
+      credit: {},
+      overrides: {},
+    });
+    const beforeGk = goalkeeperId(returned.lineups[3]);
+    const beforeMarks = JSON.stringify(quarterMarkMap(returned.segments, 3));
+    const beforeField = JSON.stringify((returned.lineups[3].starters || []).map(slot => slot.player?.id).filter(Boolean).sort());
+    let marksChanged = false;
+    let fieldChanged = false;
+    let gkMoved = false;
+    for (let seed = 1; seed <= 24; seed++) {
+      if (subMode) {
+        const planned = scheduleHalfRotation(returned.players, setup.slots, {
+          minHalves: 4,
+          totalQuarters: 4,
+          fromQuarter: 3,
+          lockedLineups: { 1: returned.lineups[1], 2: returned.lineups[2] },
+          lockedSegments: carried.segments,
+          seed,
+        });
+        const stored = segmentsSavedForSubReplan(planned.segments, returned.segments, planned.lineups, {
+          fromQuarter: 3,
+          resetClock: false,
+          livePeriod: decision.pinGoalkeeper,
+        });
+        assert.equal(planned.lineups[1], returned.lineups[1]);
+        assert.equal(planned.lineups[2], returned.lineups[2]);
+        if (JSON.stringify(quarterMarkMap(stored, 3)) !== beforeMarks) marksChanged = true;
+        if (goalkeeperId(planned.lineups[3]) !== beforeGk) gkMoved = true;
+      } else {
+        const planned = scheduleWholeGame({
+          players: returned.players,
+          format: "6v6",
+          slotOverride: setup.slots,
+          totalPeriods: 4,
+          minFraction: 0.5,
+          fromQuarter: 3,
+          lockedLineups: { 1: returned.lineups[1], 2: returned.lineups[2] },
+          segments: carried.segments,
+          seed,
+        });
+        const stored = segmentsSavedForFullReplan(returned.segments, planned, {
+          fromQuarter: 3,
+          resetClock: decision.resetClock,
+          livePeriod: decision.pinGoalkeeper,
+        });
+        assert.equal(planned[1], returned.lineups[1]);
+        assert.equal(planned[2], returned.lineups[2]);
+        const onNow = (planned[3].starters || []).map(slot => slot.player?.id).filter(Boolean).sort();
+        if (JSON.stringify(onNow) !== beforeField) fieldChanged = true;
+        if (goalkeeperId(planned[3]) !== beforeGk) gkMoved = true;
+        assert.deepEqual(quarterMarkMap(stored, 3), {});
+      }
+    }
+    if (subMode) assert.equal(marksChanged, true);
+    else assert.equal(fieldChanged, true);
+    assert.equal(gkMoved, true, subMode ? "sub gk" : "full gk");
   });
-  assert.deepEqual(decision, { resetClock: false, pinGoalkeeper: true });
-  const untouched = realEventsAfterReturn(setup.events, { quarter: 2, live: false, regenerated: false });
+});
+
+test("a return that does not rebuild keeps later flags", () => {
+  const setup = returnAfterLaterSwap({ subMode: true });
+  const untouched = realEventsAfterReturn(setup.events, { quarter: 1, live: true, regenerated: false });
   assert.equal(periodHasRealEvent(untouched, 3), true);
   assert.deepEqual(realEventPlayerIds(untouched, 1), [setup.q1Id]);
 });

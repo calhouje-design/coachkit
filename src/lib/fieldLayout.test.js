@@ -5,6 +5,9 @@ import {
   CIRCLE_DIAMETER,
   FOUR_WIDE_MIN_NUDGE,
   FOUR_WIDE_OFFSET_CAP,
+  LABEL_FONT_SIZE,
+  LABEL_LETTER_SPACING_EM,
+  LABEL_WIDTH_GUARD,
   SIDE_MARGIN,
   fitPlayerLabel,
   labelWidth,
@@ -86,6 +89,15 @@ function assertSpread(layout, fieldWidth) {
     }
   });
 }
+
+test("label width includes letter-spacing and a rounding guard", () => {
+  const gap = labelWidth("AA") - labelWidth("A");
+  assert.ok(gap >= 7, `letter-spacing gap ${gap}`);
+  assert.equal(LABEL_WIDTH_GUARD, 2);
+  assert.ok(labelWidth("Sean Jones") >= LABEL_WIDTH_GUARD);
+  assert.equal(LABEL_FONT_SIZE, 9);
+  assert.equal(LABEL_LETTER_SPACING_EM, 0.02);
+});
 
 test("a tight label uses a last initial, then an ellipsis", () => {
   assert.equal(fitPlayerLabel("Blake Pete", labelWidth("Blake Pete")), "Blake Pete");
