@@ -973,20 +973,134 @@ export function segmentsSavedForSubReplan(plannedSegments, previousSegments, lin
 }
 
 /**
- * Plan full game resets the clock. Replan of the period already on the clock
- * keeps the elapsed time and pins that period's goalkeeper, including period 1.
- * A replan before the clock starts still resets period 1.
+ * Plan full game resets the clock. Replan of the period already on the clock,
+ * or of a period where the coach recorded a real swap or injury, keeps that
+ * period and pins its goalkeeper, including period 1.
+ * A replan before any of that still resets period 1.
+ * Planned marks alone are not a real event.
  */
 export function liveReplanClockDecision({
   liveReplan = false,
   fromQuarter = 1,
   quarter = 1,
   clockStarted = false,
+  realEvent = false,
 } = {}) {
   const fromQ = Math.max(1, Number(fromQuarter) || 1);
   const q = Math.max(1, Number(quarter) || 1);
-  const pinGoalkeeper = !!(liveReplan && clockStarted && fromQ === q);
+  const pinGoalkeeper = !!(liveReplan && fromQ === q && (clockStarted || realEvent));
   return { resetClock: fromQ === 1 && !pinGoalkeeper, pinGoalkeeper };
+}
+
+function periodKey(quarter) {
+  const q = Number(quarter);
+  return Number.isInteger(q) && q > 0 ? String(q) : "";
+}
+
+/** Per-period clock kept on this device. `sec` is the period clock. `stints` are already banked up to that second. */
+export function normalizePeriodClock(value) {
+  const sec = Math.max(0, Number(value?.sec) || 0);
+  const stints = {};
+  Object.entries(value?.stints || {}).forEach(([id, start]) => {
+    if (!id) return;
+    const n = Number(start);
+    if (Number.isFinite(n)) stints[id] = n;
+  });
+  return { sec, stints };
+}
+
+export function periodClockState(saved, quarter) {
+  const key = periodKey(quarter);
+  if (!key || !saved) return { sec: 0, stints: {} };
+  const row = saved[key] ?? saved[Number(key)];
+  if (!row) return { sec: 0, stints: {} };
+  return normalizePeriodClock(row);
+}
+
+export function rememberPeriodClock(saved, quarter, sec, stints) {
+  const key = periodKey(quarter);
+  if (!key) return saved || {};
+  return { ...(saved || {}), [key]: normalizePeriodClock({ sec, stints }) };
+}
+
+/**
+ * Leave one period tab and open another. The clock and stints just left are stored.
+ * The destination period's clock is restored. Lineups and appearance credit are not inputs.
+ */
+export function clockAfterPeriodSwitch(saved, fromQuarter, toQuarter, sec, stints) {
+  const clocks = rememberPeriodClock(saved, fromQuarter, sec, stints);
+  const restored = periodClockState(clocks, toQuarter);
+  return { clocks, clockSec: restored.sec, stints: restored.stints };
+}
+
+/** Quarter -> player ids who were in a real swap, or who were marked injured or out. Presence of the key is the flag. */
+export function normalizeRealPeriodEvents(value) {
+  const next = {};
+  if (!value || typeof value !== "object" || Array.isArray(value)) return next;
+  Object.entries(value).forEach(([quarter, entry]) => {
+    const key = periodKey(quarter);
+    if (!key) return;
+    const ids = Array.isArray(entry) ? entry : [];
+    const unique = [];
+    ids.forEach(id => {
+      if (id && !unique.includes(id)) unique.push(String(id));
+    });
+    next[key] = unique;
+  });
+  return next;
+}
+
+export function periodHasRealEvent(flags, quarter) {
+  const key = periodKey(quarter);
+  if (!key || !flags || typeof flags !== "object") return false;
+  return Object.prototype.hasOwnProperty.call(flags, key)
+    || Object.prototype.hasOwnProperty.call(flags, Number(key));
+}
+
+export function realEventPlayerIds(flags, quarter) {
+  const key = periodKey(quarter);
+  if (!key || !flags) return [];
+  const entry = flags[key] ?? flags[Number(key)];
+  return Array.isArray(entry) ? entry.filter(Boolean) : [];
+}
+
+export function noteRealPeriodEvent(flags, quarter, playerIds = []) {
+  const key = periodKey(quarter);
+  if (!key) return normalizeRealPeriodEvents(flags);
+  const next = normalizeRealPeriodEvents(flags);
+  const ids = [...(next[key] || [])];
+  (playerIds || []).forEach(id => {
+    if (id && !ids.includes(String(id))) ids.push(String(id));
+  });
+  next[key] = ids;
+  return next;
+}
+
+/** Keep real events for periods 1..throughQuarter. Later periods were rebuilt. */
+export function realEventsThrough(flags, throughQuarter) {
+  const end = Number(throughQuarter) || 0;
+  const next = {};
+  Object.entries(normalizeRealPeriodEvents(flags)).forEach(([quarter, ids]) => {
+    if (Number(quarter) <= end) next[quarter] = ids;
+  });
+  return next;
+}
+
+/**
+ * An Out or injury is a real event only when that period is already live:
+ * the clock has run, or a real swap is already on the period.
+ * An Out at 0:00 is not. When auto-regen rebuilds this period and the ones after it,
+ * those later real-event flags are dropped. The current period is not flagged.
+ */
+export function realEventsAfterUnavailable(flags, {
+  quarter,
+  live = false,
+  playerId,
+  autoRegen = true,
+} = {}) {
+  const kept = autoRegen ? realEventsThrough(flags, quarter) : normalizeRealPeriodEvents(flags);
+  if (!live) return kept;
+  return noteRealPeriodEvent(kept, quarter, [playerId]);
 }
 
 function pickQuarterGoalkeepers(active, slotNames, remaining, satLast, seed = null) {
@@ -1289,6 +1403,112 @@ function giveReturnerFieldTime(lineups, segments, returning, fromQuarter, totalQ
   return next;
 }
 
+function writePeriodSegment(segments, playerId, quarter, kind) {
+  const next = { ...(segments || {}) };
+  const row = { ...(next[playerId] || {}) };
+  const q = Number(quarter);
+  delete row[q];
+  delete row[String(q)];
+  if (kind) row[q] = kind;
+  if (Object.keys(row).length) next[playerId] = row;
+  else delete next[playerId];
+  return next;
+}
+
+function segmentKindForMask(mask) {
+  const [first, second] = mask || [];
+  if (first && !second) return "left";
+  if (!first && second) return "entered";
+  return null;
+}
+
+function placeReturnerForDonor(lineup, returning, donorId) {
+  if (!lineup?.starters || !returning) return lineup;
+  const starters = lineup.starters.map(slot => (
+    slot.player?.id === donorId ? { ...slot, player: returning } : slot
+  ));
+  const outgoing = (lineup.starters || []).find(slot => slot.player?.id === donorId)?.player || null;
+  let bench = (lineup.bench || []).filter(player => player?.id !== returning.id && player?.id !== donorId);
+  if (outgoing) bench = [...bench, outgoing];
+  return { starters, bench };
+}
+
+/**
+ * Last-period return in half mode. Give the returner open halves until they
+ * reach the minimum, or until nobody can spare one.
+ * The goalkeeper and real-swap players stay where they are.
+ */
+export function giveReturnerHalfSlots(lineups, segments, returning, quarter, totalQuarters, minHalves, {
+  protectedIds = [],
+} = {}) {
+  if (!returning?.id) return { lineups: lineups || {}, segments: segments || {} };
+  const q = Number(quarter);
+  const lineup = lineups?.[q] || lineups?.[String(q)];
+  if (!lineup?.starters) return { lineups: lineups || {}, segments: segments || {} };
+  const quarters = [];
+  for (let period = 1; period <= totalQuarters; period++) quarters.push(period);
+  const halvesOf = (sheet, marks, playerId) => equityHalves(playerId, {
+    lineups: sheet,
+    segments: marks,
+    credit: {},
+    quarters,
+  });
+  const gkId = goalkeeperId(lineup);
+  const protect = new Set([...(protectedIds || []), gkId].filter(Boolean).map(id => String(id)));
+  let nextLineups = {
+    ...(lineups || {}),
+    [q]: {
+      starters: lineup.starters.map(slot => ({ ...slot })),
+      bench: [...(lineup.bench || [])],
+    },
+  };
+  let nextSegments = segments || {};
+  const id = returning.id;
+  let guard = 0;
+  while (halvesOf(nextLineups, nextSegments, id) < minHalves && guard < 4) {
+    guard += 1;
+    const before = halvesOf(nextLineups, nextSegments, id);
+    const mine = playerHalfMask(id, nextLineups[q], segmentAt(nextSegments, id, q));
+    const needHalf = mine[0] ? (mine[1] ? -1 : 1) : 0;
+    if (needHalf < 0) break;
+    const seen = new Set();
+    const donors = [];
+    const consider = (player) => {
+      if (!player?.id || player.id === id || seen.has(player.id) || protect.has(String(player.id))) return;
+      seen.add(player.id);
+      const onField = (nextLineups[q].starters || []).some(slot => slot.player?.id === player.id);
+      if (needHalf === 1 && !onField) return;
+      const mask = playerHalfMask(player.id, nextLineups[q], segmentAt(nextSegments, player.id, q));
+      if (!mask[needHalf]) return;
+      if (halvesOf(nextLineups, nextSegments, player.id) - 1 < minHalves) return;
+      donors.push(player);
+    };
+    (nextLineups[q].starters || []).forEach(slot => consider(slot.player));
+    (nextLineups[q].bench || []).forEach(consider);
+    donors.sort((a, b) => (
+      halvesOf(nextLineups, nextSegments, b.id) - halvesOf(nextLineups, nextSegments, a.id)
+      || String(a.id).localeCompare(String(b.id))
+    ));
+    const donor = donors[0];
+    if (!donor) break;
+    const donorMask = playerHalfMask(donor.id, nextLineups[q], segmentAt(nextSegments, donor.id, q));
+    const nextMine = [mine[0], mine[1]];
+    const nextDonor = [donorMask[0], donorMask[1]];
+    nextMine[needHalf] = true;
+    nextDonor[needHalf] = false;
+    nextSegments = writePeriodSegment(nextSegments, id, q, segmentKindForMask(nextMine));
+    nextSegments = writePeriodSegment(nextSegments, donor.id, q, segmentKindForMask(nextDonor));
+    if (needHalf === 1) {
+      nextLineups = { ...nextLineups, [q]: placeReturnerForDonor(nextLineups[q], returning, donor.id) };
+    } else if (!(nextLineups[q].bench || []).some(player => player?.id === id)
+      && !(nextLineups[q].starters || []).some(slot => slot.player?.id === id)) {
+      nextLineups = { ...nextLineups, [q]: addLateArrival(nextLineups[q], returning) };
+    }
+    if (halvesOf(nextLineups, nextSegments, id) <= before) break;
+  }
+  return { lineups: nextLineups, segments: nextSegments };
+}
+
 /**
  * Rebuild the sheet when someone is injured or out.
  * Quarters from `fromQuarter` until the quarter before `returnQuarter` drop that
@@ -1298,6 +1518,7 @@ function giveReturnerFieldTime(lineups, segments, returning, fromQuarter, totalQ
  * The goalkeeper stays in goal for the in-progress period unless they are the one hurt.
  * Periods before fromQuarter are copied through and not rebuilt.
  * lockGoalkeeperId pins that keeper on the live period after a replan (a returning keeper does not take the gloves mid-period).
+ * A live return in the last period of half mode also gives that player any open halves they still need.
  */
 export function regenerateForAbsence({
   players,
@@ -1313,6 +1534,8 @@ export function regenerateForAbsence({
   totalQuarters = 4,
   slotsByQuarter = null,
   lockGoalkeeperId = null,
+  livePeriod = false,
+  protectedIds = [],
 } = {}) {
   const start = Math.max(1, Number(fromQuarter) || 1);
   const back = returnQuarter == null ? null : Number(returnQuarter);
@@ -1395,7 +1618,7 @@ export function regenerateForAbsence({
     rate,
     slotsByQuarter,
   });
-  const returned = { ...returnPlan.lineups };
+  let returned = { ...returnPlan.lineups };
   for (let q = start; q <= absentEnd; q++) {
     if (returned[q]) returned[q] = pullFromQuarter(returned[q], absentId);
   }
@@ -1403,6 +1626,14 @@ export function regenerateForAbsence({
   if (lockGoalkeeperId && returned[back]) {
     returned[back] = pinNamedGoalkeeper(returned[back], lockGoalkeeperId, withBack);
     returnSegments = creditPinnedGoalkeeper(returnSegments, returned[back], back);
+  }
+  if (livePeriod && back === totalQuarters) {
+    const returning = withBack.find(player => player?.id === absentId);
+    const topped = giveReturnerHalfSlots(returned, returnSegments, returning, back, totalQuarters, minHalves, {
+      protectedIds,
+    });
+    returned = topped.lineups;
+    returnSegments = creditPinnedGoalkeeper(topped.segments, returned[back], back);
   }
   return { lineups: returned, segments: returnSegments };
 }
@@ -1427,6 +1658,7 @@ export function returnToGame({
   minHalves = 4,
   rate = () => 0,
   livePeriod = false,
+  protectedIds = [],
 } = {}) {
   const q = Math.max(1, Number(quarter) || 1);
   const nextPlayers = (players || []).map(player => {
@@ -1458,6 +1690,7 @@ export function returnToGame({
     minHalves,
     rate,
     livePeriod,
+    protectedIds,
   });
   return {
     source,
@@ -1488,6 +1721,7 @@ export function planAvailability({
   minHalves = 4,
   rate = () => 0,
   livePeriod = false,
+  protectedIds = [],
 } = {}) {
   const start = Math.max(1, Number(quarter) || 1);
   if (!autoRegen) {
@@ -1513,6 +1747,8 @@ export function planAvailability({
     rate,
     totalQuarters,
     lockGoalkeeperId,
+    livePeriod: !!livePeriod && kind === "return",
+    protectedIds,
   });
 }
 

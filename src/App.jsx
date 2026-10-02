@@ -43,6 +43,12 @@ import {
   sheetMeetsMinimum,
   liveReplanGoalkeeper,
   liveReplanClockDecision,
+  clockAfterPeriodSwitch,
+  periodHasRealEvent,
+  noteRealPeriodEvent,
+  realEventsAfterUnavailable,
+  realEventPlayerIds,
+  realEventsThrough,
   replanCarryForward,
   segmentsSavedForSubReplan,
   segmentsSavedForFullReplan,
@@ -1234,16 +1240,20 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
   const [subSegments, setSubSegments] = [live.subSegments, bindField(setGameDay, "subSegments", normalizeGameDay)];
   const [pairPlan, setPairPlan] = [live.pairPlan, bindField(setGameDay, "pairPlan", normalizeGameDay)];
   const [subQueue, setSubQueue] = [live.subQueue, bindField(setGameDay, "subQueue", normalizeGameDay)];
+  const [realPeriodEvents, setRealPeriodEvents] = [live.realPeriodEvents, bindField(setGameDay, "realPeriodEvents", normalizeGameDay)];
   const [chartFocusId, setChartFocusId] = useState(null);
   const [clockSec, setClockSec] = usePersistedState(storagePrefix+"clockSec", 0);
+  const [clockByPeriod, setClockByPeriod] = usePersistedState(storagePrefix+"clockByPeriod", {});
   const [editOpp,   setEditOpp]   = useState(false);
   const clockRef = useRef(0);
   const stintRef = useRef({});
+  const clocksRef = useRef(clockByPeriod || {});
   const bankRef = useRef({});
   const quarterRef = useRef(quarter);
   const lineupsRef = useRef(lineupsByQuarter);
   useEffect(() => { clockRef.current = clockSec; }, [clockSec]);
   useEffect(() => { stintRef.current = stintStart; }, [stintStart]);
+  useEffect(() => { clocksRef.current = clockByPeriod || {}; }, [clockByPeriod]);
   useEffect(() => { bankRef.current = minuteBank || {}; }, [minuteBank]);
   useEffect(() => { quarterRef.current = quarter; }, [quarter]);
   useEffect(() => { lineupsRef.current = lineupsByQuarter; }, [lineupsByQuarter]);
@@ -1354,12 +1364,26 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
     const requested = typeof value === "function" ? value(quarterRef.current) : value;
     const next = clampPeriod(quarterRef.current, requested, totalQuarters);
     if (next === quarterRef.current) return;
-    commitOnFieldMinutes();
     setRunning(false);
-    clockRef.current = 0;
-    setClockSec(0);
-    stintRef.current = {};
-    setStintStart({});
+    commitOnFieldMinutes();
+    const lineup = lineupsRef.current?.[quarterRef.current];
+    const held = {};
+    (lineup?.starters || []).forEach(slot => {
+      if (slot.player?.id) held[slot.player.id] = clockRef.current || 0;
+    });
+    const switched = clockAfterPeriodSwitch(
+      clocksRef.current,
+      quarterRef.current,
+      next,
+      clockRef.current || 0,
+      held,
+    );
+    clocksRef.current = switched.clocks;
+    setClockByPeriod(switched.clocks);
+    clockRef.current = switched.clockSec;
+    setClockSec(switched.clockSec);
+    stintRef.current = switched.stints || {};
+    setStintStart(switched.stints || {});
     setQuarterRaw(next);
     setSwapSel(null);
   };
@@ -1438,8 +1462,11 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
     setRunning(false);
     clockRef.current = 0;
     setClockSec(0);
+    clocksRef.current = {};
+    setClockByPeriod({});
     stintRef.current = {};
     setStintStart({});
+    setRealPeriodEvents({});
     setPlanSub(false);
     setQueueNote(null);
   };
@@ -1452,12 +1479,17 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
       return;
     }
     const clockStarted = running || (clockRef.current || 0) > 0;
+    const realEvent = periodHasRealEvent(realPeriodEvents, fromQ);
     const decision = liveReplanClockDecision({
       liveReplan: !!options.liveReplan,
       fromQuarter: fromQ,
       quarter,
-      clockStarted,
+      clockStarted: fromQ === quarter && clockStarted,
+      realEvent: fromQ === quarter && realEvent,
     });
+    const keptRealEvents = decision.resetClock
+      ? {}
+      : realEventsThrough(realPeriodEvents, decision.pinGoalkeeper ? fromQ : fromQ - 1);
     if (decision.resetClock) resetLiveTracking();
     else if (fromQ === quarter) commitOnFieldMinutes();
     const locked = {};
@@ -1538,6 +1570,7 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
       const planned = chosen.plan;
       rememberSheet(planned.lineups);
       const storedHalfSegments = savedSubSegments(planned);
+      setRealPeriodEvents(keptRealEvents);
       setSubSegments(storedHalfSegments);
       notePlanResult(planned.lineups, players, creditForPlan, storedHalfSegments);
       if (!decision.resetClock && fromQ === quarter && running) {
@@ -1580,6 +1613,7 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
     const result = chosen.plan;
     rememberSheet(result);
     const storedSegments = savedFullSegments(result);
+    setRealPeriodEvents(keptRealEvents);
     setSubSegments(storedSegments);
     notePlanResult(result, players, creditForPlan, storedSegments);
     if (!decision.resetClock && fromQ === quarter && running) {
@@ -1627,7 +1661,7 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
     if (!player) return;
     const currentL = lineupsByQuarter[quarter];
     const wasOn = !!currentL?.starters?.some(slot => slot.player?.id === playerId);
-    const live = running || (clockRef.current || 0) > 0;
+    const live = running || (clockRef.current || 0) > 0 || periodHasRealEvent(realPeriodEvents, quarter);
     if (wasOn) bankLeave(playerId);
     const updatedPlayers = players.map(p => {
       if (p.id !== playerId) return p;
@@ -1638,6 +1672,14 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
     dropQueued(playerId);
     if (mode === "injury") setInjuryAlerts(prev => [...prev, { player, quarter, id: Date.now() }]);
     const hasSheet = Object.keys(lineupsByQuarter).length > 0;
+    if (live || (autoRegen && hasSheet)) {
+      setRealPeriodEvents(prev => realEventsAfterUnavailable(prev, {
+        quarter,
+        live,
+        playerId,
+        autoRegen,
+      }));
+    }
     if (!hasSheet) return;
     let credit = appearanceCredit;
     if (wasOn) credit = setAppearanceCreditFor(credit, playerId, quarter, true);
@@ -1688,7 +1730,7 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
   };
 
   const restorePlayer = (playerId, source = "roster") => {
-    const liveReturn = running || (clockRef.current || 0) > 0;
+    const liveReturn = running || (clockRef.current || 0) > 0 || periodHasRealEvent(realPeriodEvents, quarter);
     const hasSheet = Object.keys(lineupsByQuarter).length > 0;
     const result = returnToGame({
       source,
@@ -1705,6 +1747,7 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
       minHalves,
       rate: getOverallRating,
       livePeriod: liveReturn,
+      protectedIds: realEventPlayerIds(realPeriodEvents, quarter),
     });
     setPlayers(result.players);
     if (!result.regenerated) return;
@@ -1762,6 +1805,7 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
       if (incoming) credit = setAppearanceCreditFor(credit, incoming.id, qKey, false);
       nextSegments = markQuarterSub(subSegments, qKey, outgoing?.id, incoming?.id);
     }
+    setRealPeriodEvents(prev => noteRealPeriodEvent(prev, qKey, [outgoing?.id, incoming?.id]));
     setAppearanceCredit(credit);
     setSubSegments(nextSegments);
     if (doBank) {
@@ -2072,6 +2116,7 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
     });
     setAppearanceCredit(credit);
     setSubSegments(segments);
+    setRealPeriodEvents(prev => noteRealPeriodEvent(prev, quarter, shownPairs.flatMap(pair => [pair.outId, pair.inId])));
     if (live) shownPairs.forEach(pair => beginStint(pair.inId));
     const nextAll = { ...lineupsByQuarter, [quarter]: rotated };
     setLineupsByQuarter(nextAll);

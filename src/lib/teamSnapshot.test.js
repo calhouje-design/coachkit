@@ -14,6 +14,12 @@ test("missing settings stay at the coach defaults", () => {
   assert.equal(settings.quarterMinutes, null);
 });
 
+test("a real swap or injury flag is kept with the in-progress game", () => {
+  const gameDay = normalizeGameDay({ realPeriodEvents: { 2: ["a", "b", "a"], 0: ["nope"] } });
+  assert.deepEqual(gameDay.realPeriodEvents, { 2: ["a", "b"] });
+  assert.deepEqual(normalizeGameDay({}).realPeriodEvents, {});
+});
+
 test("explicit settings survive normalization", () => {
   const settings = normalizeSettings({ subMode: false, autoRegen: false, quarterMinutes: 8 });
   assert.equal(settings.subMode, false);
