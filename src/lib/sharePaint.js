@@ -229,17 +229,44 @@ function paintQuarterPanel(ctx, x, y, w, h, panel) {
   ctx.restore();
 }
 
-/** Sheet 1. One field panel per period (2, 3, or 4), each with its bench and sub lines. */
-export function paintFieldSheet(canvas, { field, league, opponent, homeScore, awayScore } = {}) {
+function paintDualPeriod(ctx, x, y, w, h, panel, focus) {
+  ctx.save();
+  ctx.fillStyle = "#e8e4dc";
+  ctx.font = "bold 12px Arial, sans-serif";
+  ctx.textAlign = "left";
+  ctx.textBaseline = "alphabetic";
+  ctx.fillText(panel.label || `Q${panel.quarter}`, x + 4, y + 14);
+  const gap = 8;
+  const top = y + 22;
+  const innerH = h - 26;
+  const halfW = (w - gap) / 2;
+  const startPanel = { ...panel, label: "Start" };
+  const afterPanel = { ...(panel.after || {}), quarter: panel.quarter, label: "After" };
+  paintQuarterPanel(ctx, x, top, halfW, innerH, startPanel);
+  paintQuarterPanel(ctx, x + halfW + gap, top, halfW, innerH, afterPanel);
+  if (focus === "start" || focus === "after") {
+    const hx = focus === "after" ? x + halfW + gap : x;
+    ctx.strokeStyle = "#e8a020";
+    ctx.lineWidth = 3;
+    roundRect(ctx, hx + 1, top + 1, halfW - 2, innerH - 2, 8);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+/** Sheet 1. One field panel per period. Sub mode with pairs shows Start and After subs side by side. */
+export function paintFieldSheet(canvas, { field, league, opponent, homeScore, awayScore, focus = null } = {}) {
   if (!canvas) return;
   const panels = (field?.quarters || []).length ? field.quarters : [{ quarter: 1, label: "Q1", starters: [], bench: [], pairs: [] }];
   const count = panels.length;
+  const dual = panels.some(panel => panel.after);
   const cols = count === 3 ? 3 : count === 1 ? 1 : 2;
   const rows = Math.ceil(count / cols);
   const pad = 10;
   const header = 86;
-  const cellW = count === 3 ? 250 : 360;
-  const cellH = count === 3 ? 360 : 430;
+  const cellW = dual ? (count === 3 ? 420 : 560) : (count === 3 ? 250 : 360);
+  const singleH = count === 3 ? 360 : 430;
+  const cellH = dual ? Math.round(singleH * 1.7) : singleH;
   const W = pad + cols * cellW + pad * cols;
   const H = header + pad + rows * cellH + (rows - 1) * pad + 28;
   const ctx = fitCanvas(canvas, W, H);
@@ -267,7 +294,7 @@ export function paintFieldSheet(canvas, { field, league, opponent, homeScore, aw
   ctx.font = "11px Arial, sans-serif";
   const firstLabel = panels[0]?.label || `Q${panels[0]?.quarter || 1}`;
   const lastLabel = panels[panels.length - 1]?.label || firstLabel;
-  ctx.fillText(`Field, bench, and sub lines · ${firstLabel}–${lastLabel}`, 50, 40);
+  ctx.fillText(`${dual ? "Start and after subs" : "Field, bench, and sub lines"} · ${firstLabel}–${lastLabel}`, 50, 40);
   ctx.textAlign = "right";
   ctx.fillStyle = "#e8a020";
   ctx.font = "bold 12px Arial, sans-serif";
@@ -287,14 +314,10 @@ export function paintFieldSheet(canvas, { field, league, opponent, homeScore, aw
   panels.forEach((panel, index) => {
     const col = index % cols;
     const row = Math.floor(index / cols);
-    paintQuarterPanel(
-      ctx,
-      pad + col * (cellW + pad),
-      header + pad + row * (cellH + pad),
-      cellW,
-      cellH,
-      panel,
-    );
+    const px = pad + col * (cellW + pad);
+    const py = header + pad + row * (cellH + pad);
+    if (panel.after) paintDualPeriod(ctx, px, py, cellW, cellH, panel, focus);
+    else paintQuarterPanel(ctx, px, py, cellW, cellH, panel);
   });
 
   ctx.fillStyle = "#666";
