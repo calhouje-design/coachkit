@@ -8,6 +8,11 @@ export const BOX_GAP = 2;
 export const SIDE_MARGIN = 8;
 /** Small enough that a staggered row still reads as one line. */
 export const LINE_STAGGER = 16;
+/**
+ * 4-wide lines always use this. Outside pair moves up, center pair moves
+ * down. Twice this gap stays within about one circle radius.
+ */
+export const FOUR_WIDE_OFFSET = 11;
 
 const CHAR_W = {
   A: 6.5, B: 6.02, C: 6.5, D: 6.5, E: 6.02, F: 5.5, G: 7.02, H: 7.02, I: 3.52, J: 4.5,
@@ -84,8 +89,11 @@ function verticalOverlap(top, height, otherTop, otherHeight, gap) {
 }
 
 function staggerFor(count, amount, needed) {
+  if (count === 4 && amount > 0) {
+    const lift = Math.min(amount, FOUR_WIDE_OFFSET);
+    return [-lift, lift, lift, -lift];
+  }
   if (!needed || amount <= 0) return Array.from({ length: count }, () => 0);
-  if (count === 4) return [0, -amount, -amount, 0];
   if (count >= 5) return Array.from({ length: count }, (_, i) => (i % 2 === 1 ? -amount : 0));
   return Array.from({ length: count }, () => 0);
 }
@@ -117,9 +125,10 @@ function markerRects(item, circle, labelGap, labelHeight) {
 
 /**
  * Spread each horizontal line across the field and keep circles and name
- * labels from overlapping. A 4-wide line that still cannot fit lifts its
- * center pair. A 5-wide line staggers alternate players. Long names shorten
- * to a first name and last initial, then an ellipsis.
+ * labels from overlapping. Every 4-wide line puts the outside pair higher
+ * and the center pair lower. A 5-wide line staggers alternate players only
+ * when the names do not fit. Long names shorten to a first name and last
+ * initial, then an ellipsis.
  */
 export function layoutFieldPlayers(starters, {
   fieldWidth,

@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { FORMATION_TEMPLATES } from "./formations.js";
 import {
   CIRCLE_DIAMETER,
+  FOUR_WIDE_OFFSET,
   SIDE_MARGIN,
   fitPlayerLabel,
   labelWidth,
@@ -105,6 +106,7 @@ test("every formation and every line size stays inside the field without collisi
       assertInsideField(layout, fieldWidth, fieldHeight);
       assertNoOverlap(layout);
       assertSpread(layout, fieldWidth);
+      if (count === 4) assertOutsidePairHigher(layout, `${count}-wide ${fieldWidth}`);
     }
     formations.forEach(formation => {
       const layout = layoutFieldPlayers(startersFor(formation.slots), { fieldWidth, fieldHeight });
@@ -112,6 +114,7 @@ test("every formation and every line size stays inside the field without collisi
       assertInsideField(layout, fieldWidth, fieldHeight);
       assertNoOverlap(layout);
       assertSpread(layout, fieldWidth);
+      assertOutsidePairHigher(layout, formation.name);
     });
   });
 });
@@ -122,18 +125,20 @@ test("4-2-1 spreads the back four and keeps the long names readable", () => {
   const layout = layoutFieldPlayers(startersFor(positions, names), { fieldWidth: 360, fieldHeight: 540 });
   const defense = layout.filter(spot => spot.line === "def").sort((a, b) => a.x - b.x);
   assert.deepEqual(defense.map(spot => spot.pos), ["LD", "CD", "CD", "RD"]);
-  assert.deepEqual(defense.map(spot => spot.dy), [0, 0, 0, 0]);
+  assert.deepEqual(defense.map(spot => spot.dy), [-FOUR_WIDE_OFFSET, FOUR_WIDE_OFFSET, FOUR_WIDE_OFFSET, -FOUR_WIDE_OFFSET]);
+  assertOutsidePairHigher(defense, "4-2-1");
   defense.forEach(spot => assert.equal(spot.label, spot.fullName));
   assert.ok(defense[defense.length - 1].x - defense[0].x > 360 * 0.7);
 });
 
-test("a crowded 4-wide line lifts the center pair and a 5-wide line alternates", () => {
+test("a 4-wide line always drops the center pair and a 5-wide line alternates only when needed", () => {
   const wide = Array.from({ length: 4 }, () => "Maddox Anderson");
   const four = layoutFieldPlayers(startersFor(["LD", "CD", "CD", "RD"], wide), {
     fieldWidth: 320,
     fieldHeight: 480,
   });
-  assert.deepEqual(four.map(spot => spot.dy), [0, -16, -16, 0]);
+  assert.deepEqual(four.map(spot => spot.dy), [-FOUR_WIDE_OFFSET, FOUR_WIDE_OFFSET, FOUR_WIDE_OFFSET, -FOUR_WIDE_OFFSET]);
+  assertOutsidePairHigher(four, "crowded 4");
   assert.equal(four[1].label, "Maddox Anderson");
   assert.notEqual(four[0].label, "Maddox Anderson");
 
@@ -144,7 +149,7 @@ test("a crowded 4-wide line lifts the center pair and a 5-wide line alternates",
   assert.deepEqual(five.map(spot => spot.dy), [0, -16, 0, -16, 0]);
   assertNoOverlap(five);
   assertInsideField(five, 320, 480);
-  assert.ok(ySpan(four) <= 16.5);
+  assert.ok(ySpan(four) <= CIRCLE_DIAMETER / 2 + 0.5);
   assert.ok(ySpan(five) <= 16.5);
 });
 
@@ -155,8 +160,9 @@ test("a phone-width field keeps each line together and the 4-2-1 names readable"
   ), { fieldWidth: 266, fieldHeight: 399 });
   assertNoOverlap(four);
   assertInsideField(four, 266, 399);
-  const defense = four.filter(spot => spot.line === "def");
-  assert.ok(ySpan(defense) <= 16.5, `defense span ${ySpan(defense)}`);
+  const defense = four.filter(spot => spot.line === "def").sort((a, b) => a.x - b.x);
+  assertOutsidePairHigher(defense, "phone 4-2-1");
+  assert.ok(ySpan(defense) <= CIRCLE_DIAMETER / 2 + 0.5, `defense span ${ySpan(defense)}`);
   defense.forEach(spot => assert.equal(spot.label, spot.fullName));
 
   const five = layoutFieldPlayers(startersFor(
@@ -172,4 +178,24 @@ test("a phone-width field keeps each line together and the 4-2-1 names readable"
 function ySpan(spots) {
   const ys = spots.map(spot => spot.y);
   return Math.max(...ys) - Math.min(...ys);
+}
+
+/** North is a smaller y. Outside players sit above the center pair. */
+function assertOutsidePairHigher(layout, label) {
+  const lines = new Map();
+  layout.forEach(spot => {
+    if (spot.lineCount !== 4) return;
+    if (!lines.has(spot.line)) lines.set(spot.line, []);
+    lines.get(spot.line).push(spot);
+  });
+  let seen = 0;
+  lines.forEach(group => {
+    group.sort((a, b) => a.lineIndex - b.lineIndex);
+    seen += 1;
+    assert.equal(group.length, 4, label);
+    assert.ok(group[0].y < group[1].y, `${label} left outside should sit above the center`);
+    assert.ok(group[3].y < group[2].y, `${label} right outside should sit above the center`);
+    assert.ok(group[0].y < group[2].y, `${label} outside pair should sit above the center pair`);
+  });
+  if (layout.length && layout.every(spot => spot.lineCount === 4)) assert.ok(seen > 0, label);
 }
