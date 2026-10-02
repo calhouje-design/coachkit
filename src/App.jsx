@@ -29,7 +29,6 @@ import {
   pairsForDisplay,
   equityHalves,
   formatQuarterEquity,
-  lineStopAtCircle,
   isGkPosition,
   goalkeeperId,
   GK_FULL_QUARTER_REASON,
@@ -60,6 +59,7 @@ import {
 } from "./lib/gameDay.js";
 import { FORMATION_TEMPLATES, clampPeriod, formationNameForPeriod, preservePlayedBase, reapplyBase, reshapeLineup, withPeriodOverride, withoutPeriodOverride, normalizeFormationOverrides } from "./lib/formations.js";
 import { CIRCLE_DIAMETER, LABEL_GAP, layoutFieldPlayers, labelWidth } from "./lib/fieldLayout.js";
+import { usePitchSubLines, useReportFieldLayout } from "./lib/pitchSubLines.js";
 import { SAY_PLAY_TIME, sayDivision, sayDivisionKey } from "./lib/sayEastGuide.js";
 import { downloadCanvas, paintFieldSheet, paintPlayTimeSheet } from "./lib/sharePaint.js";
 import { useTeamCloud } from "./lib/teamCloud.js";
@@ -691,11 +691,12 @@ function usePitchDrag(onResolve) {
   return { pointerDown, pointerMove, pointerUp, ghost, hover, activeSource };
 }
 
-function SoccerField({ lineup, onTap, selectedIdx, quarter, periodAbbrev = "Q", drag, hoverToken, activeSource }) {
+function SoccerField({ lineup, onTap, selectedIdx, quarter, periodAbbrev = "Q", drag, hoverToken, activeSource, onLayout }) {
   const rootRef = useRef(null);
   const slots = lineup?.starters || [];
   const slotKey = slots.map(slot => `${slot.pos}:${slot.player?.id || ""}:${slot.player?.name || ""}`).join("|");
   const [placed, setPlaced] = useState([]);
+  useReportFieldLayout(rootRef, placed, onLayout);
   useLayoutEffect(() => {
     const el = rootRef.current;
     if (!el || !lineup) {
@@ -2083,13 +2084,13 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
     : [];
   const subPairs = pairsForDisplay(benchPairs, pairPlan?.[quarter], currentLineup);
   const shownPairs = subMode ? subPairs : [];
-  const pairKey = shownPairs.map(pair => `${pair.inId}>${pair.outId}`).join("|");
   const lineupKey = [
     (currentLineup?.starters || []).map(slot => `${slot.pos}:${slot.player?.id || ""}`).join(","),
     (currentLineup?.bench || []).map(player => player?.id || "").join(","),
   ].join("#");
   const pitchWrapRef = useRef(null);
-  const [subLines, setSubLines] = useState([]);
+  const [fieldLayout, setFieldLayout] = useState("");
+  const subLines = usePitchSubLines(pitchWrapRef, { shownPairs, lineupKey, quarter, swapSel, fieldLayout });
   const [headerOffset, setHeaderOffset] = useState(120);
   useEffect(() => {
     const el = document.getElementById("ck-app-header");
@@ -2099,45 +2100,6 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
     window.addEventListener("resize", measure);
     return () => window.removeEventListener("resize", measure);
   }, []);
-  useLayoutEffect(() => {
-    const root = pitchWrapRef.current;
-    if (!root) {
-      setSubLines(prev => (prev.length ? [] : prev));
-      return undefined;
-    }
-    const measure = () => {
-      const box = root.getBoundingClientRect();
-      const esc = (value) => (window.CSS && CSS.escape ? CSS.escape(String(value)) : String(value));
-      const next = shownPairs.map(pair => {
-        const from = root.querySelector(`[data-sub-from="${esc(pair.inId)}"]`);
-        const to = root.querySelector(`[data-sub-to="${esc(pair.outId)}"]`);
-        if (!from || !to) return null;
-        const a = from.getBoundingClientRect();
-        const b = to.getBoundingClientRect();
-        const x1 = a.left + a.width / 2 - box.left;
-        const y1 = a.top + a.height / 2 - box.top;
-        const cx = b.left + b.width / 2 - box.left;
-        const cy = b.top + b.height / 2 - box.top;
-        const end = lineStopAtCircle(x1, y1, cx, cy, Math.min(b.width, b.height) / 2);
-        return {
-          key: `${pair.inId}-${pair.outId}`,
-          x1: Math.round(x1),
-          y1: Math.round(y1),
-          x2: Math.round(end.x),
-          y2: Math.round(end.y),
-        };
-      }).filter(Boolean);
-      setSubLines(prev => {
-        if (prev.length === next.length && prev.every((line, i) =>
-          line.key === next[i].key && line.x1 === next[i].x1 && line.y1 === next[i].y1 && line.x2 === next[i].x2 && line.y2 === next[i].y2
-        )) return prev;
-        return next;
-      });
-    };
-    measure();
-    window.addEventListener("resize", measure);
-    return () => window.removeEventListener("resize", measure);
-  }, [pairKey, lineupKey, quarter, swapSel]);
   const queueWhosNext = (benchPlayer) => {
     if (!subMode) {
       setQueueNote(`Full ${noun}. Turn on sub mode to queue a half swap.`);
@@ -3157,6 +3119,7 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
                   drag={drag}
                   hoverToken={drag.hover}
                   activeSource={drag.activeSource}
+                  onLayout={setFieldLayout}
                 />
               </div>
               {subLines.length > 0 && (
