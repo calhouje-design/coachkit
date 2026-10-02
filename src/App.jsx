@@ -33,7 +33,6 @@ import {
   isGkPosition,
   goalkeeperId,
   GK_FULL_QUARTER_REASON,
-  fieldMarker,
   shareFieldSheet,
   sharePlayTimeSheet,
   scheduleHalfRotation,
@@ -47,6 +46,7 @@ import {
   periodHasRealEvent,
   noteRealPeriodEvent,
   realEventsAfterUnavailable,
+  realEventsAfterReturn,
   realEventPlayerIds,
   realEventsThrough,
   replanCarryForward,
@@ -58,7 +58,8 @@ import {
   planAvailability,
   returnToGame,
 } from "./lib/gameDay.js";
-import { clampPeriod, formationNameForPeriod, preservePlayedBase, reapplyBase, reshapeLineup, withPeriodOverride, withoutPeriodOverride, normalizeFormationOverrides } from "./lib/formations.js";
+import { FORMATION_TEMPLATES, clampPeriod, formationNameForPeriod, preservePlayedBase, reapplyBase, reshapeLineup, withPeriodOverride, withoutPeriodOverride, normalizeFormationOverrides } from "./lib/formations.js";
+import { CIRCLE_DIAMETER, LABEL_GAP, layoutFieldPlayers, labelWidth } from "./lib/fieldLayout.js";
 import { SAY_PLAY_TIME, sayDivision, sayDivisionKey } from "./lib/sayEastGuide.js";
 import { downloadCanvas, paintFieldSheet, paintPlayTimeSheet } from "./lib/sharePaint.js";
 import { useTeamCloud } from "./lib/teamCloud.js";
@@ -691,9 +692,51 @@ function usePitchDrag(onResolve) {
 }
 
 function SoccerField({ lineup, onTap, selectedIdx, quarter, periodAbbrev = "Q", drag, hoverToken, activeSource }) {
+  const rootRef = useRef(null);
+  const slots = lineup?.starters || [];
+  const slotKey = slots.map(slot => `${slot.pos}:${slot.player?.id || ""}:${slot.player?.name || ""}`).join("|");
+  const [placed, setPlaced] = useState([]);
+  useLayoutEffect(() => {
+    const el = rootRef.current;
+    if (!el || !lineup) {
+      setPlaced(prev => (prev.length ? [] : prev));
+      return undefined;
+    }
+    const cache = new Map();
+    const measureLabel = (text) => {
+      const key = String(text ?? "");
+      if (cache.has(key)) return cache.get(key);
+      const probe = document.createElement("span");
+      const fontFamily = getComputedStyle(el).fontFamily;
+      probe.style.cssText = `position:absolute;visibility:hidden;white-space:nowrap;pointer-events:none;font-family:${fontFamily};font-size:9px;font-weight:800;line-height:1.2;padding:1px 4px;`;
+      probe.textContent = key;
+      el.appendChild(probe);
+      const width = Math.ceil(probe.getBoundingClientRect().width) || labelWidth(key);
+      probe.remove();
+      cache.set(key, width);
+      return width;
+    };
+    const lay = () => {
+      const width = Math.round(el.clientWidth);
+      const height = Math.round(el.clientHeight);
+      if (width <= 0 || height <= 0) {
+        setPlaced(prev => (prev.length ? [] : prev));
+        return;
+      }
+      setPlaced(layoutFieldPlayers(lineup.starters || [], {
+        fieldWidth: width,
+        fieldHeight: height,
+        measureLabel,
+      }));
+    };
+    lay();
+    const observer = new ResizeObserver(lay);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [lineup, slotKey]);
 
   if (!lineup) return (
-    <div style={{
+    <div ref={rootRef} style={{
       background: C.surface, borderRadius: 12, minHeight: 320,
       border: `2px dashed ${C.border}`, display:"flex", alignItems:"center",
       justifyContent:"center", color: C.muted, fontSize: 13, textAlign:"center", padding: 20,
@@ -702,13 +745,8 @@ function SoccerField({ lineup, onTap, selectedIdx, quarter, periodAbbrev = "Q", 
     </div>
   );
 
-  const slots = lineup.starters || [];
-  const totalByPos = {};
-  slots.forEach(s => { totalByPos[s.pos] = (totalByPos[s.pos]||0)+1; });
-  const idxByPos = {};
-
   return (
-    <div style={{ position:"relative", width:"100%", margin:"0 auto", userSelect:"none" }}>
+    <div ref={rootRef} style={{ position:"relative", width:"100%", margin:"0 auto", userSelect:"none" }}>
       <svg viewBox="0 0 320 480" style={{ width:"100%", display:"block", borderRadius:10, position:"relative", zIndex:0 }}>
         <rect x="5" y="5" width="310" height="470" rx="8" fill="#1e4d1a" stroke="#fff" strokeWidth="1.5"/>
         <rect x="5" y="5" width="310" height="470" rx="8" fill="url(#grass)"/>
@@ -758,20 +796,17 @@ function SoccerField({ lineup, onTap, selectedIdx, quarter, periodAbbrev = "Q", 
 
       {slots.map((slot, idx) => {
         const pos = slot.pos;
-        if (!idxByPos[pos]) idxByPos[pos] = 0;
-        const posIdx = idxByPos[pos];
-        const total = totalByPos[pos];
-        idxByPos[pos]++;
-        const point = fieldMarker(pos, posIdx, total);
-        const px = point.x;
-        const py = point.y;
+        const spot = placed[idx];
+        if (!spot) return null;
         const isHovered = hoverToken === `field:${idx}`;
         const isSelected = selectedIdx === idx;
         const isSource = activeSource?.type === "field" && activeSource.idx === idx;
+        const fullName = slot.player?.name || "";
 
         return (
           <div key={idx}
             data-drop={`field:${idx}`}
+            aria-label={fullName ? `${fullName}, ${pos}` : pos}
             onPointerDown={e => {
               if (!slot.player) return;
               drag?.pointerDown(e, { type: "field", idx }, `#${slot.player.number}`);
@@ -783,9 +818,10 @@ function SoccerField({ lineup, onTap, selectedIdx, quarter, periodAbbrev = "Q", 
             onPointerCancel={e => { drag?.pointerUp(e); }}
             style={{
               position:"absolute",
-              left:`calc(${(px/320)*100}% - 28px)`,
-              top:`calc(${(py/480)*100}% - 30px)`,
-              textAlign:"center", width:56,
+              left: spot.x,
+              top: spot.y - CIRCLE_DIAMETER / 2,
+              transform: "translateX(-50%)",
+              textAlign:"center", width: CIRCLE_DIAMETER,
               cursor: slot.player ? "grab" : "default",
               zIndex: isSelected || isHovered || isSource ? 12 : 6,
               touchAction: "none",
@@ -794,7 +830,8 @@ function SoccerField({ lineup, onTap, selectedIdx, quarter, periodAbbrev = "Q", 
             <div
               data-sub-to={slot.player?.id || undefined}
               style={{
-              width: 46, height: 46, borderRadius:"50%", margin:"0 auto", position:"relative", zIndex:2,
+              width: CIRCLE_DIAMETER, height: CIRCLE_DIAMETER, borderRadius:"50%", margin:"0 auto", position:"relative", zIndex:2,
+              boxSizing:"border-box",
               background: slot.player
                 ? `linear-gradient(135deg,${C.gold},${C.goldDark})`
                 : "rgba(255,255,255,0.1)",
@@ -814,20 +851,31 @@ function SoccerField({ lineup, onTap, selectedIdx, quarter, periodAbbrev = "Q", 
                 </>
               ) : <span style={{color:"rgba(255,255,255,0.4)",fontSize:10}}></span>}
             </div>
-            {slot.player && (
-              <div style={{marginTop:2, height:11, position:"relative", zIndex:3}}>
-                <div style={{
-                  position:"absolute", left:"50%", top:0, zIndex:3,
+            {slot.player && spot.labelBox && (
+              <div
+                title={fullName}
+                aria-label={fullName}
+                style={{
+                  position:"absolute",
+                  left:"50%",
+                  top: CIRCLE_DIAMETER + LABEL_GAP,
+                  zIndex:3,
                   transform:"translateX(-50%)",
+                  width: spot.labelBox.width,
+                  maxWidth: spot.labelBox.width,
+                  overflow:"hidden",
+                  textOverflow:"ellipsis",
                   fontSize:9, color:"#fff", fontWeight:800,
                   background:"rgba(10,13,15,0.78)",
                   borderRadius:4, padding:"1px 4px",
                   textShadow:"0 1px 2px rgba(0,0,0,0.9)",
                   letterSpacing:"0.02em", whiteSpace:"nowrap", lineHeight:1.2,
+                  textAlign:"center",
+                  boxSizing:"border-box",
                   pointerEvents:"none",
-                }} title={slot.player.name}>
-                  {slot.player.name}
-                </div>
+                }}
+              >
+                {spot.label}
               </div>
             )}
           </div>
@@ -1751,6 +1799,15 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
     });
     setPlayers(result.players);
     if (!result.regenerated) return;
+    // A non-live Return rebuilds later periods, so a manual swap on a later
+    // tab must not keep that period pinned. A live Return leaves the flags as they are.
+    if (!liveReturn) {
+      setRealPeriodEvents(prev => realEventsAfterReturn(prev, {
+        quarter,
+        live: false,
+        regenerated: true,
+      }));
+    }
     setSubSegments(result.segments);
     notePlanResult(result.lineups, result.players, appearanceCredit, result.segments);
     syncStints(result.lineups[quarter]);
@@ -4157,77 +4214,6 @@ const TABS = [
   {id:"drills",   icon:"", label:"Drills"},
   {id:"practice", icon:"", label:"Practice"},
 ];
-
-// FORMATION TEMPLATES per format
-const FORMATION_TEMPLATES = {
-  // 4v4 = GK + 3 field players
-  "4v4": [
-    { name:"1-1-1", label:"Balanced",  desc:"One each: defender, mid, forward. Classic simple shape.", slots:["GK","CD","CM","CF"] },
-    { name:"2-1",   label:"Defensive", desc:"Two defenders, one forward. Hold and counter.", slots:["GK","LD","RD","CF"] },
-    { name:"1-2",   label:"Attacking", desc:"One defender, two forwards. High pressure up top.", slots:["GK","CD","LF","RF"] },
-  ],
-
-  // 5v5 = GK + 4 field players
-  "5v5": [
-    { name:"2-1-1", label:"Balanced",  desc:"Two defenders, one mid, one forward.", slots:["GK","LD","RD","CM","CF"] },
-    { name:"1-2-1", label:"Mid Heavy", desc:"Diamond shape  -  one def, two mids, one fwd.", slots:["GK","CD","LM","RM","CF"] },
-    { name:"2-2",   label:"Compact",   desc:"Two lines of two. Hard to break down.", slots:["GK","LD","RD","LF","RF"] },
-    { name:"1-1-2", label:"Attacking", desc:"One def, one mid, two fwds. Aggressive.", slots:["GK","CD","CM","LF","RF"] },
-  ],
-
-  // 6v6 = GK + 5 field players (SAY East U8 format)
-  "6v6": [
-    { name:"2-2-1", label:"Balanced",   desc:"Standard shape. Two defenders, two mids, one forward. Best all-around for U8.", slots:["GK","LD","RD","LM","RM","CF"] },
-    { name:"2-1-2", label:"Wide Attack", desc:"Two defenders, one holding mid, two forwards. Spread the attack wide.", slots:["GK","LD","RD","CM","LF","RF"] },
-    { name:"3-2",   label:"Defensive",  desc:"Three defenders, two forwards. Pack the back, hit on counter.", slots:["GK","LD","CD","RD","LF","RF"] },
-    { name:"1-3-1", label:"Mid Control",desc:"One sweeper, three mids, one striker. Dominate the middle.", slots:["GK","CD","LM","CM","RM","CF"] },
-    { name:"2-0-3", label:"All Attack", desc:"Two defenders, no mid, three forwards. Full attack  -  risky but fun.", slots:["GK","LD","RD","LF","CF","RF"] },
-    { name:"3-1-1", label:"Park Bus",   desc:"Three defenders, one mid, one forward. Ultra defensive.", slots:["GK","LD","CD","RD","CM","CF"] },
-  ],
-
-  // 7v7 = GK + 6 field players
-  "7v7": [
-    { name:"3-2-1", label:"Classic",    desc:"Three defenders, two mids, one striker. Most common 7v7 shape.", slots:["GK","LD","CD","RD","LM","RM","CF"] },
-    { name:"2-3-1", label:"Mid Heavy",  desc:"Two defenders, three mids, one striker. Control the middle.", slots:["GK","LD","RD","LM","CM","RM","CF"] },
-    { name:"2-2-2", label:"Balanced",   desc:"Two defenders, two mids, two forwards. Symmetric and flexible.", slots:["GK","LD","RD","LM","RM","LF","RF"] },
-    { name:"3-1-2", label:"Counter",    desc:"Three defenders, one mid, two forwards. Fast break style.", slots:["GK","LD","CD","RD","CM","LF","RF"] },
-    { name:"2-1-3", label:"Attacking",  desc:"Two defenders, one mid, three forwards. High press, all-out attack.", slots:["GK","LD","RD","CM","LF","CF","RF"] },
-    { name:"1-3-2", label:"Overload Mid",desc:"One sweeper, three mids, two forwards. Overwhelm in midfield.", slots:["GK","CD","LM","CM","RM","LF","RF"] },
-  ],
-
-  // 8v8 = GK + 7 field players
-  "8v8": [
-    { name:"3-3-1", label:"Classic",    desc:"Three defenders, three mids, one striker. Standard 8v8.", slots:["GK","LD","CD","RD","LM","CM","RM","CF"] },
-    { name:"3-2-2", label:"Balanced",   desc:"Three defenders, two mids, two forwards. Width in attack.", slots:["GK","LD","CD","RD","LM","RM","LF","RF"] },
-    { name:"4-2-1", label:"Defensive",  desc:"Four defenders, two mids, one striker. Protect the back.", slots:["GK","LD","CD","CD","RD","LM","RM","CF"] },
-    { name:"2-3-2", label:"Mid Press",  desc:"Two defenders, three mids, two forwards. Press high and wide.", slots:["GK","LD","RD","LM","CM","RM","LF","RF"] },
-    { name:"2-2-3", label:"Attacking",  desc:"Two defenders, two mids, three forwards. Commit to attack.", slots:["GK","LD","RD","LM","RM","LF","CF","RF"] },
-    { name:"3-1-3", label:"Diamond Fwd",desc:"Three defenders, one holding mid, three forwards.", slots:["GK","LD","CD","RD","CM","LF","CF","RF"] },
-  ],
-
-  // 9v9 = GK + 8 field players (SAY East U10/U12/U14)
-  "9v9": [
-    { name:"3-3-2", label:"Classic",     desc:"Three defenders, three mids, two forwards. Most common 9v9 shape.", slots:["GK","LD","CD","RD","LM","CM","RM","LF","RF"] },
-    { name:"4-3-1", label:"Defensive",   desc:"Four defenders, three mids, one striker. Solid back four.", slots:["GK","LD","CD","CD","RD","LM","CM","RM","CF"] },
-    { name:"3-2-3", label:"Attacking",   desc:"Three defenders, two mids, three forwards. Go for goal.", slots:["GK","LD","CD","RD","LM","RM","LF","CF","RF"] },
-    { name:"4-2-2", label:"Wide",        desc:"Four defenders, two central mids, two wide forwards.", slots:["GK","LD","CD","CD","RD","LM","RM","LF","RF"] },
-    { name:"3-4-1", label:"Mid Control", desc:"Three defenders, four mids, one striker. Overload midfield.", slots:["GK","LD","CD","RD","LM","CM","CM","RM","CF"] },
-    { name:"2-4-2", label:"Total Mid",   desc:"Two defenders, four mids, two forwards. Dominate the middle.", slots:["GK","LD","RD","LM","CM","CM","RM","LF","RF"] },
-    { name:"3-1-4", label:"All Out",     desc:"Three defenders, one mid anchor, four forwards. High risk.", slots:["GK","LD","CD","RD","CM","LF","LF","RF","RF"] },
-  ],
-
-  // 11v11 = GK + 10 field players
-  "11v11": [
-    { name:"4-4-2", label:"Classic Flat",  desc:"The most famous formation. Two banks of four, two strikers. Simple and effective.", slots:["GK","LB","CB","CB","RB","LM","CM","CM","RM","LF","RF"] },
-    { name:"4-3-3", label:"Attacking",     desc:"Four defenders, three mids, three forwards. Dominant when midfield wins.", slots:["GK","LB","CB","CB","RB","LM","CM","RM","LF","CF","RF"] },
-    { name:"4-2-3-1",label:"Modern",       desc:"Two holding mids protect the back four. Three attacking mids behind one striker.", slots:["GK","LB","CB","CB","RB","CM","CM","LM","CF","RM","RF"] },
-    { name:"3-5-2", label:"Wing Backs",    desc:"Three defenders, five mids (with wing backs), two strikers.", slots:["GK","LB","CB","RB","LM","CM","CM","CM","RM","LF","RF"] },
-    { name:"5-3-2", label:"Defensive",     desc:"Five defenders (three centre-backs, two wing backs), three mids, two strikers.", slots:["GK","LB","CB","CB","CB","RB","LM","CM","RM","LF","RF"] },
-    { name:"4-1-4-1",label:"Holding Mid",  desc:"Single defensive mid in front of back four. Four mids, one striker.", slots:["GK","LB","CB","CB","RB","CM","LM","CM","RM","CF","CF"] },
-    { name:"3-4-3", label:"All Attack",    desc:"Three defenders, four mids, three forwards. Maximum offensive output.", slots:["GK","LB","CB","RB","LM","CM","CM","RM","LF","CF","RF"] },
-    { name:"4-5-1", label:"Defensive Mid", desc:"Four defenders, five mids, one striker. Control possession and frustrate.", slots:["GK","LB","CB","CB","RB","LM","CM","CM","CM","RM","CF"] },
-  ],
-};
 
 const ALL_POS_DEFAULT = ["GK","LD","CD","RD","LM","CM","RM","LF","CF","RF"];
 
