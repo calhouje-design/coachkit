@@ -291,6 +291,93 @@ export function fieldMarker(pos, indexAmongSame = 0, totalSame = 1) {
   };
 }
 
+/** Same bands the live field uses when it groups a horizontal line. */
+const LINE_BANDS = [
+  { id: "gk", minY: 82 },
+  { id: "def", minY: 65 },
+  { id: "cdm", minY: 54 },
+  { id: "mid", minY: 44 },
+  { id: "cam", minY: 34 },
+  { id: "wing", minY: 26 },
+  { id: "fwd", minY: 0 },
+];
+
+export function lineBand(pos) {
+  const y = (FIELD_BASE[pos] || { y: 50 }).y;
+  return (LINE_BANDS.find(band => y >= band.minY) || LINE_BANDS[LINE_BANDS.length - 1]).id;
+}
+
+/** Center circle in the 320×480 pitch view. */
+export const PITCH_CENTER = { x: 160, y: 242, r: 42, viewW: 320, viewH: 480 };
+/** Each player on a 2-wide line, measured from the left sideline. */
+export const TWO_WIDE_FRACTION = 1 / 3;
+
+export function pitchCenterDisc(fieldWidth, fieldHeight) {
+  const width = Math.max(0, Number(fieldWidth) || 0);
+  const height = Math.max(0, Number(fieldHeight) || 0);
+  return {
+    cx: (PITCH_CENTER.x / PITCH_CENTER.viewW) * width,
+    cy: (PITCH_CENTER.y / PITCH_CENTER.viewH) * height,
+    r: (PITCH_CENTER.r / PITCH_CENTER.viewW) * width,
+  };
+}
+
+/**
+ * X centers for exactly two players on one line.
+ * The target is a third of the way in from each sideline. A fixed-size
+ * circle on a narrow pitch would land inside the center circle, so the
+ * pair stops at the first spot that still clears it.
+ */
+export function twoWideCenters(fieldWidth, fieldHeight, lineY, {
+  circle = 46,
+  gap = 2,
+  pairGap = 4,
+} = {}) {
+  const width = Math.max(0, Number(fieldWidth) || 0);
+  let left = width * TWO_WIDE_FRACTION;
+  const mark = pitchCenterDisc(width, fieldHeight);
+  const y = Number(lineY);
+  const reach = circle / 2 + mark.r + gap;
+  if (width > 0 && mark.r > 0 && Number.isFinite(y) && Math.abs(y - mark.cy) < reach) {
+    const dy = y - mark.cy;
+    const dx = Math.sqrt(Math.max(0, reach * reach - dy * dy));
+    const limit = mark.cx - dx;
+    if (left > limit) left = limit;
+  }
+  const inset = circle / 2;
+  const furthestIn = Math.max(inset, width / 2 - inset - pairGap / 2);
+  if (left < inset) left = inset;
+  if (left > furthestIn) left = furthestIn;
+  return [left, width - left];
+}
+
+/** Share/print spots use the 320×480 view. Only a 2-player line moves. */
+export function placeTwoWideMarkers(starters, {
+  fieldWidth = 320,
+  fieldHeight = 480,
+  circle = 46,
+} = {}) {
+  const spots = starters || [];
+  const groups = new Map();
+  spots.forEach((slot, index) => {
+    const band = lineBand(slot?.pos);
+    if (!groups.has(band)) groups.set(band, []);
+    groups.get(band).push(index);
+  });
+  let next = null;
+  const round = (n) => Math.round(n * 10) / 10;
+  groups.forEach(indexes => {
+    if (indexes.length !== 2) return;
+    const ordered = [...indexes].sort((a, b) => spots[a].x - spots[b].x || a - b);
+    const lineY = (Number(spots[ordered[0]].y) + Number(spots[ordered[1]].y)) / 2;
+    const [left, right] = twoWideCenters(fieldWidth, fieldHeight, lineY, { circle });
+    if (!next) next = spots.map(slot => ({ ...slot }));
+    next[ordered[0]] = { ...next[ordered[0]], x: round(left) };
+    next[ordered[1]] = { ...next[ordered[1]], x: round(right) };
+  });
+  return next || spots;
+}
+
 /**
  * Sheet 1. Four quarters, each with the pitch markers, the bench, and the
  * dotted sub pairs. Full-quarter mode stores the bench and leaves pairs empty.
@@ -318,6 +405,7 @@ export function shareFieldSheet({ lineups, pairPlan, subMode = true, quarters = 
         y: Math.round(point.y * 10) / 10,
       };
     });
+    const placed = placeTwoWideMarkers(starters);
     const bench = (lineup?.bench || []).filter(Boolean).map(player => ({
       id: player.id,
       name: player.name || "",
@@ -333,7 +421,7 @@ export function shareFieldSheet({ lineups, pairPlan, subMode = true, quarters = 
         outId: pair.outId,
       }));
     }
-    return { quarter: q, label: `${periodAbbrev}${q}`, starters, bench, pairs };
+    return { quarter: q, label: `${periodAbbrev}${q}`, starters: placed, bench, pairs };
   });
   return { subMode: !!subMode, quarters: panels };
 }

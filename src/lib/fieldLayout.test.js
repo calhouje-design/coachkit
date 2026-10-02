@@ -1,6 +1,8 @@
+import { createHash } from "node:crypto";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { FORMATION_TEMPLATES } from "./formations.js";
+import { fieldMarker, pitchCenterDisc, shareFieldSheet, TWO_WIDE_FRACTION } from "./gameDay.js";
 import {
   CIRCLE_DIAMETER,
   FOUR_WIDE_MIN_NUDGE,
@@ -83,6 +85,13 @@ function assertSpread(layout, fieldWidth) {
     group.sort((a, b) => a.lineIndex - b.lineIndex);
     if (group.length === 1) {
       assert.ok(Math.abs(group[0].x - fieldWidth / 2) < 0.6);
+      return;
+    }
+    if (group.length === 2) {
+      const tol = Math.max(16, fieldWidth * 0.05);
+      assert.ok(Math.abs(group[0].x - fieldWidth / 3) <= tol, `left third ${group[0].x}`);
+      assert.ok(Math.abs(group[group.length - 1].x - (2 * fieldWidth) / 3) <= tol, `right third ${group.at(-1).x}`);
+      assert.ok(group[1].x > group[0].x);
       return;
     }
     assert.ok(Math.abs(group[0].x - inset) < 0.6, `left edge ${group[0].x}`);
@@ -244,6 +253,85 @@ test("an outer label slides inward so a name like Wes Johnson stays whole", () =
   assertInsideField(wide, 266, 399);
 });
 
+test("a 2-wide line sits about a third of the way in and stays clear at 320", () => {
+  assert.equal(TWO_WIDE_FRACTION, 1 / 3);
+  [320, 390, 430, 770].forEach(fieldWidth => {
+    const fieldHeight = fieldWidth * 1.5;
+    const defense = layoutFieldPlayers(startersFor(["LD", "RD"]), { fieldWidth, fieldHeight })
+      .sort((a, b) => a.x - b.x);
+    assert.ok(Math.abs(defense[0].x - fieldWidth / 3) < 0.01, `def left ${defense[0].x}`);
+    assert.ok(Math.abs(defense[1].x - (2 * fieldWidth) / 3) < 0.01, `def right ${defense[1].x}`);
+    assertNoOverlap(defense);
+    assertInsideField(defense, fieldWidth, fieldHeight);
+    assertClearOfCenter(defense, fieldWidth, fieldHeight);
+  });
+
+  const fieldWidth = 320;
+  const fieldHeight = 480;
+  const mids = layoutFieldPlayers(startersFor(["LM", "RM"]), { fieldWidth, fieldHeight })
+    .sort((a, b) => a.x - b.x);
+  const tol = 16;
+  assert.ok(Math.abs(mids[0].x - fieldWidth / 3) <= tol, `mid left ${mids[0].x}`);
+  assert.ok(Math.abs(mids[1].x - (2 * fieldWidth) / 3) <= tol, `mid right ${mids[1].x}`);
+  assert.ok(mids[0].x < fieldWidth / 3, "a narrow mid line stops before the center circle");
+  assertNoOverlap(mids);
+  assertInsideField(mids, fieldWidth, fieldHeight);
+  assertClearOfCenter(mids, fieldWidth, fieldHeight);
+
+  ["2-2-1", "2-1-2", "2-0-3", "1-3-1"].forEach(name => {
+    const formation = FORMATION_TEMPLATES["6v6"].find(shape => shape.name === name);
+    const layout = layoutFieldPlayers(startersFor(formation.slots), { fieldWidth, fieldHeight });
+    assertNoOverlap(layout);
+    assertInsideField(layout, fieldWidth, fieldHeight);
+    assertClearOfCenter(layout.filter(spot => spot.lineCount === 2), fieldWidth, fieldHeight);
+  });
+
+  const classic = FORMATION_TEMPLATES["11v11"].find(shape => shape.name === "4-4-2");
+  const eleven = layoutFieldPlayers(startersFor(classic.slots, [
+    "Sam Keeper", "Blake Pete", "Jaxon Wells", "Wes Duda", "Trey Lazear",
+    "Remi Brown", "Sean Jones", "Henry Davis", "Jude Garcia", "John Smith", "Max Cole",
+  ]), { fieldWidth, fieldHeight });
+  const strikers = eleven.filter(spot => spot.lineCount === 2).sort((a, b) => a.x - b.x);
+  assert.deepEqual(strikers.map(spot => spot.pos), ["LF", "RF"]);
+  assert.ok(Math.abs(strikers[0].x - fieldWidth / 3) < 0.01);
+  assert.ok(Math.abs(strikers[1].x - (2 * fieldWidth) / 3) < 0.01);
+  const banks = eleven.filter(spot => spot.lineCount === 4);
+  assert.equal(banks.length, 8);
+});
+
+test("share and print use the same 2-wide spots and leave a 4-wide line on its markers", () => {
+  const positions = ["GK", "LB", "CB", "CB", "RB", "LM", "CM", "CM", "RM", "LF", "RF"];
+  const starters = startersFor(positions, [
+    "Sam Keeper", "Blake Pete", "Jaxon Wells", "Wes Duda", "Trey Lazear",
+    "Remi Brown", "Sean Jones", "Henry Davis", "Jude Garcia", "John Smith", "Max Cole",
+  ]);
+  const sheet = shareFieldSheet({ lineups: { 1: { starters, bench: [] } }, subMode: false, quarters: [1] });
+  const drawn = sheet.quarters[0].starters;
+  const counts = {};
+  positions.forEach(pos => { counts[pos] = (counts[pos] || 0) + 1; });
+  const seen = {};
+  drawn.forEach(slot => {
+    const indexAmongSame = seen[slot.pos] || 0;
+    seen[slot.pos] = indexAmongSame + 1;
+    const marker = fieldMarker(slot.pos, indexAmongSame, counts[slot.pos]);
+    const rawX = Math.round(marker.x * 10) / 10;
+    if (slot.pos === "LF" || slot.pos === "RF") {
+      assert.notEqual(slot.x, rawX);
+    } else {
+      assert.equal(slot.x, rawX, slot.pos);
+    }
+  });
+  const left = drawn.find(slot => slot.pos === "LF");
+  const right = drawn.find(slot => slot.pos === "RF");
+  assert.equal(left.x, 106.7);
+  assert.equal(right.x, 213.3);
+});
+
+test("3-wide, 4-wide, and 5-wide output stays byte-identical to main", () => {
+  const digest = createHash("sha256").update(unchangedLineSnapshot()).digest("hex");
+  assert.equal(digest, "c32f836c6928a55b713c0161650b96b3525d8c739feaf72f79f1a7bb182fd484");
+});
+
 test("a 430px 4-5-1 midfield stays straight when the names fit", () => {
   const formation = FORMATION_TEMPLATES["11v11"].find(shape => shape.name === "4-5-1");
   const names = [
@@ -259,6 +347,69 @@ test("a 430px 4-5-1 midfield stays straight when the names fit", () => {
   assert.deepEqual(mids.map(spot => spot.dy), [0, 0, 0, 0, 0]);
   assertNoOverlap(layout);
 });
+
+const GOLD_NAMES = [
+  "Blake Pete", "Jaxon Wells", "Wes Duda", "Trey Lazear", "Maddox Anderson",
+  "Remi Brown", "Sean Jones", "Henry Davis", "Jude Garcia", "John Smith", "Max Cole",
+];
+const GOLD_WIDTHS = [196, 228, 236, 266, 298, 306, 320, 360, 390, 430, 520, 770];
+const GOLD_LINES = {
+  1: ["CF"],
+  3: ["LD", "CD", "RD"],
+  4: ["LD", "CD", "CD", "RD"],
+  5: ["LB", "CB", "CB", "CB", "RB"],
+};
+
+function goldStarters(positions) {
+  return positions.map((pos, i) => ({
+    pos,
+    player: { id: `p${i}`, name: GOLD_NAMES[i % GOLD_NAMES.length], number: String(i + 1) },
+  }));
+}
+
+/** Layout bytes for every line that is not 2-wide, captured from main b094532. */
+function unchangedLineSnapshot() {
+  const parts = [];
+  for (const count of [1, 3, 4, 5]) {
+    for (const fieldWidth of GOLD_WIDTHS) {
+      const layout = layoutFieldPlayers(goldStarters(GOLD_LINES[count]), {
+        fieldWidth,
+        fieldHeight: fieldWidth * 1.5,
+      });
+      parts.push(`${count}@${fieldWidth}:${JSON.stringify(layout)}`);
+    }
+  }
+  const formations = Object.entries(FORMATION_TEMPLATES).flatMap(([format, list]) => (
+    list.map(formation => ({ format, ...formation }))
+  ));
+  for (const formation of formations) {
+    for (const fieldWidth of GOLD_WIDTHS) {
+      const layout = layoutFieldPlayers(goldStarters(formation.slots), {
+        fieldWidth,
+        fieldHeight: fieldWidth * 1.5,
+      });
+      const kept = layout.filter(spot => spot.lineCount !== 2);
+      parts.push(`${formation.format}:${formation.name}@${fieldWidth}:${JSON.stringify(kept)}`);
+    }
+  }
+  return parts.join("\n");
+}
+
+function hitsDisc(box, disc) {
+  const cx = Math.min(Math.max(disc.cx, box.x), box.x + box.width);
+  const cy = Math.min(Math.max(disc.cy, box.y), box.y + box.height);
+  return Math.hypot(cx - disc.cx, cy - disc.cy) < disc.r - 0.05;
+}
+
+function assertClearOfCenter(layout, fieldWidth, fieldHeight) {
+  const disc = pitchCenterDisc(fieldWidth, fieldHeight);
+  layout.forEach(spot => {
+    assert.equal(hitsDisc(spot.circle, disc), false, `${spot.pos} circle meets the center circle`);
+    if (spot.labelBox) {
+      assert.equal(hitsDisc(spot.labelBox, disc), false, `${spot.pos} label meets the center circle`);
+    }
+  });
+}
 
 function tinyFourWide() {
   return [-FOUR_WIDE_MIN_NUDGE, FOUR_WIDE_MIN_NUDGE, FOUR_WIDE_MIN_NUDGE, -FOUR_WIDE_MIN_NUDGE];

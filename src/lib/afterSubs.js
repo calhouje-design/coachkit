@@ -1,6 +1,6 @@
 /** Start / After subs. Position drags never change who is on, and never flag a real event. */
 
-import { applyBenchRotation, fieldMarker, isGkPosition } from "./gameDay.js";
+import { applyBenchRotation, fieldMarker, isGkPosition, placeTwoWideMarkers } from "./gameDay.js";
 
 export function formationKey(lineup) {
   return (lineup?.starters || []).map(slot => slot?.pos || "").join("|");
@@ -398,7 +398,7 @@ function placedStarters(lineup, quarter, periodAbbrev) {
     name: player.name || "",
     number: player.number || "",
   }));
-  return { quarter, label: `${periodAbbrev}${quarter}`, starters, bench, pairs: [] };
+  return { quarter, label: `${periodAbbrev}${quarter}`, starters: placeTwoWideMarkers(starters), bench, pairs: [] };
 }
 
 /** Share/print: each sub-mode period with pairs (or a saved start) carries an After subs field. */
