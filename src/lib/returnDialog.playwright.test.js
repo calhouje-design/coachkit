@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { access } from "node:fs/promises";
 import { createServer } from "vite";
-import { chromium } from "playwright";
+import { chromium, devices, webkit } from "playwright";
 
 async function launchBrowser() {
   const options = { headless: true, args: ["--no-sandbox", "--disable-gpu"] };
@@ -138,6 +138,82 @@ test("a second return opened immediately is not covered by the first toast", asy
     assert.match(log, /"available":true/);
   } finally {
     await page.close();
+  }
+});
+
+async function launchEngine(engine) {
+  const options = { headless: true };
+  if (engine === chromium) {
+    options.args = ["--no-sandbox", "--disable-gpu"];
+    try {
+      await access("/usr/bin/google-chrome");
+      options.executablePath = "/usr/bin/google-chrome";
+    } catch {
+      /* CI uses the Chromium Playwright downloads. */
+    }
+  }
+  return engine.launch(options);
+}
+
+async function focusStaysInside(page) {
+  const inside = () => page.evaluate(() => {
+    const root = document.querySelector("[data-testid='return-sheet']");
+    return !!root && root.contains(document.activeElement);
+  });
+  await page.goto(`${base}/return-dialog.html`, { waitUntil: "networkidle" });
+  await page.getByTestId("return-sheet").waitFor();
+  const behind = page.getByTestId("behind");
+  assert.equal(await behind.evaluate(el => el.inert), true);
+  assert.equal(await behind.evaluate(el => el.getAttribute("aria-hidden")), "true");
+  const controls = page.locator("[data-testid='return-sheet']").locator("button:not([disabled]), input:not([disabled])");
+  const count = await controls.count();
+  assert.ok(count >= 5, `focusable count ${count}`);
+  const groups = await page.evaluate(() => {
+    const root = document.querySelector("[data-testid='return-sheet']");
+    return new Set([...root.querySelectorAll("input[type='radio']:not([disabled])")].map(el => el.name)).size;
+  });
+  assert.equal(groups, 2);
+  for (let i = 0; i < count; i++) {
+    const control = controls.nth(i);
+    await control.focus();
+    await page.keyboard.press("Tab");
+    assert.equal(await inside(), true, `Tab from control ${i}`);
+    await control.focus();
+    await page.keyboard.press("Shift+Tab");
+    assert.equal(await inside(), true, `Shift+Tab from control ${i}`);
+  }
+  await page.locator("input[name='return-quarter']:checked").focus();
+  await page.keyboard.press("Shift+Tab");
+  assert.equal(await inside(), true);
+  await page.locator("input[name='return-quarter']:checked").focus();
+  const focusedBehind = await page.evaluate(() => {
+    const behind = document.querySelector("[data-testid='behind']");
+    behind.focus();
+    return document.activeElement === behind;
+  });
+  assert.equal(focusedBehind, false);
+  assert.equal(await inside(), true);
+  await page.keyboard.press("Enter");
+  assert.equal((await page.getByTestId("log").innerText()).includes("behind"), false);
+  assert.equal(await page.getByTestId("return-sheet").count(), 1);
+  assert.equal(await inside(), true);
+}
+
+test("tab and shift-tab stay inside the return sheet on Pixel 7 and iPhone 13", async () => {
+  const targets = [
+    { engine: chromium, device: devices["Pixel 7"] },
+    { engine: webkit, device: devices["iPhone 13"] },
+  ];
+  for (const target of targets) {
+    const launched = await launchEngine(target.engine);
+    const context = await launched.newContext({ ...target.device });
+    const page = await context.newPage();
+    try {
+      await focusStaysInside(page);
+    } finally {
+      await context.close();
+      await launched.close();
+    }
   }
 });
 

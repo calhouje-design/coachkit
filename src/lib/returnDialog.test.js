@@ -125,18 +125,27 @@ test("finished quarters and quarters before the player went out are disabled", (
   const finished = finishedQuarterList({
     totalQuarters: 4,
     selectedQuarter: 3,
-    clocks: { 1: { sec: 40, stints: {} } },
-    realEvents: { 2: ["p1"] },
+    clocks: { 1: { sec: 40, stints: {} }, 2: { sec: 15, stints: {} } },
+    periodSeconds: 600,
   });
-  assert.deepEqual(finished, [1, 2]);
-  assert.equal(quarterIsLive(2, { realEvents: { 2: ["p1"] }, viewingQuarter: 3 }), true);
+  assert.deepEqual(finished, [1]);
+  const ended = finishedQuarterList({
+    totalQuarters: 4,
+    selectedQuarter: 1,
+    clocks: { 1: { sec: 600, stints: {} } },
+    periodSeconds: 600,
+  });
+  assert.deepEqual(ended, [1]);
+  assert.equal(quarterIsLive(2, { realEvents: { 2: ["p1"] }, viewingQuarter: 3 }), false);
+  assert.equal(quarterIsLive(2, { clocks: { 2: { sec: 90 } }, viewingQuarter: 3 }), true);
   assert.equal(quarterIsLive(3, { clocks: { 1: { sec: 10 } }, viewingQuarter: 3, viewingClock: 0 }), false);
   const viewedPast = finishedQuarterList({
     totalQuarters: 4,
     selectedQuarter: 2,
     clocks: { 1: { sec: 12, stints: {} } },
+    periodSeconds: 600,
   });
-  assert.deepEqual(viewedPast, [1]);
+  assert.deepEqual(viewedPast, []);
   const { choices, defaultQuarter } = quarterChoices({
     totalQuarters: 4,
     selectedQuarter: 3,
@@ -158,9 +167,10 @@ test("the dialog copy follows the quarter, the mode, and a mismatch", () => {
   assert.equal(returnHeading(player).title, "Return #7 Remi");
   assert.equal(returnHeading(player).since, "Out since Q1");
   assert.equal(pregameCopy(player), "Mark #7 Remi available?");
-  const sub = availabilityCopy({ quarter: 3, subMode: true, totalQuarters: 4, live: true });
+  const sub = availabilityCopy({ quarter: 3, subMode: true, totalQuarters: 4, live: true, name: "Wes Johnson" });
   assert.equal(sub.question, "Available to sub in at the next rotation in Q3?");
-  assert.equal(sub.yes, "Yes — eligible for Q3 2nd half");
+  assert.equal(sub.yes, "Yes — eligible for Q3");
+  assert.equal(sub.helper, "Re-plans this quarter with Wes on the field. Keeps the goalkeeper.");
   assert.equal(sub.no, "No — hold until Q4");
   const full = availabilityCopy({ quarter: 3, subMode: false, totalQuarters: 4 });
   assert.equal(full.question, "Ready to play in Q3?");
@@ -261,6 +271,7 @@ test("each return answer maps onto the existing return path", () => {
 
     const liveState = baseState(sheet, {
       realEvents: { 2: [goalkeeperId(sheet.lineups[2])] },
+      clocks: { 2: { sec: 90, stints: {} } },
       viewingQuarter: 3,
       viewingClock: 0,
     });
@@ -274,13 +285,76 @@ test("each return answer maps onto the existing return path", () => {
     flagIdsDidNotGrow(liveState.realEvents, liveYes.realEvents);
     assert.equal(periodHasRealEvent(liveYes.realEvents, 2), true);
     if (subMode) {
-      assert.match(liveYes.toast, /2nd half/);
+      assert.match(liveYes.toast, /is back\. Q2 re-planned\./);
     } else {
       const name = sheet.players.find(player => player.id === sheet.id).name.split(" ")[0];
       assert.equal(playerQuarterPresence(liveYes.lineups[2], sheet.id), "on");
       assert.equal(liveYes.toast, `${name} back for Q2.`);
       assert.notEqual(playerQuarterPresence(liveYes.lineups[3], sheet.id), "blank");
       assert.equal(realEventPlayerIds(liveYes.realEvents, 2).includes(sheet.id), false);
+    }
+  });
+});
+
+test("a pre-kickoff swap in a later quarter does not finish earlier ones", () => {
+  [true, false].forEach(subMode => {
+    const sheet = sheetWithAbsence({ subMode, outFrom: 1 });
+    const keeper = goalkeeperId(sheet.lineups[3]);
+    const swapped = (sheet.lineups[3].starters || [])
+      .map(slot => slot.player?.id)
+      .filter(id => id && id !== keeper)
+      .slice(0, 2);
+    const events = { 3: swapped };
+    const state = baseState(sheet, {
+      realEvents: events,
+      viewingQuarter: 3,
+      viewingClock: 0,
+      clocks: { 1: { sec: 120, stints: {} } },
+    });
+    const finished = finishedQuarterList({
+      totalQuarters: 4,
+      selectedQuarter: 3,
+      clocks: state.clocks,
+      viewingClock: 0,
+      periodSeconds: 600,
+    });
+    assert.deepEqual(finished, []);
+    assert.equal(quarterIsLive(3, state), false);
+    assert.equal(quarterIsLive(1, { clocks: state.clocks, viewingQuarter: 1, viewingClock: 120 }), true);
+    const choices = quarterChoices({ totalQuarters: 4, selectedQuarter: 3, outSince: 1, finished });
+    assert.equal(choices.defaultQuarter, 3);
+    assert.equal(choices.choices.find(choice => choice.quarter === 1).disabled, false);
+    assert.equal(choices.choices.find(choice => choice.quarter === 2).disabled, false);
+    assert.equal(choices.choices.find(choice => choice.quarter === 1).finished, false);
+
+    const back = commitReturn(state, { type: "confirm", quarter: 2, available: true });
+    assert.equal(quarterIsLive(2, state), false);
+    assert.equal(periodHasRealEvent(back.realEvents, 3), false);
+    assert.equal(periodHasRealEvent(back.realEvents, 4), false);
+    const shared = {
+      source: "roster",
+      autoRegen: true,
+      players: state.players,
+      playerId: sheet.id,
+      quarter: 2,
+      totalQuarters: 4,
+      lineups: state.lineups,
+      segments: state.segments,
+      slots: SLOTS,
+      subMode,
+      minHalves: 4,
+    };
+    const nonLive = returnToGame({ ...shared, livePeriod: false, protectedIds: [] });
+    const pinned = returnToGame({
+      ...shared,
+      livePeriod: true,
+      protectedIds: realEventPlayerIds(events, 2),
+    });
+    assert.equal(goalkeeperId(pinned.lineups[2]), goalkeeperId(state.lineups[2]));
+    assert.deepEqual(starterIds(back.lineups[2]), starterIds(nonLive.lineups[2]));
+    assert.equal(goalkeeperId(back.lineups[2]), goalkeeperId(nonLive.lineups[2]));
+    if (goalkeeperId(nonLive.lineups[2]) !== goalkeeperId(pinned.lineups[2])) {
+      assert.notEqual(goalkeeperId(back.lineups[2]), goalkeeperId(pinned.lineups[2]));
     }
   });
 });

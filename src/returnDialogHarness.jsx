@@ -55,6 +55,7 @@ function Harness() {
       <div data-testid="viewing" style={{ padding: 16 }}>Viewing Q{quarter}</div>
       <button type="button" data-testid="reopen" onClick={() => openReturn(who)}>Open</button>
       <button type="button" data-testid="open-b" onClick={() => openReturn("b")}>Return Jude</button>
+      <button type="button" data-testid="behind" onClick={() => setLog(prev => [...prev, "behind"])}>Redraw who plays Q2</button>
       <pre data-testid="log">{log.join("\n")}</pre>
       {toast && (
         <div

@@ -16,6 +16,38 @@ const C = {
   warn: "#e8a020",
 };
 
+function focusableIn(sheet) {
+  if (!sheet) return [];
+  return [...sheet.querySelectorAll(
+    "button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href]",
+  )];
+}
+
+function hideBackground(sheet) {
+  const changed = [];
+  let node = sheet;
+  while (node && node.parentElement && node !== document.body && node !== document.documentElement) {
+    for (const child of node.parentElement.children) {
+      if (child === node) continue;
+      changed.push({
+        el: child,
+        inert: child.inert,
+        ariaHidden: child.getAttribute("aria-hidden"),
+      });
+      child.inert = true;
+      child.setAttribute("aria-hidden", "true");
+    }
+    node = node.parentElement;
+  }
+  return () => {
+    changed.forEach(({ el, inert, ariaHidden }) => {
+      el.inert = inert;
+      if (ariaHidden == null) el.removeAttribute("aria-hidden");
+      else el.setAttribute("aria-hidden", ariaHidden);
+    });
+  };
+}
+
 function useDialogKeys(open, onCancel, sheetRef) {
   const cancelRef = useRef(onCancel);
   cancelRef.current = onCancel;
@@ -24,36 +56,46 @@ function useDialogKeys(open, onCancel, sheetRef) {
     const sheet = sheetRef.current;
     if (!sheet) return undefined;
     const previous = document.activeElement;
-    const focusable = () => [...sheet.querySelectorAll(
-      "button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [href]",
-    )];
-    const items = focusable();
+    const restoreBackground = hideBackground(sheet);
+    const items = focusableIn(sheet);
     (items[0] || sheet).focus();
     const onKey = (event) => {
       if (event.key === "Escape") {
         event.preventDefault();
+        event.stopPropagation();
         cancelRef.current?.();
         return;
       }
       if (event.key !== "Tab") return;
-      const list = focusable();
+      const list = focusableIn(sheetRef.current);
+      event.preventDefault();
+      event.stopPropagation();
       if (!list.length) {
-        event.preventDefault();
+        sheetRef.current?.focus();
         return;
       }
-      const first = list[0];
-      const last = list[list.length - 1];
-      if (event.shiftKey && document.activeElement === first) {
-        event.preventDefault();
-        last.focus();
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault();
-        first.focus();
+      const index = list.indexOf(document.activeElement);
+      if (index < 0) {
+        list[0].focus();
+        return;
       }
+      const next = event.shiftKey
+        ? (index - 1 + list.length) % list.length
+        : (index + 1) % list.length;
+      list[next].focus();
     };
-    document.addEventListener("keydown", onKey);
+    const onFocusIn = (event) => {
+      const root = sheetRef.current;
+      if (!root || root.contains(event.target)) return;
+      const list = focusableIn(root);
+      (list[0] || root).focus();
+    };
+    document.addEventListener("keydown", onKey, true);
+    document.addEventListener("focusin", onFocusIn, true);
     return () => {
-      document.removeEventListener("keydown", onKey);
+      document.removeEventListener("keydown", onKey, true);
+      document.removeEventListener("focusin", onFocusIn, true);
+      restoreBackground();
       if (previous && typeof previous.focus === "function") previous.focus();
     };
   }, [open, sheetRef]);
@@ -93,7 +135,7 @@ export function ReturnDialog({
   const quarterOk = !!chosen && !chosen.disabled;
   const live = quarterOk && (typeof quarterLive === "function" ? !!quarterLive(quarter) : !!liveQuarters[quarter]);
   const copy = quarterOk
-    ? availabilityCopy({ quarter, subMode, totalQuarters, periodAbbrev, live })
+    ? availabilityCopy({ quarter, subMode, totalQuarters, periodAbbrev, live, name: player.name })
     : null;
   const mismatch = hasSheet && quarterOk && quarter !== Number(selectedQuarter)
     ? mismatchCopy({ selectedQuarter, chosenQuarter: quarter, periodAbbrev })
@@ -134,18 +176,20 @@ export function ReturnDialog({
         style={{
           width: "min(390px, 100%)",
           maxHeight: "92vh",
-          overflow: "auto",
+          overflow: "hidden",
+          display: "flex",
+          flexDirection: "column",
           background: C.bg,
           color: C.text,
           borderRadius: "16px 16px 0 0",
           border: `1px solid ${C.border}`,
           borderBottom: "none",
-          padding: "16px 16px calc(16px + env(safe-area-inset-bottom))",
           boxSizing: "border-box",
           fontFamily: "inherit",
           outline: "none",
         }}
       >
+        <div style={{ overflow: "auto", padding: "16px 16px 8px", flex: "1 1 auto" }}>
         <div id={titleId} style={{ fontSize: 18, fontWeight: 800 }}>{heading.title}</div>
         <div style={{ fontSize: 13, color: C.muted, marginTop: 2, marginBottom: 14 }}>{heading.since}</div>
 
@@ -236,6 +280,11 @@ export function ReturnDialog({
             {copy && (
               <div>
                 <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 8 }}>{copy.question}</div>
+                {copy.helper && (
+                  <div data-testid="return-helper" style={{ fontSize: 13, color: C.muted, marginTop: -4, marginBottom: 8, lineHeight: 1.4 }}>
+                    {copy.helper}
+                  </div>
+                )}
                 <div role="radiogroup" aria-label={copy.question} style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                   {[["yes", true, copy.yes], ["no", false, copy.no]].map(([key, value, label]) => (
                     <label
@@ -271,7 +320,21 @@ export function ReturnDialog({
           </>
         )}
 
-        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 16 }}>
+        </div>
+        <div
+          data-testid="return-actions"
+          style={{
+            position: "sticky",
+            bottom: 0,
+            flexShrink: 0,
+            display: "flex",
+            justifyContent: "flex-end",
+            gap: 8,
+            padding: "12px 16px calc(12px + env(safe-area-inset-bottom))",
+            background: C.bg,
+            borderTop: `1px solid ${C.border}`,
+          }}
+        >
           <button type="button" onClick={onCancel} style={actionButton(false)}>Cancel</button>
           <button
             type="button"
