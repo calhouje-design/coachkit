@@ -2,6 +2,7 @@ import { useEffect, useId, useRef, useState } from "react";
 import {
   availabilityCopy,
   pregameCopy,
+  initialReturnSelection,
   quarterChoices,
   quarterClockSec,
   returnHeading,
@@ -120,6 +121,7 @@ export function ReturnDialog({
   running = false,
   periodSeconds = 0,
   halfApplied = null,
+  donorAvailable = null,
   onCancel,
   onConfirm,
   onSwitchQuarter,
@@ -133,11 +135,11 @@ export function ReturnDialog({
     finished,
   });
   const optionFor = (choice) => {
-    if (!choice) return { whole: false, back: false };
+    if (!choice) return { whole: false, back: false, noDonor: false };
     const live = typeof quarterLive === "function"
       ? !!quarterLive(choice.quarter)
       : !!liveQuarters[choice.quarter];
-    return returnOptionAvailability({
+    const options = returnOptionAvailability({
       disabled: choice.disabled,
       live,
       clock: quarterClockSec(choice.quarter, {
@@ -148,13 +150,28 @@ export function ReturnDialog({
       }),
       periodSeconds,
       halfApplied: typeof halfApplied === "function" ? !!halfApplied(choice.quarter) : false,
+      subMode,
     });
+    const donor = typeof donorAvailable === "function" ? !!donorAvailable(choice.quarter) : true;
+    return {
+      whole: !!options.whole,
+      back: !!options.back && donor,
+      noDonor: !!options.back && !donor,
+    };
   };
-  const opening = choices.find(choice => choice.quarter === defaultQuarter) || null;
-  const openingOptions = optionFor(opening);
-  const initialHalf = openingOptions.whole ? "whole" : (openingOptions.back ? "back" : "whole");
-  const [quarter, setQuarter] = useState(defaultQuarter);
-  const [half, setHalf] = useState(initialHalf);
+  const described = choices.map(choice => {
+    const options = optionFor(choice);
+    return {
+      quarter: choice.quarter,
+      disabled: choice.disabled,
+      whole: options.whole,
+      back: options.back,
+      viewed: choice.quarter === defaultQuarter,
+    };
+  });
+  const initialPick = initialReturnSelection(described);
+  const [quarter, setQuarter] = useState(initialPick.quarter);
+  const [half, setHalf] = useState(initialPick.half);
   const [available, setAvailable] = useState(null);
   useDialogKeys(open, onCancel, sheetRef);
 
@@ -266,6 +283,14 @@ export function ReturnDialog({
                       disabled={!options.back}
                       onPick={pickHalf}
                     />
+                    {options.noDonor && (
+                      <div
+                        data-testid={`return-no-donor-${choice.quarter}`}
+                        style={{ gridColumn: "1 / -1", fontSize: 11, color: C.muted, lineHeight: 1.3 }}
+                      >
+                        No one to swap at the half
+                      </div>
+                    )}
                   </div>
                 );
               })}

@@ -308,8 +308,8 @@ export function clearSnapshotsFrom(stored, fromQuarter, total = 4) {
   return changed ? next : (stored || {});
 }
 
-export function phaseControlVisible({ subMode = true, pairs = [], bench = [], snapshot = null } = {}) {
-  if (!subMode) return false;
+export function phaseControlVisible({ subMode = true, pairs = [], bench = [], snapshot = null, backHalf = false } = {}) {
+  if (!subMode && !backHalf) return false;
   if (snapshot) return true;
   if (!bench?.length) return false;
   if (!pairs?.length) return false;

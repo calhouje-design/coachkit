@@ -1,13 +1,20 @@
+import "./domSetup.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
   applyBenchRotation,
+  backHalfDonorAvailable,
+  backHalfEarnedMinutes,
+  backHalfShownPairs,
   equityHalves,
   goalkeeperId,
   isBackHalfReturn,
   isGkPosition,
+  noteSubSegment,
+  pairsForDisplay,
   periodHasRealEvent,
   planAvailability,
+  planBenchRotation,
   playCellKind,
   playerHalfMask,
   playerQuarterPresence,
@@ -20,12 +27,14 @@ import {
   segmentAt,
   withBackHalfShare,
   shareFieldSheet,
+  stripReturnAtFrom,
 } from "./gameDay.js";
 import { viewAfterSubs } from "./afterSubs.js";
 import {
   availabilityCopy,
   commitReturn,
   finishedQuarterList,
+  initialReturnSelection,
   mismatchCopy,
   pregameCopy,
   quarterChoices,
@@ -49,9 +58,9 @@ function roster(count = 9) {
   }));
 }
 
-function openSheet(players, subMode) {
+function openSheet(players, subMode, seed = 3) {
   if (subMode) {
-    return scheduleHalfRotation(players, SLOTS, { minHalves: 4, totalQuarters: 4, seed: 3 });
+    return scheduleHalfRotation(players, SLOTS, { minHalves: 4, totalQuarters: 4, seed });
   }
   return {
     lineups: scheduleWholeGame({
@@ -60,15 +69,15 @@ function openSheet(players, subMode) {
       slotOverride: SLOTS,
       totalPeriods: 4,
       minFraction: 0.5,
-      seed: 3,
+      seed,
     }),
     segments: {},
   };
 }
 
-function sheetWithAbsence({ subMode, outFrom = 1 }) {
+function sheetWithAbsence({ subMode, outFrom = 1, seed = 3 }) {
   const players = roster(9);
-  const opened = openSheet(players, subMode);
+  const opened = openSheet(players, subMode, seed);
   const id = opened.lineups[1].bench[0].id;
   const absent = players.map(player => (
     player.id === id
@@ -620,20 +629,39 @@ test("back-half copy, greying, and mismatch understand halves without changing w
   assert.deepEqual(returnOptionAvailability({ live: true, clock: 300, periodSeconds: 600 }), { whole: false, back: true });
   assert.deepEqual(returnOptionAvailability({ live: true, clock: 301, periodSeconds: 600, halfApplied: false }), { whole: false, back: true });
   assert.deepEqual(returnOptionAvailability({ live: true, clock: 301, periodSeconds: 600, halfApplied: true }), { whole: false, back: false });
+  assert.deepEqual(returnOptionAvailability({ live: true, clock: 300, periodSeconds: 600, subMode: false }), { whole: false, back: true });
+  assert.deepEqual(returnOptionAvailability({ live: true, clock: 301, periodSeconds: 600, subMode: false }), { whole: false, back: false });
+  assert.deepEqual(initialReturnSelection([
+    { quarter: 2, viewed: true, whole: false, back: false },
+    { quarter: 3, whole: true, back: true },
+  ]), { quarter: 3, half: "whole" });
+  assert.deepEqual(initialReturnSelection([
+    { quarter: 2, viewed: true, disabled: true, whole: false, back: false },
+    { quarter: 3, whole: false, back: true },
+  ]), { quarter: 3, half: "back" });
+  assert.deepEqual(initialReturnSelection([
+    { quarter: 1, disabled: true, whole: false, back: false },
+    { quarter: 2, disabled: true, whole: false, back: false },
+  ]), { quarter: null, half: "whole" });
+  assert.deepEqual(initialReturnSelection([
+    { quarter: 2, viewed: true, whole: true, back: true },
+  ]), { quarter: 2, half: "whole" });
 });
 
 test("a whole-quarter return stays byte-identical when half is omitted or whole", () => {
   [true, false].forEach(subMode => {
-    const sheet = sheetWithAbsence({ subMode, outFrom: 1 });
-    const state = baseState(sheet, { viewingQuarter: 2 });
-    const plain = commitReturn(state, { type: "confirm", quarter: 2, available: true });
-    const explicit = commitReturn(state, { type: "confirm", quarter: 2, available: true, half: "whole" });
-    assert.deepEqual(explicit.lineups, plain.lineups);
-    assert.deepEqual(explicit.segments, plain.segments);
-    assert.equal(explicit.toast, plain.toast);
-    assert.equal(explicit.players.find(player => player.id === sheet.id).returnQuarter, 2);
-    assert.equal(explicit.players.find(player => player.id === sheet.id).returnAt, undefined);
-    assert.deepEqual(readReturn(explicit.players.find(player => player.id === sheet.id)), { quarter: 2, half: "whole" });
+    for (let seed = 1; seed <= 12; seed += 1) {
+      const sheet = sheetWithAbsence({ subMode, outFrom: 1, seed });
+      const state = baseState(sheet, { viewingQuarter: 2 });
+      const plain = commitReturn(state, { type: "confirm", quarter: 2, available: true });
+      const explicit = commitReturn(state, { type: "confirm", quarter: 2, available: true, half: "whole" });
+      assert.deepEqual(explicit.lineups, plain.lineups);
+      assert.deepEqual(explicit.segments, plain.segments);
+      assert.equal(explicit.toast, plain.toast);
+      assert.equal(explicit.players.find(player => player.id === sheet.id).returnQuarter, 2);
+      assert.equal(explicit.players.find(player => player.id === sheet.id).returnAt, undefined);
+      assert.deepEqual(readReturn(explicit.players.find(player => player.id === sheet.id)), { quarter: 2, half: "whole" });
+    }
   });
 });
 
@@ -731,4 +759,172 @@ test("a live back-half return waits for the pending half sub and still keeps the
     assert.equal(done.players.find(player => player.id === sheet.id).doneForToday, true);
     assert.equal(done.toast.endsWith("is done for today."), true);
   });
+});
+
+test("a back-half quarter keeps the normal half pairs and adds the returner pair", () => {
+  const sheet = sheetWithAbsence({ subMode: true, outFrom: 1 });
+  const state = baseState(sheet, { viewingQuarter: 2 });
+  const back = commitReturn(state, { type: "confirm", quarter: 2, available: true, half: "back" });
+  const id = sheet.id;
+  const view = quarterHalfPresentation(back.lineups[2], back.segments, 2, { returnerId: id });
+  const pairs = backHalfShownPairs({
+    start: view.start,
+    returnerPair: view.pairs[0],
+    nextLineup: back.lineups[3],
+  });
+  const donorId = view.pairs[0].outId;
+  assert.equal(pairs[0].inId, id);
+  assert.equal(pairs[0].outId, donorId);
+  assert.equal(pairs.filter(pair => pair.outId === donorId).length, 1);
+  assert.equal(pairs.filter(pair => pair.inId === id).length, 1);
+  view.start.bench.forEach(player => {
+    assert.equal(pairs.some(pair => pair.inId === player.id), true, player.id);
+  });
+  const shared = withBackHalfShare(
+    shareFieldSheet({ lineups: back.lineups, pairPlan: {}, subMode: true }),
+    { players: back.players, lineups: back.lineups, segments: back.segments, pairPlan: {}, subMode: true },
+  );
+  const panel = shared.quarters.find(item => item.quarter === 2);
+  assert.equal(panel.pairs.length, pairs.length);
+  panel.pairs.forEach((pair, index) => {
+    assert.equal(pair.inId, pairs[index].inId);
+    assert.equal(pair.outId, pairs[index].outId);
+  });
+  const stripped = stripReturnAtFrom(back.players, 1);
+  const returned = stripped.find(player => player.id === id);
+  assert.equal(returned.returnAt, undefined);
+  assert.equal(returned.returnQuarter, 2);
+  assert.equal(isBackHalfReturn(returned, 2), false);
+  const afterPlan = pairsForDisplay(
+    planBenchRotation(back.lineups[2], { nextLineup: back.lineups[3] }),
+    [],
+    back.lineups[2],
+  );
+  (back.lineups[2].bench || []).forEach(player => {
+    assert.equal(afterPlan.some(pair => pair.inId === player.id), true, player.id);
+  });
+});
+
+test("a quarter with no outfield donor refuses a back-half return", () => {
+  const players = roster(8);
+  const starters = players.slice(0, 6).map((player, index) => ({ pos: SLOTS[index], player }));
+  const bench = players.slice(6);
+  const segments = {};
+  starters.forEach((slot, index) => {
+    if (index === 0) return;
+    segments[slot.player.id] = { 2: index % 2 ? "entered" : "left" };
+  });
+  const lineups = { 2: { starters, bench } };
+  const returner = { ...bench[0], out: true, injured: false, injuredInQuarter: 1, returnQuarter: null };
+  const rosterPlayers = players.map(player => (player.id === returner.id ? returner : player));
+  assert.equal(backHalfDonorAvailable({
+    lineup: lineups[2],
+    segments,
+    quarter: 2,
+    returnerId: returner.id,
+    lineups,
+  }), false);
+  const refused = returnToGame({
+    players: rosterPlayers,
+    playerId: returner.id,
+    quarter: 2,
+    half: "back",
+    lineups,
+    segments,
+    slots: SLOTS,
+    subMode: true,
+    totalQuarters: 4,
+  });
+  assert.equal(refused.refused, true);
+  assert.equal(refused.lineups, lineups);
+  assert.equal(refused.players, rosterPlayers);
+  assert.equal(refused.players.find(player => player.id === returner.id).returnAt, undefined);
+  const state = baseState({
+    id: returner.id,
+    players: rosterPlayers,
+    lineups,
+    segments,
+    subMode: true,
+  }, { viewingQuarter: 2 });
+  const viaDialog = commitReturn(state, { type: "confirm", quarter: 2, available: true, half: "back" });
+  assert.equal(viaDialog.changed, false);
+  assert.equal(viaDialog.lineups, lineups);
+});
+
+test("an injury in the same quarter keeps the earlier half when they return at the half", () => {
+  const players = roster(9);
+  const opened = openSheet(players, true, 3);
+  const victim = opened.lineups[2].starters.find(slot => (
+    slot.player && !isGkPosition(slot.pos) && !segmentAt(opened.segments, slot.player.id, 2)
+  )).player;
+  const absent = players.map(player => (
+    player.id === victim.id
+      ? { ...player, injured: true, out: false, injuredInQuarter: 2, returnQuarter: null }
+      : player
+  ));
+  const gone = planAvailability({
+    autoRegen: true,
+    kind: "absent",
+    players: absent,
+    absentId: victim.id,
+    quarter: 2,
+    lineups: opened.lineups,
+    segments: opened.segments,
+    slots: SLOTS,
+    subMode: true,
+    minHalves: 4,
+    totalQuarters: 4,
+    livePeriod: true,
+  });
+  const marked = noteSubSegment(gone.segments, victim.id, 2, "left");
+  assert.equal(segmentAt(marked, victim.id, 2), "left");
+  assert.equal(quarterHalves(victim.id, gone.lineups, marked, 2), 1);
+  const before = players.map(player => quarterHalves(player.id, gone.lineups, marked, 2));
+  const back = returnToGame({
+    players: absent,
+    playerId: victim.id,
+    quarter: 2,
+    half: "back",
+    lineups: gone.lineups,
+    segments: marked,
+    slots: SLOTS,
+    subMode: true,
+    minHalves: 4,
+    totalQuarters: 4,
+    livePeriod: true,
+  });
+  assert.notEqual(segmentAt(back.segments, victim.id, 2), "entered");
+  assert.equal(quarterHalves(victim.id, back.lineups, back.segments, 2), 2);
+  const donorId = back.lineups[2].bench.find(player => segmentAt(back.segments, player.id, 2) === "left"
+    && quarterHalves(player.id, gone.lineups, marked, 2) === 2)?.id;
+  assert.ok(donorId);
+  assert.equal(quarterHalves(donorId, back.lineups, back.segments, 2), 1);
+  const after = players.map(player => quarterHalves(player.id, back.lineups, back.segments, 2));
+  assert.equal(after.reduce((sum, n) => sum + n, 0), before.reduce((sum, n) => sum + n, 0));
+});
+
+test("a back-half returner earns live minutes from the half, and the donor until then", () => {
+  const halfSec = 300;
+  const bank = {};
+  const stints = {};
+  const start = backHalfEarnedMinutes("wes", {
+    bank, clockSec: 100, stintStartSec: stints, halfSec, phase: "start", returnerId: "wes", donorId: "trey",
+  });
+  const donorEarly = backHalfEarnedMinutes("trey", {
+    bank, clockSec: 100, stintStartSec: stints, halfSec, phase: "start", returnerId: "wes", donorId: "trey",
+  });
+  assert.equal(start, 0);
+  assert.equal(donorEarly, 100 / 60);
+  const lateReturner = backHalfEarnedMinutes("wes", {
+    bank, clockSec: 400, stintStartSec: stints, halfSec, phase: "after", returnerId: "wes", donorId: "trey",
+  });
+  const lateDonor = backHalfEarnedMinutes("trey", {
+    bank, clockSec: 400, stintStartSec: stints, halfSec, phase: "after", returnerId: "wes", donorId: "trey",
+  });
+  assert.equal(lateReturner, 100 / 60);
+  assert.equal(lateDonor, 300 / 60);
+  const stillStart = backHalfEarnedMinutes("wes", {
+    bank, clockSec: 400, stintStartSec: stints, halfSec, phase: "start", returnerId: "wes", donorId: "trey",
+  });
+  assert.equal(stillStart, 0);
 });

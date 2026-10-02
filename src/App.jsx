@@ -37,6 +37,11 @@ import {
   withBackHalfShare,
   isBackHalfReturn,
   quarterHalfPresentation,
+  backHalfShownPairs,
+  backHalfEarnedMinutes,
+  backHalfDonorAvailable,
+  stripReturnAtFrom,
+  realEventPlayerIds,
   scheduleHalfRotation,
   scheduleWholeGame,
   firstDifferentPlan,
@@ -1573,6 +1578,7 @@ export function TabGame({ format, league, players, setPlayers, addPlayer, remove
       setScrambleNote(null);
       return;
     }
+    setPlayers(prev => stripReturnAtFrom(prev, fromQ));
     const clockStarted = running || (clockRef.current || 0) > 0;
     const realEvent = periodHasRealEvent(realPeriodEvents, fromQ);
     const decision = liveReplanClockDecision({
@@ -2187,14 +2193,32 @@ export function TabGame({ format, league, players, setPlayers, addPlayer, remove
   const onFieldIds = new Set(
     (currentLineup?.starters || []).filter(s => s.player).map(s => s.player.id)
   );
+  const backHalfPlayer = (players || []).find(player => isBackHalfReturn(player, quarter)) || null;
+  const halfPresentation = backHalfPlayer && currentLineup
+    ? quarterHalfPresentation(currentLineup, subSegments, quarter, { returnerId: backHalfPlayer.id })
+    : null;
+  const minutePhase = halfPresentation?.pairs?.length && fieldPhase === "after" ? "after" : "start";
   const minutesById = {};
   players.forEach(p => {
-    minutesById[p.id] = earnedMinutes(p.id, {
-      bank: minuteBank,
-      onField: onFieldIds.has(p.id),
-      clockSec,
-      stintStartSec: stintStart,
-    });
+    if (halfPresentation?.pairs?.[0] && (p.id === backHalfPlayer.id || p.id === halfPresentation.pairs[0].outId)) {
+      minutesById[p.id] = backHalfEarnedMinutes(p.id, {
+        bank: minuteBank,
+        clockSec,
+        stintStartSec: stintStart,
+        halfSec: (Number(periodMin) || 0) * 30,
+        phase: minutePhase,
+        returnerId: backHalfPlayer.id,
+        donorId: halfPresentation.pairs[0].outId,
+        onField: onFieldIds.has(p.id),
+      });
+    } else {
+      minutesById[p.id] = earnedMinutes(p.id, {
+        bank: minuteBank,
+        onField: onFieldIds.has(p.id),
+        clockSec,
+        stintStartSec: stintStart,
+      });
+    }
   });
   const anyMinutes = clockSec > 0 || running || Object.values(minuteBank || {}).some(n => n > 0);
   const whosNext = rankWhosNext(currentLineup?.bench || [], minutesById);
@@ -2212,20 +2236,36 @@ export function TabGame({ format, league, players, setPlayers, addPlayer, remove
     const auto = planBenchRotation(lineup, { minutesById, nextLineup: next });
     return pairsForDisplay(auto, pairPlan?.[q] || pairPlan?.[String(q)], lineup);
   };
-  const backHalfPlayer = subMode
-    ? (players || []).find(player => isBackHalfReturn(player, quarter))
-    : null;
-  const halfView = backHalfPlayer && currentLineup
-    ? quarterHalfPresentation(currentLineup, subSegments, quarter, { returnerId: backHalfPlayer.id })
-    : null;
+  const backHalfViewFor = (q, lineups = lineupsByQuarter) => {
+    const lineup = lineups?.[q] || lineups?.[String(q)];
+    const returner = (players || []).find(player => isBackHalfReturn(player, q));
+    if (!returner || !lineup) return null;
+    const presentation = q === quarter && halfPresentation?.pairs?.length
+      ? halfPresentation
+      : quarterHalfPresentation(lineup, subSegments, q, { returnerId: returner.id });
+    if (!presentation?.pairs?.length) return null;
+    const next = q < totalQuarters ? (lineups?.[q + 1] || lineups?.[String(q + 1)] || null) : null;
+    const pairs = subMode
+      ? backHalfShownPairs({
+        start: presentation.start,
+        returnerPair: presentation.pairs[0],
+        nextLineup: next,
+        minutesById,
+        manualPairs: pairPlan?.[q] || pairPlan?.[String(q)] || [],
+      })
+      : presentation.pairs;
+    return { ...presentation, pairs };
+  };
+  const halfView = backHalfViewFor(quarter);
   const shownPairs = halfView?.pairs?.length ? halfView.pairs : pairsForQuarter(quarter);
   const snapshot = startSnapshots?.[quarter] || startSnapshots?.[String(quarter)] || null;
   const ran = !!(snapshot?.starters?.length);
   const periodOverride = afterSubs?.[String(quarter)] || afterSubs?.[quarter] || null;
   const controlOn = phaseControlVisible({
     subMode,
+    backHalf: !!halfView?.pairs?.length,
     pairs: ran ? (snapshot?.pairs || []) : shownPairs,
-    bench: ran ? (snapshot?.bench || []) : (currentLineup?.bench || []),
+    bench: ran ? (snapshot?.bench || []) : (halfView?.start?.bench || currentLineup?.bench || []),
     snapshot: ran ? snapshot : null,
   });
   const phase = controlOn && fieldPhase === "after" ? "after" : "start";
@@ -2239,17 +2279,26 @@ export function TabGame({ format, league, players, setPlayers, addPlayer, remove
   const linePairs = phase === "start" ? (ran ? (snapshot?.pairs || []) : shownPairs) : [];
   const readOnlyStart = phase === "start" && ran;
   phaseRef.current = { phase, ran, pairs: shownPairs, override: periodOverride, readOnly: readOnlyStart };
-  const pairsKey = periodList.map(q => pairsForQuarter(q).map(pair => `${pair.inId}>${pair.outId}`).join(",")).join(";");
+  const pairsKey = periodList.map(q => {
+    const view = backHalfViewFor(q);
+    const pairs = view?.pairs?.length ? view.pairs : pairsForQuarter(q);
+    return pairs.map(pair => `${pair.inId}>${pair.outId}`).join(",");
+  }).join(";");
   const lineupKeyAll = periodList.map(q => {
     const lineup = lineupsByQuarter[q];
     return (lineup?.starters || []).map(slot => `${slot.pos}:${slot.player?.id || ""}`).join(",");
   }).join("|");
   useEffect(() => {
-    if (!subMode) return;
-    const reconciled = reconcileAfterSubsMap(afterSubs, periodList, q => ({
-      lineup: lineupsByQuarter[q],
-      pairs: pairsForQuarter(q),
-    }));
+    const anyBackHalf = periodList.some(q => (players || []).some(player => isBackHalfReturn(player, q)));
+    if (!subMode && !anyBackHalf) return;
+    const reconciled = reconcileAfterSubsMap(afterSubs, periodList, q => {
+      const view = backHalfViewFor(q);
+      if (view?.pairs?.length) return { lineup: view.start, pairs: view.pairs };
+      return {
+        lineup: lineupsByQuarter[q],
+        pairs: pairsForQuarter(q),
+      };
+    });
     if (reconciled.reset) setPhaseToast("After-subs positions reset.");
     if (reconciled.next !== afterSubs) setAfterSubs(reconciled.next);
   }, [subMode, pairsKey, lineupKeyAll]);
@@ -2456,6 +2505,8 @@ export function TabGame({ format, league, players, setPlayers, addPlayer, remove
           lineups: lineupsByQuarter,
           segments: subSegments,
           periodAbbrev: abbr,
+          pairPlan,
+          subMode,
         }),
         playTime: sharePlayTimeSheet({ ...sheetInput, quarters: periodList, periodAbbrev: abbr }),
       },
@@ -3443,6 +3494,16 @@ export function TabGame({ format, league, players, setPlayers, addPlayer, remove
             const onAfter = Number(q) === Number(quarter) && fieldPhase === "after";
             return !!(snap?.starters?.length) || onAfter;
           }}
+          donorAvailable={q => backHalfDonorAvailable({
+            lineup: lineupsByQuarter[q] || lineupsByQuarter[String(q)],
+            segments: subSegments,
+            quarter: q,
+            returnerId: returnAsk.playerId,
+            lineups: lineupsByQuarter,
+            totalQuarters,
+            protectedIds: realEventPlayerIds(realPeriodEvents, q),
+            rate: getOverallRating,
+          })}
           onCancel={() => applyReturnChoice({ type: "cancel" })}
           onConfirm={applyReturnChoice}
           onSwitchQuarter={setQuarter}
@@ -3607,6 +3668,8 @@ function ShareLineupModal({ players, lineupsByQuarter, pairPlan, afterSubs, star
       lineups: lineupsByQuarter,
       segments,
       periodAbbrev,
+      pairPlan,
+      subMode,
     }),
     [lineupsByQuarter, pairPlan, afterSubs, startSnapshots, subMode, quarters, periodAbbrev, players, segments],
   );

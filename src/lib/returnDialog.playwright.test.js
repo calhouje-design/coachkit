@@ -302,6 +302,36 @@ test("the After view shows a back-half returner who is off at the start", async 
   }
 });
 
+test("full mode shows Start and After only for a back-half quarter", async () => {
+  const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
+  const errors = [];
+  page.on("pageerror", error => errors.push(String(error)));
+  try {
+    await page.goto(`${base}/src/lib/harness/back-half.html?mode=full`, { waitUntil: "networkidle" });
+    const returner = await page.getByTestId("returner-id").getAttribute("data-player-id");
+    const toggle = page.getByTestId("phase-toggle");
+    await toggle.scrollIntoViewIfNeeded();
+    await toggle.waitFor();
+    const ids = () => page.locator("[data-testid^='field-player-']").evaluateAll(nodes => (
+      nodes.map(node => node.getAttribute("data-player-id"))
+    ));
+    const startIds = await ids();
+    assert.equal(startIds.includes(returner), false);
+    await page.getByTestId("phase-after").click();
+    await page.getByTestId("phase-caption").waitFor();
+    const afterIds = await ids();
+    assert.equal(afterIds.includes(returner), true);
+    assert.notDeepEqual(afterIds, startIds);
+    await page.getByRole("button", { name: "Share lineup" }).click();
+    const sheet = page.getByTestId("share-sheet");
+    await sheet.waitFor();
+    assert.equal(await sheet.getAttribute("data-dual"), "true");
+    assert.equal(errors.length, 0, errors.join("\n"));
+  } finally {
+    await page.close();
+  }
+});
+
 test("escape and the backdrop leave the return dialog without a confirm", async () => {
   const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
   try {

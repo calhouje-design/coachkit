@@ -58,14 +58,31 @@ export function returnOptionAvailability({
   clock = 0,
   periodSeconds = 0,
   halfApplied = false,
+  subMode = true,
 } = {}) {
   if (disabled) return { whole: false, back: false };
   if (!live) return { whole: true, back: true };
   const half = (Number(periodSeconds) || 0) / 2;
   const sec = Number(clock) || 0;
   if (!(half > 0) || sec < half) return { whole: true, back: true };
+  if (!subMode && sec > half) return { whole: false, back: false };
   if (sec > half && halfApplied) return { whole: false, back: false };
   return { whole: false, back: true };
+}
+
+/**
+ * Prefer the viewed quarter when one of its choices is open.
+ * A fully closed viewed quarter moves to the first open choice, or none.
+ */
+export function initialReturnSelection(choices = []) {
+  const viewed = choices.find(choice => choice?.viewed && !choice.disabled);
+  const ordered = viewed ? [viewed, ...choices.filter(choice => choice !== viewed)] : choices;
+  for (const choice of ordered) {
+    if (!choice) continue;
+    if (choice.whole) return { quarter: choice.quarter, half: "whole" };
+    if (choice.back) return { quarter: choice.quarter, half: "back" };
+  }
+  return { quarter: null, half: "whole" };
 }
 
 /**
@@ -333,6 +350,7 @@ export function commitReturn(state, choice) {
     protectedIds: realEventPlayerIds(state.realEvents, returnQuarter),
     half,
   });
+  if (result.refused) return unchanged(state);
   const events = result.regenerated
     ? realEventsAfterReturn(state.realEvents, { quarter: returnQuarter, regenerated: true })
     : state.realEvents;

@@ -8,6 +8,7 @@ import {
   markInjured,
   markOut,
   settleAvailability,
+  withoutReturnAt,
   showDoneForToday,
   toggleRosterInjured,
   toggleRosterOut,
@@ -52,6 +53,26 @@ test("out and injured writes clear a stale done-for-today mark", () => {
   const cleared = settleAvailability(done, { ...done, out: false, injured: false, doneForToday: true });
   assert.equal(cleared.doneForToday, false);
   assert.equal(cleared.out, false);
+
+  const returning = {
+    ...done,
+    out: false,
+    injured: false,
+    doneForToday: false,
+    returnQuarter: 2,
+    returnAt: { quarter: 2, half: "back" },
+  };
+  const injuredAgain = markInjured(returning, { midGameInjury: true, injuredInQuarter: 2, returnQuarter: null });
+  assert.equal(injuredAgain.returnQuarter, null);
+  assert.equal(injuredAgain.returnAt, undefined);
+  const toggled = toggleRosterOut(returning);
+  assert.equal(toggled.out, true);
+  assert.equal(toggled.returnAt, undefined);
+  assert.equal(toggled.returnQuarter, 2);
+  const whole = markOut({ ...returning, returnAt: undefined }, { returnQuarter: 3 });
+  assert.equal(whole.returnQuarter, 3);
+  assert.equal(whole.returnAt, undefined);
+  assert.equal(withoutReturnAt(returning).returnAt, undefined);
 });
 
 test("the done-for-today badge renders only while the player is out or injured", async () => {

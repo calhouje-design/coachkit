@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { createRoot } from "react-dom/client";
 import { TabGame } from "../../App.jsx";
-import { planAvailability, returnToGame, scheduleHalfRotation } from "../gameDay.js";
+import { planAvailability, returnToGame, scheduleHalfRotation, scheduleWholeGame } from "../gameDay.js";
 import { resolveSetup } from "../leagueRules.js";
 
 const slots = ["GK", "LD", "RD", "LM", "RM", "CF"];
@@ -15,11 +15,21 @@ const players = ["Ann", "Bea", "Cal", "Dee", "Eve", "Fay", "Gia", "Hal", "Ian"].
   ratings: {},
 }));
 
-const opened = scheduleHalfRotation(players, slots, {
-  minHalves: 4,
-  totalQuarters: 4,
-  seed: 3,
-});
+const fullMode = new URLSearchParams(window.location.search).get("mode") === "full";
+const opened = fullMode
+  ? { lineups: scheduleWholeGame({
+    players,
+    format: "6v6",
+    slotOverride: slots,
+    totalPeriods: 4,
+    minFraction: 0.5,
+    seed: 3,
+  }), segments: {} }
+  : scheduleHalfRotation(players, slots, {
+    minHalves: 4,
+    totalQuarters: 4,
+    seed: 3,
+  });
 const absentId = opened.lineups[1].bench[0].id;
 const absent = players.map(player => (
   player.id === absentId
@@ -36,7 +46,7 @@ const planned = planAvailability({
   absentId,
   quarter: 1,
   minHalves: 4,
-  subMode: true,
+  subMode: !fullMode,
   totalQuarters: 4,
 });
 const back = returnToGame({
@@ -47,7 +57,7 @@ const back = returnToGame({
   lineups: planned.lineups,
   segments: planned.segments,
   slots,
-  subMode: true,
+  subMode: !fullMode,
   minHalves: 4,
   totalQuarters: 4,
   half: "back",
@@ -56,7 +66,7 @@ const back = returnToGame({
 const setup = resolveSetup({
   league: "U10",
   format: "6v6",
-  settings: { org: "us-soccer", subMode: true, periods: 4 },
+  settings: { org: "us-soccer", subMode: !fullMode, periods: 4 },
 });
 
 function Harness() {
@@ -89,7 +99,7 @@ function Harness() {
         lineupsByQuarter={lineups}
         setLineupsByQuarter={setLineups}
         setGames={() => {}}
-        subMode
+        subMode={!fullMode}
         autoRegen
         gameDay={gameDay}
         setGameDay={setGameDay}
