@@ -45,8 +45,6 @@ import {
   periodHasRealEvent,
   noteRealPeriodEvent,
   realEventsAfterUnavailable,
-  realEventsAfterReturn,
-  realEventPlayerIds,
   realEventsThrough,
   replanCarryForward,
   segmentsSavedForSubReplan,
@@ -55,10 +53,11 @@ import {
   upsertGameLog,
   playerQuarterPresence,
   planAvailability,
-  returnToGame,
 } from "./lib/gameDay.js";
 import { FORMATION_TEMPLATES, clampPeriod, formationNameForPeriod, preservePlayedBase, reapplyBase, reshapeLineup, withPeriodOverride, withoutPeriodOverride, normalizeFormationOverrides } from "./lib/formations.js";
-import { CIRCLE_DIAMETER, LABEL_GAP, LABEL_LETTER_SPACING_EM, LABEL_WIDTH_GUARD, labelProbeCss, layoutFieldPlayers, labelWidth } from "./lib/fieldLayout.js";
+import { CIRCLE_DIAMETER, LABEL_GAP, LABEL_LETTER_SPACING_EM, labelProbeCss, layoutFieldPlayers, labelWidth, roundLabelWidth } from "./lib/fieldLayout.js";
+import { commitReturn, finishedQuarterList, quarterIsLive } from "./lib/returnDialog.js";
+import { ReturnDialog } from "./components/ReturnDialog.jsx";
 import { usePitchSubLines, useReportFieldLayout } from "./lib/pitchSubLines.js";
 import { SAY_PLAY_TIME, sayDivision, sayDivisionKey } from "./lib/sayEastGuide.js";
 import { downloadCanvas, paintFieldSheet, paintPlayTimeSheet } from "./lib/sharePaint.js";
@@ -713,7 +712,7 @@ function SoccerField({ lineup, onTap, selectedIdx, quarter, periodAbbrev = "Q", 
       probe.textContent = key;
       el.appendChild(probe);
       const measured = probe.getBoundingClientRect().width;
-      const width = measured > 0 ? Math.ceil(measured) + LABEL_WIDTH_GUARD : labelWidth(key);
+      const width = measured > 0 ? roundLabelWidth(measured) : labelWidth(key);
       probe.remove();
       cache.set(key, width);
       return width;
@@ -859,10 +858,9 @@ function SoccerField({ lineup, onTap, selectedIdx, quarter, periodAbbrev = "Q", 
                 aria-label={fullName}
                 style={{
                   position:"absolute",
-                  left:"50%",
+                  left: spot.labelBox.x - (spot.x - CIRCLE_DIAMETER / 2),
                   top: CIRCLE_DIAMETER + LABEL_GAP,
                   zIndex:3,
-                  transform:"translateX(-50%)",
                   width: spot.labelBox.width,
                   maxWidth: spot.labelBox.width,
                   overflow:"hidden",
@@ -1245,6 +1243,9 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
   const [newNum,        setNewNum]        = useState("");
   const [swapSel, setSwapSel] = useState(null);
   const [fairWarn, setFairWarn] = useState(null);
+  const [fairInfo, setFairInfo] = useState(null);
+  const [returnAsk, setReturnAsk] = useState(null);
+  const [returnToast, setReturnToast] = useState(null);
   const [scrambleNote, setScrambleNote] = useState(null);
   const [planNote, setPlanNote] = useState(null);
   const recentPlanKeys = useRef([]);
@@ -1304,6 +1305,11 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
   useEffect(() => { clockRef.current = clockSec; }, [clockSec]);
   useEffect(() => { stintRef.current = stintStart; }, [stintStart]);
   useEffect(() => { clocksRef.current = clockByPeriod || {}; }, [clockByPeriod]);
+  useEffect(() => {
+    if (!returnToast) return undefined;
+    const id = setTimeout(() => setReturnToast(null), 4200);
+    return () => clearTimeout(id);
+  }, [returnToast]);
   useEffect(() => { bankRef.current = minuteBank || {}; }, [minuteBank]);
   useEffect(() => { quarterRef.current = quarter; }, [quarter]);
   useEffect(() => { lineupsRef.current = lineupsByQuarter; }, [lineupsByQuarter]);
@@ -1464,6 +1470,7 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
   const notePlanResult = (nextLineups, roster = players, credit = appearanceCredit, segments = subSegments) => {
     setLineupsByQuarter(nextLineups);
     setFairWarn(null);
+    setFairInfo(null);
     setScrambleNote(null);
     setSwapSel(null);
     setPlanNote(null);
@@ -1780,35 +1787,52 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
   };
 
   const restorePlayer = (playerId, source = "roster") => {
-    const liveReturn = running || (clockRef.current || 0) > 0 || periodHasRealEvent(realPeriodEvents, quarter);
+    setReturnAsk({ playerId, source });
+  };
+
+  const applyReturnChoice = (choice) => {
+    const ask = returnAsk;
+    setReturnAsk(null);
+    if (!ask || !choice || choice.type === "cancel") return;
     const hasSheet = Object.keys(lineupsByQuarter).length > 0;
-    const result = returnToGame({
-      source,
-      autoRegen: !!autoRegen && hasSheet,
+    const result = commitReturn({
       players,
-      playerId,
-      quarter,
-      totalQuarters,
       lineups: lineupsByQuarter,
       segments: subSegments,
+      realEvents: realPeriodEvents,
+      credit: appearanceCredit,
+      playerId: ask.playerId,
+      source: ask.source,
+      totalQuarters,
+      subMode,
+      autoRegen: !!autoRegen,
+      hasSheet,
       slots: planSlotsNow,
       slotsByQuarter: formationBundle().slotsByQuarter,
-      subMode,
       minHalves,
+      minQ,
+      quarters: periodList,
       rate: getOverallRating,
-      livePeriod: liveReturn,
-      protectedIds: realEventPlayerIds(realPeriodEvents, quarter),
-    });
+      periodAbbrev: abbr,
+      clocks: clocksRef.current,
+      viewingQuarter: quarter,
+      viewingClock: clockRef.current || 0,
+      running,
+    }, choice);
+    if (!result.changed) return;
     setPlayers(result.players);
-    if (!result.regenerated) return;
-    // The rebuild drops manual-change flags on later periods. A live Return
-    // still keeps the flag already on this period.
-    setRealPeriodEvents(prev => realEventsAfterReturn(prev, {
-      quarter,
-      regenerated: true,
-    }));
+    setFairInfo(result.fairInfo);
+    setReturnToast(result.toast);
+    if (!result.regenerated && result.lineups === lineupsByQuarter) return;
+    if (result.regenerated) {
+      setRealPeriodEvents(result.realEvents);
+      setSubSegments(result.segments);
+      notePlanResult(result.lineups, result.players, appearanceCredit, result.segments);
+      syncStints(result.lineups[quarter]);
+      return;
+    }
+    setLineupsByQuarter(result.lineups);
     setSubSegments(result.segments);
-    notePlanResult(result.lineups, result.players, appearanceCredit, result.segments);
     syncStints(result.lineups[quarter]);
   };
 
@@ -2305,8 +2329,8 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
                   <div style={{fontSize:13, fontWeight:700, color:C.text, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap"}}>
                     #{p.number} {p.name}
                   </div>
-                  <div style={{fontSize:11, color:p.out ? "#e67e22" : "#e74c3c"}}>
-                    {p.out ? "Out" : `Injured ${abbr}${p.injuredInQuarter || quarter}`}
+                  <div style={{fontSize:11, color:p.doneForToday ? C.muted : p.out ? "#e67e22" : "#e74c3c"}}>
+                    {p.doneForToday ? "Done for today" : p.out ? "Out" : `Injured ${abbr}${p.injuredInQuarter || quarter}`}
                   </div>
                 </div>
                 <button type="button" onClick={() => restorePlayer(p.id, "top")} style={{
@@ -2520,6 +2544,15 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
         </div>
       )}
 
+      {fairInfo && (
+        <div style={{
+          background:"rgba(93,173,236,0.1)", border:"1px solid rgba(93,173,236,0.35)",
+          borderRadius:9, padding:"10px 14px", marginBottom:14, fontSize:12, color:"#d6e6f5", lineHeight:1.45,
+        }}>
+          {fairInfo}
+        </div>
+      )}
+
       <style>{`
         @media (max-width: 820px) {
           .ck-field { order: -1; width: 100%; }
@@ -2680,7 +2713,9 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
                         {p.name} <span style={{color:C.muted,fontWeight:600}}>#{p.number}</span>
                       </button>
                       <div style={{display:"flex",alignItems:"center",gap:6,flexShrink:0}}>
-                        {isInjured ? (
+                        {p.doneForToday ? (
+                          <span style={{fontSize:9,fontWeight:800,color:C.muted,background:"rgba(255,255,255,0.08)",padding:"2px 6px",borderRadius:3}}>Done for today</span>
+                        ) : isInjured ? (
                           <span style={{fontSize:9,fontWeight:800,color:"#e74c3c",background:"rgba(231,76,60,0.15)",padding:"2px 6px",borderRadius:3}}>INJ</span>
                         ) : isOut ? (
                           <span style={{fontSize:9,fontWeight:800,color:"#e67e22",background:"rgba(230,126,34,0.15)",padding:"2px 6px",borderRadius:3}}>OUT</span>
@@ -3146,11 +3181,49 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
             <div style={{marginTop:10,padding:"7px 12px",borderRadius:7,
               background:"rgba(120,0,0,0.15)",border:"1px solid rgba(231,76,60,0.2)",
               fontSize:11,color:"rgba(231,76,60,0.75)",textAlign:"center",lineHeight:1.5}}>
-              Injured players keep the minutes they already played. Return puts them on this quarter’s bench.
+              Injured players keep the minutes they already played. Return asks which quarter they are back for.
             </div>
           )}
         </div>
       </div>
+      {returnAsk && (
+        <ReturnDialog
+          open
+          player={players.find(p => p.id === returnAsk.playerId)}
+          selectedQuarter={quarter}
+          totalQuarters={totalQuarters}
+          subMode={subMode}
+          hasSheet={Object.keys(lineupsByQuarter).length > 0}
+          periodAbbrev={abbr}
+          finished={finishedQuarterList({
+            totalQuarters,
+            selectedQuarter: quarter,
+            clocks: clockByPeriod,
+            realEvents: realPeriodEvents,
+            viewingClock: clockSec,
+            running,
+          })}
+          quarterLive={q => quarterIsLive(q, {
+            clocks: clockByPeriod,
+            realEvents: realPeriodEvents,
+            viewingQuarter: quarter,
+            viewingClock: clockSec,
+            running,
+          })}
+          onCancel={() => applyReturnChoice({ type: "cancel" })}
+          onConfirm={applyReturnChoice}
+          onSwitchQuarter={setQuarter}
+        />
+      )}
+      {returnToast && (
+        <div role="status" style={{
+          position:"fixed", left:"50%", bottom:24, transform:"translateX(-50%)",
+          zIndex:70, maxWidth:360, width:"calc(100% - 32px)",
+          background:"#141a12", color:C.text, border:`1px solid ${C.gold}`,
+          borderRadius:12, padding:"12px 14px", fontSize:14, fontWeight:700,
+          textAlign:"center", boxShadow:"0 8px 24px rgba(0,0,0,0.45)",
+        }}>{returnToast}</div>
+      )}
       {drag.ghost && (
         <div style={{
           position:"fixed", left:drag.ghost.x, top:drag.ghost.y, transform:"translate(-50%,-50%)",

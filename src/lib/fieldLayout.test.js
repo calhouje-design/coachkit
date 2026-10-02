@@ -8,10 +8,13 @@ import {
   LABEL_FONT_SIZE,
   LABEL_LETTER_SPACING_EM,
   LABEL_WIDTH_GUARD,
+  MIN_CIRCLE_GAP,
   SIDE_MARGIN,
   fitPlayerLabel,
   labelWidth,
   layoutFieldPlayers,
+  roundLabelWidth,
+  sideMarginForLine,
 } from "./fieldLayout.js";
 
 const WIDTHS = [320, 360, 390, 430];
@@ -90,11 +93,13 @@ function assertSpread(layout, fieldWidth) {
   });
 }
 
-test("label width includes letter-spacing and a rounding guard", () => {
+test("label width includes letter-spacing and only rounds up", () => {
   const gap = labelWidth("AA") - labelWidth("A");
   assert.ok(gap >= 7, `letter-spacing gap ${gap}`);
-  assert.equal(LABEL_WIDTH_GUARD, 2);
-  assert.ok(labelWidth("Sean Jones") >= LABEL_WIDTH_GUARD);
+  assert.equal(LABEL_WIDTH_GUARD, 0);
+  assert.equal(labelWidth("Sean Jones"), roundLabelWidth(labelWidth("Sean Jones")));
+  assert.equal(roundLabelWidth(52), 52);
+  assert.equal(roundLabelWidth(52.01), 53);
   assert.equal(LABEL_FONT_SIZE, 9);
   assert.equal(LABEL_LETTER_SPACING_EM, 0.02);
 });
@@ -187,6 +192,72 @@ test("a phone-width field keeps each line together and the 4-2-1 names readable"
   assertInsideField(five, 266, 399);
   const back = five.filter(spot => spot.line === "def");
   assert.ok(ySpan(back) <= 16.5, `back span ${ySpan(back)}`);
+});
+
+test("a narrow field shrinks the side margin so 4-wide circles keep a gap", () => {
+  assert.ok(sideMarginForLine(4, 196) < SIDE_MARGIN);
+  assert.ok(sideMarginForLine(4, 320) === SIDE_MARGIN);
+  const phone = [196, 236, 266, 306];
+  phone.forEach(fieldWidth => {
+    const layout = layoutFieldPlayers(startersFor(["LD", "CD", "CD", "RD"]), {
+      fieldWidth,
+      fieldHeight: fieldWidth * 1.5,
+    });
+    assertNoOverlap(layout);
+    assertInsideField(layout, fieldWidth, fieldWidth * 1.5);
+    const xs = layout.map(spot => spot.x).sort((a, b) => a - b);
+    for (let i = 1; i < xs.length; i++) {
+      assert.ok(xs[i] - xs[i - 1] >= CIRCLE_DIAMETER + MIN_CIRCLE_GAP - 0.05, `${fieldWidth} gap`);
+    }
+  });
+  const five = layoutFieldPlayers(startersFor(["LB", "CB", "CB", "CB", "RB"]), {
+    fieldWidth: 236,
+    fieldHeight: 354,
+  });
+  assertNoOverlap(five);
+  const xs = five.map(spot => spot.x).sort((a, b) => a - b);
+  for (let i = 1; i < xs.length; i++) {
+    assert.ok(xs[i] - xs[i - 1] >= CIRCLE_DIAMETER - 0.05, "360px five-across");
+  }
+});
+
+test("an outer label slides inward so a name like Wes Johnson stays whole", () => {
+  const measure = (text) => (text === "Wes Johnson" ? 70 : labelWidth(text));
+  const names = ["Wes Johnson", "Bo", "Al", "Ed"];
+  const wide = layoutFieldPlayers(startersFor(["LD", "CD", "CD", "RD"], names), {
+    fieldWidth: 266,
+    fieldHeight: 399,
+    measureLabel: measure,
+  });
+  const short = layoutFieldPlayers(startersFor(["LD", "CD", "CD", "RD"], ["Bo", "Al", "Ed", "Jo"]), {
+    fieldWidth: 266,
+    fieldHeight: 399,
+    measureLabel: measure,
+  });
+  const left = wide.find(spot => spot.fullName === "Wes Johnson");
+  assert.equal(left.label, "Wes Johnson");
+  assert.equal(left.x, short[0].x);
+  const center = left.labelBox.x + left.labelBox.width / 2;
+  assert.ok(center > left.x + 0.5, `label center ${center} should sit inside of the circle ${left.x}`);
+  assert.ok(left.labelBox.x >= -0.05);
+  assertNoOverlap(wide);
+  assertInsideField(wide, 266, 399);
+});
+
+test("a 430px 4-5-1 midfield stays straight when the names fit", () => {
+  const formation = FORMATION_TEMPLATES["11v11"].find(shape => shape.name === "4-5-1");
+  const names = [
+    "Sam Keeper", "Blake Pete", "Jaxon Wells", "Wes Duda", "Trey Lazear",
+    "Remi Brown", "Sean Jones", "Henry Davis", "Jude Garcia", "John Smith", "Max Cole",
+  ];
+  const layout = layoutFieldPlayers(startersFor(formation.slots, names), {
+    fieldWidth: 306,
+    fieldHeight: 459,
+  });
+  const mids = layout.filter(spot => spot.line === "mid");
+  assert.equal(mids.length, 5);
+  assert.deepEqual(mids.map(spot => spot.dy), [0, 0, 0, 0, 0]);
+  assertNoOverlap(layout);
 });
 
 function tinyFourWide() {
