@@ -2,6 +2,7 @@ import {
   equityHalves,
   formatQuarterEquity,
   periodClockState,
+  periodHasRealEvent,
   realEventPlayerIds,
   realEventsAfterReturn,
   returnToGame,
@@ -12,11 +13,12 @@ function firstName(player) {
 }
 
 /**
- * A quarter is live when its own clock has started.
- * A real-event flag, including a swap at 0:00, does not start the clock.
+ * A quarter is live when its own clock has started, or it has its own real event.
+ * A flag on another quarter does not count, including a swap at 0:00.
  */
 export function quarterIsLive(quarter, {
   clocks = {},
+  realEvents = {},
   viewingQuarter = 1,
   viewingClock = 0,
   running = false,
@@ -25,7 +27,8 @@ export function quarterIsLive(quarter, {
   const saved = periodClockState(clocks, q).sec;
   const onScreen = q === Number(viewingQuarter);
   const clock = onScreen ? Math.max(saved, Number(viewingClock) || 0) : saved;
-  return clock > 0 || (onScreen && !!running);
+  const clockStarted = clock > 0 || (onScreen && !!running);
+  return clockStarted || periodHasRealEvent(realEvents, q);
 }
 
 function quarterElapsed(quarter, clockState) {

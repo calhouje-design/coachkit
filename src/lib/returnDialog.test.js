@@ -110,6 +110,18 @@ function starterIds(lineup) {
   return (lineup?.starters || []).map(slot => slot.player?.id || null);
 }
 
+function swapFieldBench(lineup, outId, inId) {
+  const starters = lineup.starters.map(slot => ({ ...slot }));
+  const idx = starters.findIndex(slot => slot.player?.id === outId);
+  const bench = [...(lineup.bench || [])];
+  const bIdx = bench.findIndex(player => player.id === inId);
+  const incoming = bench[bIdx];
+  const outgoing = starters[idx].player;
+  starters[idx] = { ...starters[idx], player: incoming };
+  bench[bIdx] = outgoing;
+  return { starters, bench };
+}
+
 function flagIdsDidNotGrow(before, after) {
   const quarters = new Set([...Object.keys(before || {}), ...Object.keys(after || {})]);
   quarters.forEach(quarter => {
@@ -136,7 +148,8 @@ test("finished quarters and quarters before the player went out are disabled", (
     periodSeconds: 600,
   });
   assert.deepEqual(ended, [1]);
-  assert.equal(quarterIsLive(2, { realEvents: { 2: ["p1"] }, viewingQuarter: 3 }), false);
+  assert.equal(quarterIsLive(2, { realEvents: { 2: ["p1"] }, viewingQuarter: 3 }), true);
+  assert.equal(quarterIsLive(2, { realEvents: { 3: ["p1"] }, viewingQuarter: 2 }), false);
   assert.equal(quarterIsLive(2, { clocks: { 2: { sec: 90 } }, viewingQuarter: 3 }), true);
   assert.equal(quarterIsLive(3, { clocks: { 1: { sec: 10 } }, viewingQuarter: 3, viewingClock: 0 }), false);
   const viewedPast = finishedQuarterList({
@@ -146,6 +159,13 @@ test("finished quarters and quarters before the player went out are disabled", (
     periodSeconds: 600,
   });
   assert.deepEqual(viewedPast, []);
+  const q3Started = finishedQuarterList({
+    totalQuarters: 4,
+    selectedQuarter: 3,
+    clocks: { 3: { sec: 1, stints: {} } },
+    periodSeconds: 600,
+  });
+  assert.deepEqual(q3Started, [1, 2]);
   const { choices, defaultQuarter } = quarterChoices({
     totalQuarters: 4,
     selectedQuarter: 3,
@@ -296,6 +316,59 @@ test("each return answer maps onto the existing return path", () => {
   });
 });
 
+test("a 0:00 flag on the return quarter keeps that swap and leaves the flags unchanged", () => {
+  [true, false].forEach(subMode => {
+    const sheet = sheetWithAbsence({ subMode, outFrom: 1 });
+    const quarterLineup = sheet.lineups[2];
+    const keeper = goalkeeperId(quarterLineup);
+    const outgoing = quarterLineup.starters.find(slot => (
+      slot.player?.id && slot.player.id !== keeper && !isGkPosition(slot.pos)
+    )).player;
+    const incoming = quarterLineup.bench.find(player => player.id !== sheet.id);
+    const lineups = {
+      ...sheet.lineups,
+      2: swapFieldBench(quarterLineup, outgoing.id, incoming.id),
+    };
+    const events = { 2: [outgoing.id, incoming.id] };
+    const state = baseState({ ...sheet, lineups }, {
+      realEvents: events,
+      viewingQuarter: 2,
+      viewingClock: 0,
+      clocks: {},
+    });
+    assert.equal(quarterIsLive(2, state), true);
+    assert.equal(quarterIsLive(1, state), false);
+    assert.equal(quarterIsLive(3, state), false);
+    const back = commitReturn(state, { type: "confirm", quarter: 2, available: true });
+    const shared = {
+      source: "roster",
+      autoRegen: true,
+      players: state.players,
+      playerId: sheet.id,
+      quarter: 2,
+      totalQuarters: 4,
+      lineups,
+      segments: state.segments,
+      slots: SLOTS,
+      subMode,
+      minHalves: 4,
+    };
+    const live = returnToGame({
+      ...shared,
+      livePeriod: true,
+      protectedIds: [outgoing.id, incoming.id],
+    });
+    assert.deepEqual(starterIds(back.lineups[2]), starterIds(live.lineups[2]));
+    assert.equal(goalkeeperId(back.lineups[2]), goalkeeperId(lineups[2]));
+    assert.deepEqual(realEventPlayerIds(back.realEvents, 2), [outgoing.id, incoming.id]);
+    assert.deepEqual(back.realEvents, events);
+    if (subMode) {
+      const cold = returnToGame({ ...shared, livePeriod: false, protectedIds: [] });
+      assert.notEqual(goalkeeperId(cold.lineups[2]), goalkeeperId(lineups[2]));
+    }
+  });
+});
+
 test("a pre-kickoff swap in a later quarter does not finish earlier ones", () => {
   [true, false].forEach(subMode => {
     const sheet = sheetWithAbsence({ subMode, outFrom: 1 });
@@ -319,7 +392,9 @@ test("a pre-kickoff swap in a later quarter does not finish earlier ones", () =>
       periodSeconds: 600,
     });
     assert.deepEqual(finished, []);
-    assert.equal(quarterIsLive(3, state), false);
+    assert.equal(quarterIsLive(3, state), true);
+    assert.equal(quarterIsLive(2, state), false);
+    assert.equal(quarterIsLive(1, { ...state, viewingQuarter: 3, viewingClock: 0 }), true);
     assert.equal(quarterIsLive(1, { clocks: state.clocks, viewingQuarter: 1, viewingClock: 120 }), true);
     const choices = quarterChoices({ totalQuarters: 4, selectedQuarter: 3, outSince: 1, finished });
     assert.equal(choices.defaultQuarter, 3);

@@ -3208,6 +3208,7 @@ function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer,
           })}
           quarterLive={q => quarterIsLive(q, {
             clocks: clockByPeriod,
+            realEvents: realPeriodEvents,
             viewingQuarter: quarter,
             viewingClock: clockSec,
             running,
