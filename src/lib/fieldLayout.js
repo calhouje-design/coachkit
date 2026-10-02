@@ -6,6 +6,8 @@ export const LABEL_HEIGHT = 13;
 export const LABEL_GAP = 2;
 export const BOX_GAP = 2;
 export const SIDE_MARGIN = 8;
+/** Smallest gap between circles once the side margin has shrunk to make room. */
+export const MIN_CIRCLE_GAP = 4;
 /** 5-wide alternate stagger, used only when the names do not fit. */
 export const LINE_STAGGER = 16;
 /** Each side of a 4-wide line when even spacing already clears the labels. */
@@ -36,10 +38,21 @@ const BANDS = [
 /** Matches the name label drawn on the circle. */
 export const LABEL_FONT_SIZE = 9;
 export const LABEL_LETTER_SPACING_EM = 0.02;
-/** Subpixel rounding and letter-spacing can exceed a tight box by a pixel or two. */
-export const LABEL_WIDTH_GUARD = 2;
+/**
+ * Extra pixels added on top of the measured width.
+ * A flat pad shortens names that actually fit, so this stays at 0.
+ * Callers round with ceil instead, which covers a fraction of a pixel.
+ */
+export const LABEL_WIDTH_GUARD = 0;
 
-/** Outer width of a 9px bold name label, including padding, letter-spacing, and a rounding guard. */
+/** Ceil a measured label width. A value that is already a whole pixel stays put. */
+export function roundLabelWidth(px) {
+  const n = Number(px);
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  return Math.ceil(n - 1e-9);
+}
+
+/** Outer width of a 9px bold name label, including padding and letter-spacing. */
 export function labelWidth(text) {
   const value = String(text || "");
   let width = 8;
@@ -49,7 +62,26 @@ export function labelWidth(text) {
     count += 1;
   }
   if (count > 1) width += LABEL_LETTER_SPACING_EM * LABEL_FONT_SIZE * (count - 1);
-  return Math.ceil(width) + LABEL_WIDTH_GUARD;
+  return roundLabelWidth(width);
+}
+
+/**
+ * Preferred side margin, shrunk on a narrow field so this many circles
+ * still have a small gap. Never goes negative. A line that cannot fit
+ * even at the edge keeps a margin of 0.
+ */
+export function sideMarginForLine(count, fieldWidth, {
+  circle = CIRCLE_DIAMETER,
+  minGap = MIN_CIRCLE_GAP,
+  preferred = SIDE_MARGIN,
+} = {}) {
+  const n = Math.max(0, count);
+  const width = Math.max(0, Number(fieldWidth) || 0);
+  if (n <= 1) return preferred;
+  const needed = n * circle + (n - 1) * minGap;
+  const room = (width - needed) / 2;
+  if (room >= preferred) return preferred;
+  return Math.max(0, room);
 }
 
 /** Hidden probe that uses the same font rules as the rendered name. */
@@ -146,7 +178,7 @@ function markerRects(item, circle, labelGap, labelHeight) {
     return { circle: circleBox, labelBox: null };
   }
   const width = item.labelBoxWidth;
-  let left = item.x - width / 2;
+  let left = Number.isFinite(item.labelLeft) ? item.labelLeft : item.x - width / 2;
   if (left < 0) left = 0;
   if (left + width > item.fieldWidth) left = Math.max(0, item.fieldWidth - width);
   return {
@@ -158,6 +190,59 @@ function markerRects(item, circle, labelGap, labelHeight) {
       height: labelHeight,
     },
   };
+}
+
+/**
+ * An outermost name that does not fit while centered may slide toward
+ * the middle of the field. Circles stay put. The label stays inside the
+ * field and clear of a neighbor label or circle.
+ */
+function widenOuterLabels(items, { width, circle, labelHeight, labelGap, boxGap, measureLabel }) {
+  items.forEach((item, index) => {
+    if (!item.name || item.label === item.name) return;
+    if (item.lineCount < 2) return;
+    if (item.lineIndex !== 0 && item.lineIndex !== item.lineCount - 1) return;
+    const fullWidth = measureLabel(item.name);
+    if (!(fullWidth > 0)) return;
+    const span = outerLabelSpan(item, items, { width, circle, labelHeight, labelGap, boxGap });
+    if (!span || fullWidth > span.hi - span.lo + 0.01) return;
+    let labelLeft = item.x - fullWidth / 2;
+    if (labelLeft < span.lo) labelLeft = span.lo;
+    if (labelLeft + fullWidth > span.hi) labelLeft = span.hi - fullWidth;
+    if (labelLeft < span.lo - 0.01) return;
+    const trial = items.map((other, i) => (i === index ? {
+      ...other,
+      label: other.name,
+      labelBoxWidth: fullWidth,
+      labelLeft,
+      fieldWidth: width,
+    } : other));
+    if (collidingLabelIndexes(trial, circle, labelGap, labelHeight, boxGap).has(index)) return;
+    item.label = item.name;
+    item.labelBoxWidth = fullWidth;
+    item.labelLeft = labelLeft;
+  });
+}
+
+function outerLabelSpan(item, items, { width, circle, labelHeight, labelGap, boxGap }) {
+  const leftOuter = item.lineIndex === 0;
+  let lo = 0;
+  let hi = width;
+  const top = item.y + circle / 2 + labelGap;
+  items.forEach(other => {
+    if (other === item) return;
+    const drawn = markerRects({ ...other, fieldWidth: width }, circle, labelGap, labelHeight);
+    if (drawn.labelBox && verticalOverlap(top, labelHeight, drawn.labelBox.y, drawn.labelBox.height, boxGap)) {
+      if (leftOuter) hi = Math.min(hi, drawn.labelBox.x - boxGap);
+      else lo = Math.max(lo, drawn.labelBox.x + drawn.labelBox.width + boxGap);
+    }
+    if (verticalOverlap(top, labelHeight, drawn.circle.y, drawn.circle.height, 0)) {
+      if (leftOuter) hi = Math.min(hi, drawn.circle.x - boxGap);
+      else lo = Math.max(lo, drawn.circle.x + drawn.circle.width + boxGap);
+    }
+  });
+  if (hi - lo < 1) return null;
+  return { lo, hi };
 }
 
 /**
@@ -211,7 +296,8 @@ export function layoutFieldPlayers(starters, {
     group.sort((a, b) => a.sortX - b.sortX || a.index - b.index);
     const ys = group.map(item => item.baseY);
     const lineY = ys.reduce((sum, y) => sum + y, 0) / ys.length;
-    const xs = lineCenters(group.length, width, { circle, sideMargin });
+    const margin = sideMarginForLine(group.length, width, { circle, preferred: sideMargin });
+    const xs = lineCenters(group.length, width, { circle, sideMargin: margin });
     let offsets;
     if (group.length === 4) {
       offsets = fourWideDy(group, xs, lineY, {
@@ -243,10 +329,12 @@ export function layoutFieldPlayers(starters, {
   for (let pass = 0; pass < 4; pass++) {
     items.forEach((item, i) => {
       item.fieldWidth = width;
+      item.labelLeft = null;
       item.label = fitPlayerLabel(item.name, caps[i], measureLabel);
       const measured = item.label ? measureLabel(item.label) : 0;
       item.labelBoxWidth = Math.min(measured, Math.max(0, caps[i]));
     });
+    widenOuterLabels(items, { width, circle, labelHeight, labelGap, boxGap, measureLabel });
     const crowded = collidingLabelIndexes(items, circle, labelGap, labelHeight, boxGap);
     if (!crowded.size) break;
     caps = caps.map((cap, i) => (crowded.has(i) ? Math.max(0, cap - 4) : cap));
