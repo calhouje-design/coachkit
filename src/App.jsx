@@ -75,7 +75,8 @@ import { ReturnDialog } from "./components/ReturnDialog.jsx";
 import { AvailabilityMark, RosterAvailabilityButtons } from "./components/AvailabilityMark.js";
 import { usePitchSubLines, useReportFieldLayout } from "./lib/pitchSubLines.js";
 import { SAY_PLAY_TIME, sayDivision, sayDivisionKey } from "./lib/sayEastGuide.js";
-import { downloadCanvas, paintFieldSheet, paintPlayTimeSheet } from "./lib/sharePaint.js";
+import { paintFieldSheet, paintPlayTimeSheet } from "./lib/sharePaint.js";
+import { canvasToPngBlob, saveImage } from "./lib/saveImage.js";
 import { useTeamCloud } from "./lib/teamCloud.js";
 import { bindField, normalizeGameDay, snapshotFromStorage } from "./lib/teamSnapshot.js";
 import {
@@ -3523,31 +3524,59 @@ function useMaxWidth(max) {
   return matches;
 }
 
-function SheetCanvases({ field, playTime, league, opponent, homeScore, awayScore, periodAbbrev = "Q", periodCount = 4, focus = null, view = "both", showPrint = false }) {
+function SheetCanvases({ field, playTime, league, opponent, homeScore, awayScore, periodAbbrev = "Q", periodCount = 4, focus = null, view = "both", showPrint = false, source = "share" }) {
   const fieldRef = useRef(null);
   const fileRef = useRef(null);
   const playRef = useRef(null);
   const printRef = useRef(null);
+  const [fieldFile, setFieldFile] = useState(null);
+  const [playFile, setPlayFile] = useState(null);
+  const fieldName = `CoachKit_Field_${periodAbbrev}1-${periodAbbrev}${periodCount}.png`;
+  const playName = "CoachKit_PlayTime.png";
   const dual = (field?.quarters || []).some(panel => panel.after);
   const previewTitle = view === "after" ? "Sheet 1 · After subs" : view === "start" ? "Sheet 1 · Start" : (dual ? "Sheet 1 · Start and after subs" : "Sheet 1 · Field, bench, and sub lines");
   useEffect(() => {
     if (fieldRef.current) paintFieldSheet(fieldRef.current, { field, league, opponent, homeScore, awayScore, focus: view === "both" ? focus : null, view });
-    if (fileRef.current) {
-      paintFieldSheet(fileRef.current, { field, league, opponent, homeScore, awayScore });
-      fileRef.current.style.cssText = "position:absolute;width:0;height:0;opacity:0;pointer-events:none;";
-    }
     if (printRef.current) paintFieldSheet(printRef.current, { field, league, opponent, homeScore, awayScore });
-    if (playRef.current) paintPlayTimeSheet(playRef.current, { playTime, league });
   }, [field, playTime, league, opponent, homeScore, awayScore, focus, view, showPrint]);
+  useEffect(() => {
+    let cancelled = false;
+    setFieldFile(null);
+    setPlayFile(null);
+    const fieldCanvas = fileRef.current;
+    const playCanvas = playRef.current;
+    if (fieldCanvas) {
+      paintFieldSheet(fieldCanvas, { field, league, opponent, homeScore, awayScore });
+      fieldCanvas.style.cssText = "position:absolute;width:0;height:0;opacity:0;pointer-events:none;";
+    }
+    if (playCanvas) paintPlayTimeSheet(playCanvas, { playTime, league });
+    Promise.allSettled([
+      fieldCanvas ? canvasToPngBlob(fieldCanvas) : Promise.resolve(null),
+      playCanvas ? canvasToPngBlob(playCanvas) : Promise.resolve(null),
+    ]).then(([fieldResult, playResult]) => {
+      if (cancelled) return;
+      const fieldBlob = fieldResult.status === "fulfilled" ? fieldResult.value : null;
+      const playBlob = playResult.status === "fulfilled" ? playResult.value : null;
+      setFieldFile(fieldBlob ? new File([fieldBlob], fieldName, { type: "image/png" }) : null);
+      setPlayFile(playBlob ? new File([playBlob], playName, { type: "image/png" }) : null);
+    });
+    return () => { cancelled = true; };
+  }, [field, playTime, league, opponent, homeScore, awayScore, fieldName, playName]);
+  const fieldTestId = source === "game-log" ? "save-game-log-field" : "save-field-image";
+  const playTestId = source === "game-log" ? "save-game-log-play" : "save-play-time-image";
+  const saveReady = (file, filename, title) => {
+    if (!file) return;
+    saveImage({ blob: file, filename, title });
+  };
   return (
-    <div>
+    <div data-image-source={source}>
       <div style={{fontSize:12,fontWeight:800,color:"#e8a020",marginBottom:6}}>{previewTitle}</div>
       <div data-testid="share-sheet" data-dual={dual ? "true" : "false"} data-preview={view} style={{borderRadius:8,overflow:"hidden",marginBottom:8,border:"1px solid rgba(255,255,255,0.08)",background:"#0c1409",touchAction:dual ? "pan-y" : "auto"}}>
         <canvas ref={fieldRef} style={{width:"100%",height:"auto",display:"block",touchAction:dual ? "pan-y" : "auto"}} />
       </div>
       <canvas ref={fileRef} data-testid="share-file" aria-hidden="true" />
-      <button type="button" onClick={() => downloadCanvas(fileRef.current, `CoachKit_Field_${periodAbbrev}1-${periodAbbrev}${periodCount}.png`)} style={{...sheetSaveBtn, width:"100%", marginBottom:16}}>
-        Save field image
+      <button type="button" data-testid={fieldTestId} disabled={!fieldFile} onClick={() => saveReady(fieldFile, fieldName, "CoachKit field")} style={{...sheetSaveBtn, width:"100%", marginBottom:16, opacity: fieldFile ? 1 : 0.6}}>
+        {fieldFile ? "Save field image" : "Preparing image…"}
       </button>
       {showPrint && (
         <div data-testid="print-preview" style={{background:"#fff", color:"#1a1a1a", borderRadius:8, padding:12, marginBottom:16}}>
@@ -3560,8 +3589,8 @@ function SheetCanvases({ field, playTime, league, opponent, homeScore, awayScore
       <div style={{borderRadius:8,overflow:"hidden",marginBottom:8,border:"1px solid rgba(255,255,255,0.08)",background:"#0c1409"}}>
         <canvas ref={playRef} style={{width:"100%",height:"auto",display:"block"}} />
       </div>
-      <button type="button" onClick={() => downloadCanvas(playRef.current, "CoachKit_PlayTime.png")} style={{...sheetSaveBtn, width:"100%"}}>
-        Save play time image
+      <button type="button" data-testid={playTestId} disabled={!playFile} onClick={() => saveReady(playFile, playName, "CoachKit play time")} style={{...sheetSaveBtn, width:"100%", opacity: playFile ? 1 : 0.6}}>
+        {playFile ? "Save play time image" : "Preparing image…"}
       </button>
     </div>
   );
@@ -4865,7 +4894,7 @@ function CoachKitLoaded() {
 // 
 // TAB: SEASON STATS
 // 
-function TabSeason({ players, playerStats, setPlayerStats, games, setGames, practiceDates, setPracticeDates, practiceAttendance, setPracticeAttendance }) {
+export function TabSeason({ players, playerStats, setPlayerStats, games, setGames, practiceDates, setPracticeDates, practiceAttendance, setPracticeAttendance }) {
   const [view, setView] = useState("stats"); // stats | games | practice
   const [editGame, setEditGame] = useState(null);
   const [newGame, setNewGame] = useState({date:"",opponent:"",homeScore:"",oppScore:"",notes:""});
@@ -5075,10 +5104,11 @@ function TabSeason({ players, playerStats, setPlayerStats, games, setGames, prac
                 }}></button>
                 </div>
                 {sheets?.field && sheets?.playTime && (
-                  <details>
+                  <details data-testid="game-log-sheets">
                     <summary style={{cursor:"pointer",fontSize:12,fontWeight:700,color:C.text}}>Field sheet and play time</summary>
                     <div style={{marginTop:10}}>
                       <SheetCanvases
+                        source="game-log"
                         field={sheets.field}
                         playTime={sheets.playTime}
                         league={g.strategy.league || ""}
