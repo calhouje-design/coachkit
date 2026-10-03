@@ -6,6 +6,7 @@ import {
   fieldMarker,
   isBackHalfReturn,
   isGkPosition,
+  placeTwoWideMarkers,
   quarterHalfPresentation,
   shareFieldSheet,
 } from "./gameDay.js";
@@ -411,7 +412,7 @@ function placedStarters(lineup, quarter, periodAbbrev) {
     name: player.name || "",
     number: player.number || "",
   }));
-  return { quarter, label: `${periodAbbrev}${quarter}`, starters, bench, pairs: [] };
+  return { quarter, label: `${periodAbbrev}${quarter}`, starters: placeTwoWideMarkers(starters), bench, pairs: [] };
 }
 
 /** Share/print: each sub-mode period with pairs (or a saved start) carries an After subs field. */
