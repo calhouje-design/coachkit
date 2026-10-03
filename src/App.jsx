@@ -1645,7 +1645,7 @@ export function TabGame({ format, league, players, setPlayers, addPlayer, remove
     recentPlanKeys.current = [key, ...recentPlanKeys.current.filter(item => item !== key)].slice(0, 5);
   };
 
-  const applyBackHalfMarks = (roster, nextLineups, nextSegments, fromQuarter) => {
+  const applyBackHalfMarks = (roster, nextLineups, nextSegments, fromQuarter, options = {}) => {
     const checked = revalidateBackHalfMarks({
       players: roster,
       lineups: nextLineups,
@@ -1654,6 +1654,7 @@ export function TabGame({ format, league, players, setPlayers, addPlayer, remove
       totalQuarters,
       rate: getOverallRating,
       abbrev: abbr,
+      pastHalfQuarter: options.pastHalfQuarter,
     });
     const incoming = checked.notices?.length ? checked.notices.join(" ") : "";
     setBackHalfNotice(current => nextBackHalfNotice(current, incoming));
@@ -2032,7 +2033,15 @@ export function TabGame({ format, league, players, setPlayers, addPlayer, remove
         roster = roster.map(p => (p.id === playerId ? { ...p, replacedBy: incoming } : p));
       }
     }
-    const checked = applyBackHalfMarks(roster, next, segments, quarter);
+    const halfSec = (Number(periodMin) > 0 ? Number(periodMin) : 10) * 30;
+    const pastHalf = (clockRef.current || 0) >= halfSec || phaseRef.current?.phase === "after";
+    const checked = applyBackHalfMarks(
+      roster,
+      next,
+      segments,
+      quarter,
+      pastHalf ? { pastHalfQuarter: quarter } : {},
+    );
     setPlayers(checked.players);
     setSubSegments(checked.segments);
     setLineupsByQuarter(checked.lineups);

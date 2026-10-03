@@ -2337,6 +2337,127 @@ test("a live Out keeps the first half the replacement already played", () => {
   assert.equal(segmentAt(checked.segments, incoming, 1) == null, true);
 });
 
+function namedSeven() {
+  const names = ["John", "Wes", "Jaxon", "Remi", "Sean", "Henry", "Jude"];
+  return names.map((name, index) => ({
+    id: `p${index + 1}`,
+    name,
+    number: String(index + 1),
+    positions: ["GK", "LD", "RD", "LM", "RM", "CF"],
+    injured: false,
+    out: false,
+  }));
+}
+
+function halvesWithOffSheet(players, lineup, segments, quarter) {
+  const owners = halfOwners(lineup, segments, quarter);
+  const onSheet = new Set(sheetPlayers(lineup));
+  const extra = (players || []).filter(player => (
+    player?.id
+    && !onSheet.has(player.id)
+    && (player.out || player.injured)
+    && segmentAt(segments, player.id, quarter) === "left"
+  )).length;
+  return owners.h1 + owners.h2 + extra;
+}
+
+function jaxonOutSheet(pastHalf) {
+  const players = namedSeven();
+  const by = Object.fromEntries(players.map(player => [player.name, player]));
+  const lineup = {
+    starters: [
+      { pos: "GK", player: by.Wes },
+      { pos: "LD", player: by.Jaxon },
+      { pos: "RD", player: by.Jude },
+      { pos: "LM", player: by.Sean },
+      { pos: "RM", player: by.John },
+      { pos: "CF", player: by.Henry },
+    ],
+    bench: [by.Remi],
+  };
+  const lineups = { 1: lineup, 2: lineup, 3: lineup, 4: lineup };
+  let segments = noteSubSegment({}, by.Sean.id, 1, "entered");
+  segments = noteSubSegment(segments, by.Remi.id, 1, "left");
+  segments = clearPlayerSegmentsFrom(segments, by.Jaxon.id, 2, lineups);
+  segments = noteSubSegment(segments, by.Jaxon.id, 1, "left");
+  const next = pullFromPlan(lineups, by.Jaxon.id, 1, 4);
+  const before = new Set(lineup.starters.map(slot => slot.player?.id));
+  const incoming = (next[1]?.starters || []).map(slot => slot.player?.id).find(id => id && !before.has(id));
+  if (segmentAt(segments, incoming, 1) === "left") segments = clearSegmentQuarter(segments, incoming, 1);
+  else segments = noteSubSegment(segments, incoming, 1, "entered");
+  const updated = players.map(player => (
+    player.id === by.Jaxon.id ? { ...player, out: true, replacedBy: incoming } : player
+  ));
+  const checked = revalidateBackHalfMarks({
+    players: updated,
+    lineups: next,
+    segments,
+    fromQuarter: 1,
+    totalQuarters: 4,
+    pastHalfQuarter: pastHalf ? 1 : null,
+  });
+  return { by, incoming, checked };
+}
+
+test("marking a field player Out after the half does not give the 2nd-half sub a first half", () => {
+  const { by, incoming, checked } = jaxonOutSheet(true);
+  assert.equal(incoming, by.Remi.id);
+  assert.equal(segmentAt(checked.segments, by.Sean.id, 1), "entered");
+  assert.equal(segmentAt(checked.segments, by.Remi.id, 1) == null, true);
+  assert.equal(segmentAt(checked.segments, by.Jaxon.id, 1), "left");
+  assert.equal(halvesWithOffSheet(checked.players, checked.lineups[1], checked.segments, 1), 12);
+});
+
+test("marking a field player Out before the half can credit the player who comes on", () => {
+  const { by, incoming, checked } = jaxonOutSheet(false);
+  assert.equal(incoming, by.Remi.id);
+  assert.equal(segmentAt(checked.segments, by.Remi.id, 1) == null, true);
+  assert.equal(segmentAt(checked.segments, by.Jaxon.id, 1), "left");
+  assert.equal(segmentAt(checked.segments, by.Sean.id, 1) == null, true);
+  assert.equal(halvesWithOffSheet(checked.players, checked.lineups[1], checked.segments, 1), 13);
+});
+
+test("a short injury return restores the kickoff first half, not a bench player who sat", () => {
+  const players = roster(8);
+  const opened = openSheet(players, true, 2);
+  const plan = opened.lineups[1];
+  const mark = (id) => segmentAt(opened.segments, id, 1);
+  assert.deepEqual(plan.starters.map(slot => `${slot.pos}:${slot.player.id}${mark(slot.player.id) === "entered" ? "(e)" : ""}`), [
+    "GK:p6", "LD:p1(e)", "RD:p5", "LM:p8(e)", "RM:p7", "CF:p4",
+  ]);
+  assert.deepEqual(plan.bench.map(player => `${player.id}${mark(player.id) === "left" ? "(l)" : ""}`), ["p2(l)", "p3(l)"]);
+  const by = Object.fromEntries(players.map(player => [player.id, player]));
+  const lineup = {
+    starters: [
+      { pos: "GK", player: by.p6 },
+      { pos: "LD", player: by.p2 },
+      { pos: "RD", player: by.p3 },
+      { pos: "LM", player: by.p8 },
+      { pos: "RM", player: by.p5 },
+      { pos: "CF", player: by.p7 },
+    ],
+    bench: [by.p4, by.p1],
+  };
+  const segments = noteSubSegment(noteSubSegment(noteSubSegment({}, "p8", 1, "entered"), "p7", 1, "entered"), "p4", 1, "left");
+  const marked = players.map(player => (
+    player.id === "p8"
+      ? { ...player, returnQuarter: 1, injuredInQuarter: 1, returnAt: { quarter: 1, half: "back" } }
+      : player
+  ));
+  assert.equal(halfOwners(lineup, segments, 1).h1 + halfOwners(lineup, segments, 1).h2, 11);
+  const checked = revalidateBackHalfMarks({
+    players: marked, lineups: { 1: lineup }, segments, fromQuarter: 1, totalQuarters: 1,
+  });
+  assert.equal(isBackHalfReturn(checked.players.find(player => player.id === "p8"), 1), true);
+  assert.equal(checked.notices.length, 0);
+  assert.equal(segmentAt(checked.segments, "p1", 1) == null, true);
+  assert.equal(segmentAt(checked.segments, "p7", 1) == null, true);
+  assert.equal(segmentAt(checked.segments, "p8", 1), "entered");
+  assert.equal(segmentAt(checked.segments, "p4", 1), "left");
+  assert.deepEqual(starterIds(checked.lineups[1]), starterIds(lineup));
+  assert.equal(halfOwners(checked.lineups[1], checked.segments, 1).h1 + halfOwners(checked.lineups[1], checked.segments, 1).h2, 12);
+});
+
 test("a free donor keeps the back-half mark in the three reported games", () => {
   const names = [
     "John Smith", "Wes Johnson", "Jaxon Williams", "Remi Brown", "Sean Jones",
