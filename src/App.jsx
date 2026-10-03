@@ -45,6 +45,7 @@ import {
   revalidateBackHalfMarks,
   nextBackHalfNotice,
   clearPlayerSegmentsFrom,
+  clearSegmentQuarter,
   realEventPlayerIds,
   scheduleHalfRotation,
   scheduleWholeGame,
@@ -2003,7 +2004,9 @@ export function TabGame({ format, league, players, setPlayers, addPlayer, remove
       segments = noteSubSegment(segments, playerId, quarter, "left");
     } else if (onFieldNow && live && segmentAt(subSegments, playerId, quarter) === "entered") {
       segments = clearPlayerSegmentsFrom(segments, playerId, Number(quarter) + 1, lineupsByQuarter);
-      segments = clearPlayerSegmentsFrom(segments, playerId, quarter);
+      // He never played the first half, so he is not marked "left". Clearing his
+      // mark must not take a different player's first half with it.
+      segments = clearSegmentQuarter(segments, playerId, quarter);
     } else {
       if (wasOn) setAppearanceCredit(credit);
       segments = clearPlayerSegmentsFrom(segments, playerId, quarter, lineupsByQuarter);
@@ -2017,7 +2020,13 @@ export function TabGame({ format, league, players, setPlayers, addPlayer, remove
       if (live) {
         credit = setAppearanceCreditFor(credit, incoming, quarter, false);
         setAppearanceCredit(credit);
-        segments = noteSubSegment(segments, incoming, quarter, "entered");
+        // He already played the first half. Coming on makes it the whole quarter,
+        // so a "left" mark would drop that half and an "entered" mark would too.
+        if (segmentAt(segments, incoming, quarter) === "left") {
+          segments = clearSegmentQuarter(segments, incoming, quarter);
+        } else {
+          segments = noteSubSegment(segments, incoming, quarter, "entered");
+        }
       }
       if (onFieldNow && live) {
         roster = roster.map(p => (p.id === playerId ? { ...p, replacedBy: incoming } : p));

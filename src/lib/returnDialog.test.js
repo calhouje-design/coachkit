@@ -22,6 +22,8 @@ import {
   readReturn,
   realEventPlayerIds,
   pullFromPlan,
+  benchReplacementId,
+  clearSegmentQuarter,
   returnToGame,
   revalidateBackHalfMarks,
   backHalfStripNotice,
@@ -29,6 +31,7 @@ import {
   nextBackHalfNotice,
   scheduleHalfRotation,
   scheduleWholeGame,
+  segmentsSavedForFullReplan,
   segmentAt,
   shareFieldSheet,
   stripReturnAtFrom,
@@ -1948,11 +1951,19 @@ function assertBackHalfInvariants(label, raw, checked, fromQuarter) {
     assert.equal(new Set(owners.h1Ids).size, owners.h1Ids.length, `${label} Q${q} H1 owners are not distinct`);
     assert.equal(new Set(owners.h2Ids).size, owners.h2Ids.length, `${label} Q${q} H2 owners are not distinct`);
     const credit = owners.h1 + owners.h2;
-    const injuryExtras = checked.players.filter(player => (
-      isBackHalfReturn(player, q)
-      && Number(player.injuredInQuarter) === q
-      && segmentAt(checked.segments, player.id, q) !== "entered"
-    )).length;
+    const injuryReturn = checked.players.some(player => (
+      isBackHalfReturn(player, q) && Number(player.injuredInQuarter) === q
+    ));
+    const sheetIds = new Set(sheetPlayers(lineup).map(id => String(id)));
+    const sheetLeft = injuryReturn
+      ? Object.keys(checked.segments || {}).filter(id => (
+        sheetIds.has(String(id)) && segmentAt(checked.segments, id, q) === "left"
+      )).length
+      : 0;
+    const enteredMarks = injuryReturn
+      ? Object.keys(checked.segments || {}).filter(id => segmentAt(checked.segments, id, q) === "entered").length
+      : 0;
+    const injuryExtras = injuryReturn ? Math.max(0, sheetLeft - enteredMarks) : 0;
     const creditOk = credit === on * 2 || (injuryExtras > 0 && credit === on * 2 + injuryExtras);
     assert.equal(creditOk, true, `${label} Q${q} credit ${credit} field ${on} extras ${injuryExtras}`);
     checked.players.filter(player => isBackHalfReturn(player, q)).forEach(returner => {
@@ -2158,6 +2169,174 @@ test("revalidating an unchanged same-quarter injury return strips nothing", () =
   });
 });
 
+test("a live full replan keeps the injury replacement's first half", () => {
+  const players = namedRoster([
+    "John Smith", "Wes Johnson", "Jaxon Williams", "Remi Brown", "Sean Jones",
+    "Henry Davis", "Jude Garcia", "Trey Miller", "Maddox Anderson",
+  ]);
+  const jaxon = players.find(player => player.name.startsWith("Jaxon"));
+  const wes = players.find(player => player.name.startsWith("Wes"));
+  const opened = openSheet(players, false, 1);
+  const state = injureStarter(players, opened.lineups, opened.segments, jaxon.id, false, 2);
+  const back = returnToGame({
+    players: state.players, playerId: jaxon.id, quarter: 2, half: "back",
+    lineups: state.lineups, segments: state.segments, slots: SLOTS, subMode: false,
+    minHalves: 4, totalQuarters: 4, livePeriod: true,
+  });
+  const locked = { 1: back.lineups[1] };
+  const planned = scheduleWholeGame({
+    players: back.players, format: "6v6", slotOverride: SLOTS, lockedLineups: locked,
+    fromQuarter: 2, totalPeriods: 4, minFraction: 0.5, seed: 4,
+  });
+  const segments = segmentsSavedForFullReplan(back.segments, planned, { fromQuarter: 2, livePeriod: true });
+  const before = quarterCredit(players, planned, segments, 2);
+  assert.equal(before, 13);
+  assert.equal(segmentAt(segments, wes.id, 2), "left");
+  const checked = revalidateBackHalfMarks({
+    players: back.players, lineups: planned, segments, fromQuarter: 2, totalQuarters: 4,
+  });
+  assert.equal(isBackHalfReturn(checked.players.find(player => player.id === jaxon.id), 2), true);
+  assert.equal(checked.notices.length, 0);
+  assert.equal(segmentAt(checked.segments, wes.id, 2), "left");
+  assert.equal(quarterCredit(players, checked.lineups, checked.segments, 2), 13);
+});
+
+test("rechecking a Q1 injury return keeps both first halves", () => {
+  const players = roster(8);
+  const opened = openSheet(players, true, 3);
+  const state = injureStarter(players, opened.lineups, opened.segments, "p3", true, 1);
+  const back = returnToGame({
+    players: state.players, playerId: "p3", quarter: 1, half: "back",
+    lineups: state.lineups, segments: state.segments, slots: SLOTS, subMode: true,
+    minHalves: 4, totalQuarters: 4, livePeriod: true,
+  });
+  const before = quarterCredit(back.players, back.lineups, back.segments, 1);
+  assert.equal(before, 14);
+  const once = revalidateBackHalfMarks({
+    players: back.players, lineups: back.lineups, segments: back.segments, fromQuarter: 1, totalQuarters: 4,
+  });
+  assert.equal(isBackHalfReturn(once.players.find(player => player.id === "p3"), 1), true);
+  assert.equal(once.notices.length, 0);
+  assert.equal(quarterCredit(once.players, once.lineups, once.segments, 1), 14);
+  assert.equal(segmentAt(once.segments, "p2", 1), "left");
+  assert.equal(segmentAt(once.segments, "p7", 1), "left");
+  const twice = revalidateBackHalfMarks({
+    players: once.players, lineups: once.lineups, segments: once.segments, fromQuarter: 1, totalQuarters: 4,
+  });
+  assert.deepEqual(twice.players, once.players);
+  assert.deepEqual(twice.lineups, once.lineups);
+  assert.deepEqual(twice.segments, once.segments);
+  [true, false].forEach(subMode => {
+    [1, 2, 3, 4].forEach(quarter => {
+      let strips = 0;
+      [8, 9].forEach(count => {
+        for (let seed = 1; seed <= 15; seed += 1) {
+          const squad = roster(count);
+          const sheet = openSheet(squad, subMode, seed);
+          const starters = (sheet.lineups[quarter]?.starters || []).filter(slot => slot.player && !isGkPosition(slot.pos));
+          starters.forEach(slot => {
+            const injured = injureStarter(squad, sheet.lineups, sheet.segments, slot.player.id, subMode, quarter);
+            const returned = returnToGame({
+              players: injured.players, playerId: slot.player.id, quarter, half: "back",
+              lineups: injured.lineups, segments: injured.segments, slots: SLOTS, subMode,
+              minHalves: 4, totalQuarters: 4, livePeriod: true,
+            });
+            if (returned.refused) return;
+            const creditBefore = quarterCredit(returned.players, returned.lineups, returned.segments, quarter);
+            const checked = revalidateBackHalfMarks({
+              players: returned.players, lineups: returned.lineups, segments: returned.segments,
+              fromQuarter: quarter, totalQuarters: 4,
+            });
+            if (!isBackHalfReturn(checked.players.find(player => player.id === slot.player.id), quarter)) strips += 1;
+            assert.ok(
+              quarterCredit(checked.players, checked.lineups, checked.segments, quarter) >= creditBefore,
+              `${subMode} Q${quarter} seed ${seed} lost credit`,
+            );
+          });
+        }
+      });
+      assert.equal(strips, 0, `${subMode ? "sub" : "full"} Q${quarter}`);
+    });
+  });
+});
+
+test("an unpartnered left keeps the back-half mark", () => {
+  const players = roster(7);
+  const slots = ["GK", "LD", "RD", "CM", "CF"];
+  const wes = players[1];
+  const jude = players[6];
+  const lineup = {
+    starters: [
+      { pos: "GK", player: players[5] },
+      { pos: "LD", player: players[2] },
+      { pos: "RD", player: players[3] },
+      { pos: "CM", player: players[4] },
+      { pos: "CF", player: wes },
+    ],
+    bench: [jude],
+  };
+  const marked = players.map(player => (
+    player.id === wes.id
+      ? { ...player, returnQuarter: 2, injuredInQuarter: 1, returnAt: { quarter: 2, half: "back" } }
+      : player
+  ));
+  const segments = { [jude.id]: { 2: "left" } };
+  const checked = revalidateBackHalfMarks({
+    players: marked, lineups: { 2: lineup }, segments, fromQuarter: 2, totalQuarters: 2,
+  });
+  assert.equal(isBackHalfReturn(checked.players.find(player => player.id === wes.id), 2), true);
+  assert.equal(checked.notices.length, 0);
+  assert.equal(segmentAt(checked.segments, jude.id, 2), "left");
+  assert.equal(segmentAt(checked.segments, wes.id, 2), "entered");
+  const view = quarterHalfPresentation(checked.lineups[2], checked.segments, 2, { returnerId: wes.id });
+  assert.equal(view.pairs[0].outId, jude.id);
+});
+
+test("auto replan off repairs the short half an Out creates", () => {
+  const players = roster(7);
+  const opened = openSheet(players, true, 1);
+  const updated = players.map(player => (
+    player.id === "p2" ? { ...player, out: true, injured: false, injuredInQuarter: 1, returnQuarter: null } : player
+  ));
+  const next = pullFromPlan(opened.lineups, "p2", 1, 4);
+  const checked = revalidateBackHalfMarks({
+    players: updated, lineups: next, segments: opened.segments, fromQuarter: 1, totalQuarters: 4,
+  });
+  let halves = 0;
+  for (let quarter = 1; quarter <= 4; quarter += 1) {
+    const lineup = checked.lineups[quarter];
+    const owners = halfOwners(lineup, checked.segments, quarter);
+    assert.equal(owners.h1, onFieldCount(lineup), `Q${quarter}`);
+    halves += owners.h1 + owners.h2;
+  }
+  assert.equal(halves, 48);
+  assert.deepEqual(checked.lineups, next);
+});
+
+test("a live Out keeps the first half the replacement already played", () => {
+  const slots = ["GK", "LD", "RD", "CM", "CF"];
+  const players = roster(10);
+  const opened = openSheet(players, true, 1, slots, "5v5");
+  const outId = "p4";
+  const incoming = benchReplacementId(opened.lineups[1], outId);
+  let segments = clearPlayerSegmentsFrom(opened.segments, outId, 2, opened.lineups);
+  segments = clearSegmentQuarter(segments, outId, 1);
+  const next = pullFromPlan(opened.lineups, outId, 1, 4);
+  if (segmentAt(segments, incoming, 1) === "left") segments = clearSegmentQuarter(segments, incoming, 1);
+  else segments = noteSubSegment(segments, incoming, 1, "entered");
+  const updated = players.map(player => (
+    player.id === outId ? { ...player, out: true, injured: false, injuredInQuarter: 1, returnQuarter: null } : player
+  ));
+  const checked = revalidateBackHalfMarks({
+    players: updated, lineups: next, segments, fromQuarter: 1, totalQuarters: 4,
+  });
+  for (let quarter = 1; quarter <= 4; quarter += 1) {
+    const lineup = checked.lineups[quarter];
+    assert.equal(halfOwners(lineup, checked.segments, quarter).h1, onFieldCount(lineup), `Q${quarter}`);
+  }
+  assert.equal(segmentAt(checked.segments, incoming, 1) == null, true);
+});
+
 test("a free donor keeps the back-half mark in the three reported games", () => {
   const names = [
     "John Smith", "Wes Johnson", "Jaxon Williams", "Remi Brown", "Sean Jones",
@@ -2319,10 +2498,25 @@ const SWEEP_TRIGGERS = [
   "later whole-quarter return",
 ];
 
+function h1Except(lineup, segments, quarter, skipId) {
+  const seen = new Set();
+  let count = 0;
+  const add = (id) => {
+    if (!id || seen.has(String(id))) return;
+    seen.add(String(id));
+    if (skipId && String(id) === String(skipId)) return;
+    if (playerHalfMask(id, lineup, segmentAt(segments, id, quarter))[0]) count += 1;
+  };
+  (lineup?.starters || []).forEach(slot => add(slot.player?.id));
+  (lineup?.bench || []).forEach(player => add(player?.id));
+  return count;
+}
+
 test("every replan trigger keeps a back-half constraint or posts a notice", () => {
   assert.equal(SWEEP_TRIGGERS.length, 16);
   const totals = {};
   const seen = new Set();
+  let overStrips = 0;
   [true, false].forEach(subMode => {
     Object.entries(FORMAT_SLOTS).forEach(([format, slots]) => {
       [8, 9, 10, 11, 12].forEach(count => {
@@ -2359,6 +2553,18 @@ test("every replan trigger keeps a back-half constraint or posts a notice", () =
               });
               const label = `${mode} seed ${seed} roster ${count} ${name}`;
               assertBackHalfInvariants(label, raw, checked, from);
+              for (let q = from; q <= 4; q += 1) {
+                (raw.players || []).filter(player => isBackHalfReturn(player, q)).forEach(returner => {
+                  const lineup = raw.lineups?.[q];
+                  const on = onFieldCount(lineup);
+                  const without = h1Except(lineup, raw.segments, q, returner.id);
+                  const sheetIds = new Set(sheetPlayers(lineup).map(id => String(id)));
+                  const lefts = Object.keys(raw.segments || {}).filter(id => sheetIds.has(String(id)) && segmentAt(raw.segments, id, q) === "left").length;
+                  const entered = Object.keys(raw.segments || {}).filter(id => segmentAt(raw.segments, id, q) === "entered").length;
+                  const still = isBackHalfReturn(checked.players.find(player => player.id === returner.id), q);
+                  if (!still && on > 0 && without === on && lefts > entered) overStrips += 1;
+                });
+              }
               const key = `${format} ${subMode ? "sub" : "full"} ${name}`;
               const kept = isBackHalfReturn(checked.players.find(player => player.id === wes.id), 3);
               totals[key] = totals[key] || { kept: 0, stripped: 0 };
@@ -2428,6 +2634,7 @@ test("every replan trigger keeps a back-half constraint or posts a notice", () =
       });
     });
   });
+  assert.equal(overStrips, 0);
   const six = {};
   Object.entries(totals).forEach(([key, value]) => {
     if (key.startsWith("6v6 ")) six[key.slice(4)] = value;
