@@ -273,6 +273,9 @@ export function usePitchSubLines(pitchWrapRef, { shownPairs, lineupKey, quarter,
     const apply = () => {
       const live = pitchWrapRef.current;
       if (!live) return;
+      // The field can move during the hidden frame. The next resize should
+      // compare against where it landed, not where it was when the hide started.
+      lastRect = fieldRectKey(live);
       const measured = readSubLinesCached(live, shownPairs || []);
       setSubLines(prev => {
         if (sameLines(prev, measured) && !prev.holding) return prev;
@@ -325,5 +328,13 @@ export function usePitchSubLines(pitchWrapRef, { shownPairs, lineupKey, quarter,
       observer?.disconnect();
     };
   }, [pairKey, lineupKey, quarter, swapSel, fieldLayout]);
+  // The hide writes visibility onto the element. If the re-show is the same
+  // React update as the last visible render, the prop does not change and
+  // React leaves the direct write in place. Put it back when the lines are
+  // not being held. Do not do this inside apply(); that paints stale frames.
+  useLayoutEffect(() => {
+    if (subLines.holding) return;
+    pitchWrapRef.current?.querySelectorAll("[data-sub-lines]").forEach(node => { node.style.visibility = "visible"; });
+  }, [subLines]);
   return subLines;
 }
