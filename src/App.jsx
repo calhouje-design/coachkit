@@ -73,7 +73,7 @@ import { commitReturn, finishedQuarterList, quarterIsLive } from "./lib/returnDi
 import { markInjured, markOut, settleAvailability, showDoneForToday } from "./lib/playerStatus.js";
 import { ReturnDialog } from "./components/ReturnDialog.jsx";
 import { AvailabilityMark, RosterAvailabilityButtons } from "./components/AvailabilityMark.js";
-import { usePitchSubLines, useReportFieldLayout } from "./lib/pitchSubLines.js";
+import { PITCH_LAYER, usePitchSubLines, useReportFieldLayout } from "./lib/pitchSubLines.js";
 import { SAY_PLAY_TIME, sayDivision, sayDivisionKey } from "./lib/sayEastGuide.js";
 import { downloadCanvas, paintFieldSheet, paintPlayTimeSheet } from "./lib/sharePaint.js";
 import { useTeamCloud } from "./lib/teamCloud.js";
@@ -705,8 +705,9 @@ function usePitchDrag(onResolve) {
   return { pointerDown, pointerMove, pointerUp, ghost, hover, activeSource };
 }
 
-function SoccerField({ lineup, onTap, selectedIdx, quarter, periodAbbrev = "Q", drag, hoverToken, activeSource, onLayout, lockGk = false, readOnly = false, phaseLabel = "" }) {
+function SoccerField({ lineup, onTap, selectedIdx, quarter, periodAbbrev = "Q", drag, hoverToken, activeSource, onLayout, lockGk = false, readOnly = false, phaseLabel = "", subLines = [], linesHold = false }) {
   const rootRef = useRef(null);
+  const [lineOrigin, setLineOrigin] = useState(null);
   const slots = lineup?.starters || [];
   const slotKey = slots.map(slot => `${slot.pos}:${slot.player?.id || ""}:${slot.player?.name || ""}`).join("|");
   const [placed, setPlaced] = useState([]);
@@ -750,6 +751,27 @@ function SoccerField({ lineup, onTap, selectedIdx, quarter, periodAbbrev = "Q", 
     observer.observe(el);
     return () => observer.disconnect();
   }, [lineup, slotKey]);
+
+  useLayoutEffect(() => {
+    const el = rootRef.current;
+    if (!el) return undefined;
+    const read = () => {
+      const wrap = el.closest("[data-phase]") || el;
+      const field = el.getBoundingClientRect();
+      const box = wrap.getBoundingClientRect();
+      const next = {
+        x: Math.round((field.left - box.left) * 10) / 10,
+        y: Math.round((field.top - box.top) * 10) / 10,
+      };
+      setLineOrigin(prev => (prev && prev.x === next.x && prev.y === next.y ? prev : next));
+    };
+    read();
+    const observer = new ResizeObserver(read);
+    observer.observe(el);
+    const wrap = el.closest("[data-phase]");
+    if (wrap && wrap !== el) observer.observe(wrap);
+    return () => observer.disconnect();
+  }, [lineup]);
 
   if (!lineup) return (
     <div ref={rootRef} style={{
@@ -810,6 +832,42 @@ function SoccerField({ lineup, onTap, selectedIdx, quarter, periodAbbrev = "Q", 
         )}
       </svg>
 
+      {subLines.length > 0 && lineOrigin && (
+        <svg
+          data-sub-lines=""
+          style={{
+            position:"absolute", inset:0, width:"100%", height:"100%",
+            overflow:"visible", pointerEvents:"none", zIndex:PITCH_LAYER.line,
+            visibility: linesHold ? "hidden" : "visible",
+          }}
+        >
+          <defs>
+            <mask id="sub-line-cut" maskUnits="userSpaceOnUse" x="-800" y="-800" width="2400" height="2400">
+              <rect x="-800" y="-800" width="2400" height="2400" fill="#fff"/>
+              {placed.map((spot, idx) => spot && (
+                <circle key={idx} cx={spot.x} cy={spot.y} r={CIRCLE_DIAMETER / 2} fill="#000"/>
+              ))}
+            </mask>
+          </defs>
+          {subLines.filter(line => !line.elevated).map(line => (
+            <polyline key={line.key}
+              points={(line.points || [{ x: line.x1, y: line.y1 }, { x: line.x2, y: line.y2 }]).map(point => `${point.x - lineOrigin.x},${point.y - lineOrigin.y}`).join(" ")}
+              fill="none"
+              stroke="#2ecc71" strokeWidth="2" strokeDasharray="5 4" strokeLinecap="round" strokeLinejoin="round"
+            />
+          ))}
+          {subLines.filter(line => line.elevated).map(line => {
+            const points = (line.points || [{ x: line.x1, y: line.y1 }, { x: line.x2, y: line.y2 }]).map(point => `${point.x - lineOrigin.x},${point.y - lineOrigin.y}`).join(" ");
+            return (
+              <g key={line.key} mask="url(#sub-line-cut)">
+                <polyline points={points} fill="none" stroke="#0a0d0f" strokeWidth="5" strokeLinecap="round" strokeLinejoin="round" />
+                <polyline points={points} fill="none" stroke="#2ecc71" strokeWidth="2" strokeDasharray="5 4" strokeLinecap="round" strokeLinejoin="round" />
+              </g>
+            );
+          })}
+        </svg>
+      )}
+
       {slots.map((slot, idx) => {
         const pos = slot.pos;
         const spot = placed[idx];
@@ -829,6 +887,7 @@ function SoccerField({ lineup, onTap, selectedIdx, quarter, periodAbbrev = "Q", 
           <div key={idx}
             data-drop={`field:${idx}`}
             data-testid={`field-player-${idx}`}
+            data-player-marker=""
             data-player-id={slot.player?.id || ""}
             aria-label={aria}
             onPointerDown={e => {
@@ -849,7 +908,7 @@ function SoccerField({ lineup, onTap, selectedIdx, quarter, periodAbbrev = "Q", 
               transform: "translateX(-50%)",
               textAlign:"center", width: CIRCLE_DIAMETER,
               cursor: slot.player && !frozen ? "grab" : "default",
-              zIndex: isSelected || isHovered || isSource ? 12 : 6,
+              zIndex: isSelected || isHovered || isSource ? 12 : PITCH_LAYER.marker,
               touchAction: "none",
               opacity: isSource ? 0.55 : 1,
             }}>
@@ -872,7 +931,7 @@ function SoccerField({ lineup, onTap, selectedIdx, quarter, periodAbbrev = "Q", 
             }}>
               {slot.player ? (
                 <>
-                  <div style={{fontSize:9,color:"#1a1a1a",lineHeight:1,fontWeight:800}}>{slot.player.number}</div>
+                  <div data-jersey="" style={{fontSize:9,color:"#1a1a1a",lineHeight:1,fontWeight:800}}>{slot.player.number}</div>
                   <div style={{fontSize:8,color:"#2a1a0a",lineHeight:1.1,fontWeight:800,letterSpacing:"0.03em",marginTop:1}}>{pos}</div>
                 </>
               ) : <span style={{color:"rgba(255,255,255,0.4)",fontSize:10}}></span>}
@@ -3241,7 +3300,7 @@ export function TabGame({ format, league, players, setPlayers, addPlayer, remove
                   style={{
                     width:76, flexShrink:0, display:"flex", flexDirection:"column",
                     justifyContent:(displayLineup.bench||[]).length ? "space-evenly" : "center",
-                    gap:6, padding:"8px 4px", borderRadius:10, position:"relative", zIndex:5,
+                    gap:6, padding:"8px 4px", borderRadius:10, position:"relative", zIndex:1,
                     border: drag.hover==="bench-zone" ? "2px solid #2ecc71" : "1px dashed rgba(255,255,255,0.22)",
                     background: drag.hover==="bench-zone" ? "rgba(46,204,113,0.14)" : "rgba(10,13,15,0.55)",
                     boxShadow: drag.hover==="bench-zone" ? "0 0 0 4px rgba(46,204,113,0.28)" : "none",
@@ -3341,7 +3400,7 @@ export function TabGame({ format, league, players, setPlayers, addPlayer, remove
                   })}
                 </div>
               )}
-              <div style={{flex:"1 1 auto", minWidth:0, position:"relative"}}>
+              <div style={{flex:"1 1 auto", minWidth:0, position:"relative", zIndex:2}}>
                 <SoccerField
                   lineup={displayLineup}
                   onTap={onFieldTap}
@@ -3355,32 +3414,10 @@ export function TabGame({ format, league, players, setPlayers, addPlayer, remove
                   lockGk={phase === "after" || gkLocked()}
                   readOnly={readOnlyStart}
                   phaseLabel={controlOn ? (phase === "after" ? "after subs" : "start") : ""}
+                  subLines={subLines}
+                  linesHold={!!subLines.holding}
                 />
               </div>
-              {subLines.length > 0 && (
-                <svg style={{position:"absolute", inset:0, width:"100%", height:"100%", pointerEvents:"none", zIndex:5, overflow:"visible"}}>
-                  {subLines.filter(line => !line.elevated).map(line => (
-                    <polyline key={line.key}
-                      points={(line.points || [{ x: line.x1, y: line.y1 }, { x: line.x2, y: line.y2 }]).map(point => `${point.x},${point.y}`).join(" ")}
-                      fill="none"
-                      stroke="#2ecc71" strokeWidth="2" strokeDasharray="5 4" strokeLinecap="round" strokeLinejoin="round"
-                    />
-                  ))}
-                </svg>
-              )}
-              {subLines.some(line => line.elevated) && (
-                <svg style={{position:"absolute", inset:0, width:"100%", height:"100%", pointerEvents:"none", zIndex:13, overflow:"visible"}}>
-                  {subLines.filter(line => line.elevated).map(line => {
-                    const points = (line.points || [{ x: line.x1, y: line.y1 }, { x: line.x2, y: line.y2 }]).map(point => `${point.x},${point.y}`).join(" ");
-                    return (
-                      <g key={line.key}>
-                        <polyline points={points} fill="none" stroke="#0a0d0f" strokeWidth="5" strokeLinecap="round" strokeLinejoin="round" />
-                        <polyline points={points} fill="none" stroke="#2ecc71" strokeWidth="2" strokeDasharray="5 4" strokeLinecap="round" strokeLinejoin="round" />
-                      </g>
-                    );
-                  })}
-                </svg>
-              )}
             </div>
             {displayLineup && (
               <div style={{fontSize:11, color:C.muted, lineHeight:1.4, marginTop:8, textAlign:"center"}}>

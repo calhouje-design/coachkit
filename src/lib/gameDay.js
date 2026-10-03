@@ -817,8 +817,9 @@ function rectBlocks(x1, y1, x2, y2, rx, ry, rw, rh) {
 /**
  * Clear sub line, at most two bends. Prefer a route within 1.6× the straight
  * distance that stays off other lines and other bench dots. A longer clear
- * route is kept only when nothing shorter gets through; a detour past 2.8×
- * falls back to the straight line drawn above the circles.
+ * route is kept only when nothing shorter gets through. A detour past 2.8×
+ * falls back to the straight line. When that straight line would cross two or
+ * more circles, a clear route up to 3.5× is kept before the outline.
  */
 export function routeClearOfObstacles(x1, y1, x2, y2, obstacles = [], gap = 3, options = {}) {
   const keep = Number.isFinite(gap) ? gap : 3;
@@ -827,7 +828,12 @@ export function routeClearOfObstacles(x1, y1, x2, y2, obstacles = [], gap = 3, o
   const end = { x: x2, y: y2 };
   const straight = Math.hypot(end.x - start.x, end.y - start.y) || 1;
   const lengthLimit = straight * 1.6;
-  const hugeLimit = straight * 2.8;
+  const straightCircleHits = (obstacles || []).filter(obstacle => (
+    isCircleObstacle(obstacle) && obstacle.r > 0
+    && circleBlocks(start.x, start.y, end.x, end.y, obstacle.cx, obstacle.cy, obstacle.r)
+  )).length;
+  const hugeLimit = straight * (straightCircleHits >= 2 ? 3.5 : 2.8);
+  const corridor = straightCircleHits >= 2 ? 168 : 112;
   const blocks = (obstacles || []).filter(obstacle => (
     isCircleObstacle(obstacle) ? obstacle.r > 0 : obstacle.w > 0 && obstacle.h > 0
   ));
@@ -899,7 +905,7 @@ export function routeClearOfObstacles(x1, y1, x2, y2, obstacles = [], gap = 3, o
     };
     const samplesFor = (list) => dedupePoints(list.flatMap(obstacle => (
       isCircleObstacle(obstacle) ? circleSamples(obstacle, keepOut) : rectSamples(obstacle, keepOut)
-    )).concat(frameSamples(bounds)).filter(point => pointFree(point) && inSegmentBox(point, start, end, 112)));
+    )).concat(frameSamples(bounds)).filter(point => pointFree(point) && inSegmentBox(point, start, end, corridor)));
     const latticePoints = () => {
       const margin = 48;
       const step = 18;

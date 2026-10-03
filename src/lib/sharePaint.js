@@ -242,6 +242,12 @@ function paintQuarterPanel(ctx, x, y, w, h, panel) {
     return;
   }
 
+  if (elevatedLines.length) {
+    ctx.save();
+    elevatedLines.forEach(points => strokeRoute(points, true));
+    ctx.restore();
+  }
+
   starters.forEach(slot => {
     const spot = at(slot);
     const px = spot.x;
@@ -274,11 +280,6 @@ function paintQuarterPanel(ctx, x, y, w, h, panel) {
     ctx.textBaseline = "middle";
     ctx.fillText(label, px, py + rim + 8);
   });
-  if (elevatedLines.length) {
-    ctx.save();
-    elevatedLines.forEach(points => strokeRoute(points, true));
-    ctx.restore();
-  }
   ctx.restore();
 }
 

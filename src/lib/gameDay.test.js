@@ -369,6 +369,38 @@ test("the first segment stays 10px off the next bench dot", () => {
   assert.ok(dist >= 10, `first segment passes ${dist.toFixed(1)}px from the next dot`);
 });
 
+test("two circles on the straight line keep a clear route out to 3.5×", () => {
+  const bounds = { x: 0, y: 0, w: 320, h: 260 };
+  const wall = { x: 96, y: 8, w: 48, h: 202 };
+  const circles = [
+    { cx: 112, cy: 120, r: 14 },
+    { cx: 128, cy: 120, r: 14 },
+  ];
+  const routed = routeClearOfObstacles(80, 120, 160, 120, [...circles, wall], 3, { bounds });
+  const straight = 80;
+  let length = 0;
+  for (let i = 1; i < routed.length; i += 1) {
+    length += Math.hypot(routed[i].x - routed[i - 1].x, routed[i].y - routed[i - 1].y);
+  }
+  assert.equal(routed.elevated, false);
+  assert.ok(length > straight * 2.8, `route ${length.toFixed(0)}px should be past the 2.8× cap`);
+  assert.ok(length <= straight * 3.5 + 0.5, `route ${length.toFixed(0)}px is past 3.5×`);
+  circles.forEach(circle => {
+    for (let i = 1; i < routed.length; i += 1) {
+      const from = routed[i - 1];
+      const to = routed[i];
+      let nearest = Infinity;
+      for (let step = 0; step <= 24; step += 1) {
+        const t = step / 24;
+        const x = from.x + (to.x - from.x) * t;
+        const y = from.y + (to.y - from.y) * t;
+        nearest = Math.min(nearest, Math.hypot(x - circle.cx, y - circle.cy));
+      }
+      assert.ok(nearest >= circle.r - 0.05, `segment comes within ${nearest.toFixed(1)} of a circle`);
+    }
+  });
+});
+
 test("a blocked line is drawn elevated instead of cutting through", () => {
   const wall = { cx: 50, cy: 10, r: 30 };
   const bounds = { x: 0, y: 0, w: 100, h: 20 };

@@ -1,6 +1,9 @@
 import { useLayoutEffect, useRef, useState } from "react";
 import { lineStopAtCircle, routeClearOfObstacles } from "./gameDay.js";
 
+/** Sub lines paint under player markers. Markers stay tappable; lines do not take hits. */
+export const PITCH_LAYER = { line: 1, marker: 6 };
+
 /** Circle positions plus the field size. A change means the sub lines should be measured again. */
 export function fieldLayoutSignature(placed, fieldWidth, fieldHeight) {
   const spots = (placed || []).map(spot => (
@@ -194,15 +197,42 @@ export function usePitchSubLines(pitchWrapRef, { shownPairs, lineupKey, quarter,
     }
     let frame = 0;
     let queued = false;
+    let lastSize = `${root.clientWidth}x${root.clientHeight}`;
+    const concealNow = (live) => {
+      live.querySelectorAll("[data-sub-lines]").forEach(node => {
+        node.style.visibility = "hidden";
+      });
+      setSubLines(prev => {
+        if (prev.holding) return prev;
+        const next = prev.slice();
+        next.holding = true;
+        return next;
+      });
+    };
     const apply = () => {
       const live = pitchWrapRef.current;
       if (!live) return;
-      const next = readSubLinesCached(live, shownPairs || []);
-      setSubLines(prev => (sameLines(prev, next) ? prev : next));
+      const measured = readSubLinesCached(live, shownPairs || []);
+      setSubLines(prev => {
+        if (sameLines(prev, measured) && !prev.holding) return prev;
+        const next = measured.slice();
+        next.holding = false;
+        return next;
+      });
     };
     // Resize bursts (including the iOS toolbar) share one frame. The first
     // measure stays synchronous so the lines are present on the commit.
+    // A real viewport change hides the previous frame immediately; the
+    // observer still waits for the animation frame before drawing the new one.
     const measure = () => {
+      const live = pitchWrapRef.current;
+      if (live) {
+        const size = `${live.clientWidth}x${live.clientHeight}`;
+        if (size !== lastSize) {
+          lastSize = size;
+          concealNow(live);
+        }
+      }
       if (queued) return;
       queued = true;
       frame = requestAnimationFrame(() => {
@@ -211,13 +241,20 @@ export function usePitchSubLines(pitchWrapRef, { shownPairs, lineupKey, quarter,
         apply();
       });
     };
+    const onViewport = () => {
+      const live = pitchWrapRef.current;
+      if (live) concealNow(live);
+      measure();
+    };
     apply();
-    window.addEventListener("resize", measure);
+    window.addEventListener("resize", onViewport);
+    window.addEventListener("orientationchange", onViewport);
     const observer = typeof ResizeObserver === "function" ? new ResizeObserver(measure) : null;
     observer?.observe(root);
     return () => {
       if (frame) cancelAnimationFrame(frame);
-      window.removeEventListener("resize", measure);
+      window.removeEventListener("resize", onViewport);
+      window.removeEventListener("orientationchange", onViewport);
       observer?.disconnect();
     };
   }, [pairKey, lineupKey, quarter, swapSel, fieldLayout]);
