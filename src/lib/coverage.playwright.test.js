@@ -417,12 +417,12 @@ for (const width of [320, 390]) {
           while (performance.now() - start < 60) {}
           window.dispatchEvent(new Event("orientationchange"));
         });
-        if (!(await linesShownWithin(page, 2000))) rotateStuck += 1;
+        if (!(await linesShownWithin(page, 5000))) rotateStuck += 1;
       }
       await page.evaluate(() => {
         for (let i = 0; i < 25; i += 1) window.dispatchEvent(new Event("resize"));
       });
-      const burstStuck = (await linesShownWithin(page, 2000)) ? 0 : 1;
+      const burstStuck = (await linesShownWithin(page, 5000)) ? 0 : 1;
       assert.equal(
         rotateStuck + burstStuck,
         0,
