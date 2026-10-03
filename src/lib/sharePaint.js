@@ -301,7 +301,68 @@ function paintDualPeriod(ctx, x, y, w, h, panel, focus) {
 }
 
 /**
- * Sheet 1. One field panel per period.
+ * One field image. Same pitch, bench, and sub lines as a single panel on the
+ * old combined sheet. The caption sits in the header so the PNG names its half.
+ */
+export function paintFieldTile(canvas, { panel, caption, league, opponent, homeScore, awayScore } = {}) {
+  if (!canvas || !panel) return;
+  const cellW = 360;
+  const cellH = 430;
+  const pad = 10;
+  const header = 78;
+  const W = pad * 2 + cellW;
+  const H = header + pad + cellH + 22;
+  const ctx = fitCanvas(canvas, W, H);
+  ctx.fillStyle = "#0c1409";
+  ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = "#1a2518";
+  ctx.fillRect(0, 0, W, header);
+
+  ctx.fillStyle = "#e8a020";
+  ctx.beginPath();
+  ctx.arc(28, 22, 12, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = "#0a0d0f";
+  ctx.font = "900 10px Arial, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText("CK", 28, 22);
+
+  ctx.textAlign = "left";
+  ctx.textBaseline = "alphabetic";
+  ctx.fillStyle = "#e8e4dc";
+  ctx.font = "bold 14px Arial, sans-serif";
+  ctx.fillText(caption || panel.label || "Field", 48, 20);
+  ctx.fillStyle = "#a8a39e";
+  ctx.font = "11px Arial, sans-serif";
+  ctx.fillText(league || "CoachKit", 48, 38);
+  ctx.textAlign = "right";
+  ctx.fillStyle = "#e8a020";
+  ctx.font = "bold 11px Arial, sans-serif";
+  ctx.fillText(new Date().toLocaleDateString(), W - 12, 20);
+
+  ctx.fillStyle = "rgba(232,160,32,0.12)";
+  roundRect(ctx, 10, 48, W - 20, 22, 6);
+  ctx.fill();
+  ctx.textAlign = "center";
+  ctx.fillStyle = "#e8e4dc";
+  ctx.font = "bold 12px Arial, sans-serif";
+  ctx.fillText(`US  ${homeScore ?? 0}  :  ${awayScore ?? 0}  ${(opponent || "THEM").toUpperCase()}`, W / 2, 63);
+
+  paintQuarterPanel(ctx, pad, header + pad, cellW, cellH, panel);
+  canvas.dataset.view = "tile";
+  canvas.dataset.caption = caption || panel.label || "";
+  canvas.dataset.focused = "false";
+
+  ctx.fillStyle = "#666";
+  ctx.font = "bold 10px Arial, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "alphabetic";
+  ctx.fillText(`CoachKit · ${league || "lineup"} · ${new Date().toLocaleDateString()}`, W / 2, H - 8);
+}
+
+/**
+ * Print sheet. One field panel per period.
  * `view: "both"` draws Start and After subs side by side.
  * `view: "start" | "after"` draws that phase alone, at the single-field size.
  * `focus` draws the on-screen gold box and is left off the saved image.

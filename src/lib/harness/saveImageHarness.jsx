@@ -79,6 +79,7 @@ function loggedGames() {
 }
 
 function Harness() {
+  const subMode = new URLSearchParams(window.location.search).get("sub") !== "0";
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [lineups, setLineups] = useState(planned.lineups);
   const [roster, setRoster] = useState(players);
@@ -145,7 +146,7 @@ function Harness() {
         lineupsByQuarter={lineups}
         setLineupsByQuarter={setLineups}
         setGames={setGames}
-        subMode
+        subMode={subMode}
         autoRegen
         gameDay={gameDay}
         setGameDay={setGameDay}

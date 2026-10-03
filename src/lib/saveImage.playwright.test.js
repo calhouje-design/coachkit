@@ -84,11 +84,24 @@ test("iPhone Web Share receives the field, play-time, and game-log PNG files fro
     await page.goto(`${base}/src/lib/harness/save-image.html`, { waitUntil: "networkidle" });
     await page.getByRole("button", { name: "Share lineup" }).click();
     await page.getByTestId("share-modal").waitFor();
-    await page.getByTestId("save-field-image").click();
+    await page.waitForFunction(() => [...document.querySelectorAll("[data-save-kind='field']")].every(node => !node.disabled));
+    const fieldButtons = page.locator("[data-save-kind='field']");
+    const fieldCount = await fieldButtons.count();
+    for (let index = 0; index < fieldCount; index += 1) await fieldButtons.nth(index).click();
     await page.getByTestId("save-play-time-image").click();
     let shares = await pngShares(page);
-    assert.equal(shares.length, 2, JSON.stringify(shares));
-    assert.deepEqual(shares.map((row) => row.name), ["CoachKit_Field_Q1-Q4.png", "CoachKit_PlayTime.png"]);
+    assert.equal(shares.length, 9, JSON.stringify(shares));
+    assert.deepEqual(shares.map((row) => row.name), [
+      "CoachKit_Field_Q1_H1.png",
+      "CoachKit_Field_Q1_H2.png",
+      "CoachKit_Field_Q2_H1.png",
+      "CoachKit_Field_Q2_H2.png",
+      "CoachKit_Field_Q3_H1.png",
+      "CoachKit_Field_Q3_H2.png",
+      "CoachKit_Field_Q4_H1.png",
+      "CoachKit_Field_Q4_H2.png",
+      "CoachKit_PlayTime.png",
+    ]);
     for (const row of shares) {
       assert.equal(row.isFile, true, row.name);
       assert.equal(row.type, "image/png", row.name);
@@ -107,13 +120,19 @@ test("iPhone Web Share receives the field, play-time, and game-log PNG files fro
     await page.getByTestId("share-modal").getByRole("button", { name: "Close" }).click();
     await page.getByRole("button", { name: "Game Log" }).click();
     await page.getByTestId("game-log-sheets").locator("summary").click();
-    await page.getByTestId("save-game-log-field").click();
+    await page.waitForFunction(() => [...document.querySelectorAll("[data-save-kind='game-log-field']")].every(node => !node.disabled));
+    const logButtons = page.locator("[data-save-kind='game-log-field']");
+    const logCount = await logButtons.count();
+    for (let index = 0; index < logCount; index += 1) await logButtons.nth(index).click();
     await page.getByTestId("save-game-log-play").click();
     shares = await pngShares(page);
-    assert.equal(shares.length, 4, JSON.stringify(shares));
-    assert.equal(shares[2].name, "CoachKit_Field_H1-H2.png");
-    assert.equal(shares[3].name, "CoachKit_PlayTime.png");
-    for (const row of shares.slice(2)) {
+    assert.equal(shares.length, 12, JSON.stringify(shares));
+    assert.deepEqual(shares.slice(9).map((row) => row.name), [
+      "CoachKit_Field_H1.png",
+      "CoachKit_Field_H2.png",
+      "CoachKit_PlayTime.png",
+    ]);
+    for (const row of shares.slice(9)) {
       assert.equal(row.isFile, true, row.name);
       assert.equal(row.type, "image/png", row.name);
       assert.equal(row.eventType, "click", row.name);
@@ -149,21 +168,22 @@ test("same-content re-renders do not re-encode, and a score change encodes once"
     await page.goto(`${base}/src/lib/harness/save-image.html`, { waitUntil: "networkidle" });
     await page.evaluate(() => { window.__encodes = 0; });
     await page.getByRole("button", { name: "Share lineup" }).click();
-    await page.getByTestId("save-field-image").waitFor();
-    await page.waitForFunction(() => window.__encodes >= 2);
+    await page.getByTestId("field-tile").first().waitFor();
+    const expected = await page.getByTestId("field-tile").count() + 1;
+    await page.waitForFunction((count) => window.__encodes >= count, expected);
     await page.waitForTimeout(250);
-    assert.equal(await page.evaluate(() => window.__encodes), 2);
+    assert.equal(await page.evaluate(() => window.__encodes), expected);
     await page.evaluate(() => {
       window.__coachkitSameContentRender();
       window.__coachkitSameContentRender();
       window.__coachkitSameContentRender();
     });
     await page.waitForTimeout(400);
-    assert.equal(await page.evaluate(() => window.__encodes), 2);
+    assert.equal(await page.evaluate(() => window.__encodes), expected);
     await page.evaluate(() => window.__coachkitChangeScore());
-    await page.waitForFunction(() => window.__encodes >= 4);
+    await page.waitForFunction((count) => window.__encodes >= count, expected * 2);
     await page.waitForTimeout(300);
-    assert.equal(await page.evaluate(() => window.__encodes), 4);
+    assert.equal(await page.evaluate(() => window.__encodes), expected * 2);
   } finally {
     await page.close();
     await context.close();
@@ -191,10 +211,11 @@ test("a collapsed 12-game log encodes nothing until one game is expanded", async
     await page.waitForTimeout(400);
     assert.equal(await page.evaluate(() => window.__encodes), 0);
     await page.getByTestId("game-log-sheets").first().locator("summary").click();
-    await page.getByTestId("save-game-log-field").waitFor();
-    await page.waitForFunction(() => window.__encodes >= 2);
+    await page.getByTestId("game-log-field-tile").first().waitFor();
+    const expected = await page.getByTestId("game-log-field-tile").count() + 1;
+    await page.waitForFunction((count) => window.__encodes >= count, expected);
     await page.waitForTimeout(300);
-    assert.equal(await page.evaluate(() => window.__encodes), 2);
+    assert.equal(await page.evaluate(() => window.__encodes), expected);
   } finally {
     await page.close();
     await context.close();
@@ -246,16 +267,59 @@ test("press and hold opens the cached PNG for every save button", async () => {
     await page.goto(`${base}/src/lib/harness/save-image.html`, { waitUntil: "networkidle" });
     await page.getByRole("button", { name: "Share lineup" }).click();
     await page.getByTestId("hold-field-image").waitFor();
-    await page.waitForFunction(() => !document.querySelector("[data-testid='hold-field-image']")?.disabled);
-    await cachedHoldImage(page, "hold-field-image");
+    await page.waitForFunction(() => [...document.querySelectorAll("[data-hold-kind='field']")].length > 0 && [...document.querySelectorAll("[data-hold-kind='field']")].every(node => !node.disabled));
+    const fieldHolds = await page.locator("[data-hold-kind='field']").evaluateAll(nodes => nodes.map(node => node.getAttribute("data-testid")));
+    assert.equal(fieldHolds.length, 8);
+    for (const id of fieldHolds) await cachedHoldImage(page, id);
     await cachedHoldImage(page, "hold-play-time-image");
     await page.getByTestId("share-modal").getByRole("button", { name: "Close" }).click();
     await page.getByRole("button", { name: "Game Log" }).click();
     await page.getByTestId("game-log-sheets").locator("summary").click();
     await page.getByTestId("hold-game-log-field").waitFor();
-    await page.waitForFunction(() => !document.querySelector("[data-testid='hold-game-log-field']")?.disabled);
-    await cachedHoldImage(page, "hold-game-log-field");
+    await page.waitForFunction(() => [...document.querySelectorAll("[data-hold-kind='game-log-field']")].every(node => !node.disabled));
+    const logHolds = await page.locator("[data-hold-kind='game-log-field']").evaluateAll(nodes => nodes.map(node => node.getAttribute("data-testid")));
+    assert.deepEqual(logHolds, ["hold-game-log-field", "hold-game-log-field-1"]);
+    for (const id of logHolds) await cachedHoldImage(page, id);
     await cachedHoldImage(page, "hold-game-log-play");
+  } finally {
+    await page.close();
+    await context.close();
+  }
+});
+
+test("full mode lays the quarters out two per row above play time", async () => {
+  const context = await browser.newContext({ ...devices["iPhone 13"] });
+  const page = await context.newPage();
+  page.setDefaultTimeout(20000);
+  try {
+    await page.goto(`${base}/src/lib/harness/save-image.html?sub=0`, { waitUntil: "networkidle" });
+    await page.getByRole("button", { name: "Share lineup" }).click();
+    const sheet = page.getByTestId("share-sheet");
+    await sheet.waitFor();
+    assert.equal(await sheet.getAttribute("data-dual"), "false");
+    assert.deepEqual(await sheet.getByTestId("field-tile-label").allInnerTexts(), ["Q1", "Q2", "Q3", "Q4"]);
+    assert.deepEqual(
+      await sheet.getByTestId("field-tile").evaluateAll(nodes => nodes.map(node => node.getAttribute("data-filename"))),
+      ["CoachKit_Field_Q1.png", "CoachKit_Field_Q2.png", "CoachKit_Field_Q3.png", "CoachKit_Field_Q4.png"],
+    );
+    const layout = await sheet.evaluate(node => {
+      const rect = (el) => el.getBoundingClientRect();
+      const tiles = [...node.querySelectorAll("[data-testid='field-tile']")].map(rect);
+      const play = rect(node.querySelector("[data-testid='play-time-sheet']"));
+      const modal = node.closest("[data-testid='share-modal']");
+      return {
+        columns: getComputedStyle(node.querySelector("[data-testid='field-grid']")).gridTemplateColumns.split(" ").filter(Boolean).length,
+        tiles,
+        play,
+        overflow: modal.scrollWidth - modal.clientWidth,
+      };
+    });
+    assert.equal(layout.columns, 2);
+    assert.ok(Math.abs(layout.tiles[0].y - layout.tiles[1].y) < 8);
+    assert.ok(layout.tiles[1].x > layout.tiles[0].x);
+    assert.ok(layout.tiles[2].y > layout.tiles[0].y + 20);
+    assert.ok(layout.play.y > layout.tiles[3].y);
+    assert.ok(layout.overflow <= 1, `overflow ${layout.overflow}`);
   } finally {
     await page.close();
     await context.close();

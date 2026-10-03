@@ -75,7 +75,8 @@ import { ReturnDialog } from "./components/ReturnDialog.jsx";
 import { AvailabilityMark, RosterAvailabilityButtons } from "./components/AvailabilityMark.js";
 import { PITCH_LAYER, usePitchSubLines, useReportFieldLayout } from "./lib/pitchSubLines.js";
 import { SAY_PLAY_TIME, sayDivision, sayDivisionKey } from "./lib/sayEastGuide.js";
-import { paintFieldSheet, paintPlayTimeSheet } from "./lib/sharePaint.js";
+import { paintFieldSheet, paintFieldTile, paintPlayTimeSheet } from "./lib/sharePaint.js";
+import { fieldImageTiles } from "./lib/fieldGrid.js";
 import { canvasToPngBlob, saveImage, showHoldToSave } from "./lib/saveImage.js";
 import BuildStamp from "./components/BuildStamp.jsx";
 import { useTeamCloud } from "./lib/teamCloud.js";
@@ -3629,86 +3630,109 @@ const sheetHoldBtn = {
   textUnderlineOffset: "2px",
 };
 
-function useMaxWidth(max) {
-  const query = `(max-width: ${max}px)`;
-  const [matches, setMatches] = useState(() => typeof window !== "undefined" && window.matchMedia(query).matches);
-  useEffect(() => {
-    const media = window.matchMedia(query);
-    const apply = () => setMatches(media.matches);
-    apply();
-    media.addEventListener("change", apply);
-    return () => media.removeEventListener("change", apply);
-  }, [query]);
-  return matches;
-}
-
-function SheetCanvases({ field, playTime, league, opponent, homeScore, awayScore, periodAbbrev = "Q", periodCount = 4, focus = null, view = "both", showPrint = false, source = "share" }) {
-  const fieldRef = useRef(null);
-  const fileRef = useRef(null);
+function SheetCanvases({ field, playTime, league, opponent, homeScore, awayScore, showPrint = false, source = "share" }) {
+  const tiles = useMemo(() => fieldImageTiles(field), [field]);
+  const previewRefs = useRef([]);
+  const fileRefs = useRef([]);
   const playRef = useRef(null);
   const printRef = useRef(null);
-  const [fieldFile, setFieldFile] = useState(null);
+  const [fieldFiles, setFieldFiles] = useState([]);
   const [playFile, setPlayFile] = useState(null);
-  const fieldName = `CoachKit_Field_${periodAbbrev}1-${periodAbbrev}${periodCount}.png`;
   const playName = "CoachKit_PlayTime.png";
-  const dual = (field?.quarters || []).some(panel => panel.after);
-  const previewTitle = view === "after" ? "Sheet 1 · After subs" : view === "start" ? "Sheet 1 · Start" : (dual ? "Sheet 1 · Start and after subs" : "Sheet 1 · Field, bench, and sub lines");
+  const dual = tiles.some(tile => tile.filename.endsWith("_H1.png") || tile.filename.endsWith("_H2.png"));
+  const tileKey = tiles.map(tile => tile.filename).join("|");
+  const paintMeta = { league, opponent, homeScore, awayScore };
   useEffect(() => {
-    if (fieldRef.current) paintFieldSheet(fieldRef.current, { field, league, opponent, homeScore, awayScore, focus: view === "both" ? focus : null, view });
     if (printRef.current) paintFieldSheet(printRef.current, { field, league, opponent, homeScore, awayScore });
-  }, [field, playTime, league, opponent, homeScore, awayScore, focus, view, showPrint]);
+  }, [field, league, opponent, homeScore, awayScore, showPrint]);
   const contentKey = useMemo(() => JSON.stringify([field, playTime, league, opponent, homeScore, awayScore]), [field, playTime, league, opponent, homeScore, awayScore]);
   useEffect(() => {
     let cancelled = false;
-    setFieldFile(null);
+    setFieldFiles(tiles.map(() => null));
     setPlayFile(null);
-    const fieldCanvas = fileRef.current;
+    tiles.forEach((tile, index) => {
+      const preview = previewRefs.current[index];
+      if (preview) paintFieldTile(preview, { ...paintMeta, panel: tile.panel, caption: tile.caption });
+      const fileCanvas = fileRefs.current[index];
+      if (fileCanvas) {
+        paintFieldTile(fileCanvas, { ...paintMeta, panel: tile.panel, caption: tile.caption });
+        fileCanvas.style.cssText = "position:absolute;width:0;height:0;opacity:0;pointer-events:none;";
+      }
+    });
     const playCanvas = playRef.current;
-    if (fieldCanvas) {
-      paintFieldSheet(fieldCanvas, { field, league, opponent, homeScore, awayScore });
-      fieldCanvas.style.cssText = "position:absolute;width:0;height:0;opacity:0;pointer-events:none;";
-    }
     if (playCanvas) paintPlayTimeSheet(playCanvas, { playTime, league });
     Promise.allSettled([
-      fieldCanvas ? canvasToPngBlob(fieldCanvas) : Promise.resolve(null),
+      ...tiles.map((_, index) => (fileRefs.current[index] ? canvasToPngBlob(fileRefs.current[index]) : Promise.resolve(null))),
       playCanvas ? canvasToPngBlob(playCanvas) : Promise.resolve(null),
-    ]).then(([fieldResult, playResult]) => {
+    ]).then(results => {
       if (cancelled) return;
-      const fieldBlob = fieldResult.status === "fulfilled" ? fieldResult.value : null;
-      const playBlob = playResult.status === "fulfilled" ? playResult.value : null;
-      setFieldFile(fieldBlob ? new File([fieldBlob], fieldName, { type: "image/png", lastModified: Date.now() }) : null);
+      const encoded = results.slice(0, tiles.length);
+      const playResult = results[tiles.length];
+      setFieldFiles(encoded.map((result, index) => {
+        const blob = result.status === "fulfilled" ? result.value : null;
+        return blob ? new File([blob], tiles[index].filename, { type: "image/png", lastModified: Date.now() }) : null;
+      }));
+      const playBlob = playResult?.status === "fulfilled" ? playResult.value : null;
       setPlayFile(playBlob ? new File([playBlob], playName, { type: "image/png", lastModified: Date.now() }) : null);
     });
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [contentKey, fieldName, playName]);
-  const fieldTestId = source === "game-log" ? "save-game-log-field" : "save-field-image";
+  }, [contentKey, tileKey, playName]);
   const playTestId = source === "game-log" ? "save-game-log-play" : "save-play-time-image";
-  const fieldHoldId = source === "game-log" ? "hold-game-log-field" : "hold-field-image";
   const playHoldId = source === "game-log" ? "hold-game-log-play" : "hold-play-time-image";
+  const saveKind = source === "game-log" ? "game-log-field" : "field";
   const saveReady = (file, filename) => {
     if (!file) return;
     saveImage({ blob: file, filename }).catch(() => {});
   };
-  const saveRow = (file, filename, testId, holdId, readyLabel) => (
-    <div style={{display:"flex", gap:8, alignItems:"center"}}>
-      <button type="button" data-testid={testId} disabled={!file} onClick={() => saveReady(file, filename)} style={{...sheetSaveBtn, opacity: file ? 1 : 0.6}}>
+  const saveRow = (file, filename, testId, holdId, readyLabel, kind, stacked) => (
+    <div style={{display:"flex", flexDirection: stacked ? "column" : "row", flexWrap: stacked ? "nowrap" : "wrap", gap: stacked ? 4 : 8, alignItems: stacked ? "stretch" : "center"}}>
+      <button type="button" data-testid={testId} data-save-kind={kind || undefined} data-filename={filename} disabled={!file} onClick={() => saveReady(file, filename)} style={{...sheetSaveBtn, width: stacked ? "100%" : undefined, flex: stacked ? "none" : 1, minWidth: 0, fontSize: stacked ? 11 : 13, padding: stacked ? "8px 6px" : "10px 12px", opacity: file ? 1 : 0.6}}>
         {file ? readyLabel : "Preparing image…"}
       </button>
-      <button type="button" data-testid={holdId} disabled={!file} onClick={() => file && showHoldToSave(file)} style={{...sheetHoldBtn, opacity: file ? 1 : 0.45}}>
+      <button type="button" data-testid={holdId} data-hold-kind={kind || "play"} data-filename={filename} disabled={!file} onClick={() => file && showHoldToSave(file)} style={{...sheetHoldBtn, flex: stacked ? "none" : "1 1 108px", width: stacked ? "100%" : undefined, minWidth: 0, whiteSpace: "normal", opacity: file ? 1 : 0.45}}>
         Press and hold to save
       </button>
     </div>
   );
   return (
-    <div data-image-source={source}>
-      <div style={{fontSize:12,fontWeight:800,color:"#e8a020",marginBottom:6}}>{previewTitle}</div>
-      <div data-testid="share-sheet" data-dual={dual ? "true" : "false"} data-preview={view} style={{borderRadius:8,overflow:"hidden",marginBottom:8,border:"1px solid rgba(255,255,255,0.08)",background:"#0c1409",touchAction:dual ? "pan-y" : "auto"}}>
-        <canvas ref={fieldRef} style={{width:"100%",height:"auto",display:"block",touchAction:dual ? "pan-y" : "auto"}} />
+    <div data-image-source={source} data-testid={source === "share" ? "share-sheet" : "game-log-sheet"} data-dual={dual ? "true" : "false"} data-preview="grid">
+      <div style={{fontSize:12,fontWeight:800,color:"#e8a020",marginBottom:6}}>
+        {dual ? "Field images · 1st half and 2nd half" : "Field images"}
       </div>
-      <canvas ref={fileRef} data-testid="share-file" aria-hidden="true" />
-      <div style={{marginBottom:16}}>
-        {saveRow(fieldFile, fieldName, fieldTestId, fieldHoldId, "Save field image")}
+      <div data-testid={source === "share" ? "field-grid" : "game-log-field-grid"} style={{display:"grid", gridTemplateColumns:"minmax(0, 1fr) minmax(0, 1fr)", gap:8, marginBottom:12}}>
+        {tiles.map((tile, index) => (
+          <div key={tile.filename} data-testid={source === "share" ? "field-tile" : "game-log-field-tile"} data-filename={tile.filename} data-caption={tile.caption} style={{minWidth:0}}>
+            <div data-testid={source === "share" ? "field-tile-label" : "game-log-field-label"} style={{fontSize:11, fontWeight:800, color:"#e8e4dc", lineHeight:1.3, marginBottom:4}}>
+              {tile.caption}
+            </div>
+            <div style={{borderRadius:8, overflow:"hidden", marginBottom:6, border:"1px solid rgba(255,255,255,0.08)", background:"#0c1409"}}>
+              <canvas
+                ref={node => { previewRefs.current[index] = node; }}
+                data-testid={source === "share" ? "field-tile-canvas" : "game-log-field-canvas"}
+                style={{width:"100%", height:"auto", display:"block"}}
+              />
+            </div>
+            {saveRow(
+              fieldFiles[index],
+              tile.filename,
+              source === "game-log"
+                ? (index === 0 ? "save-game-log-field" : `save-game-log-field-${index}`)
+                : (index === 0 ? "save-field-image" : `save-field-image-${index}`),
+              source === "game-log"
+                ? (index === 0 ? "hold-game-log-field" : `hold-game-log-field-${index}`)
+                : (index === 0 ? "hold-field-image" : `hold-field-image-${index}`),
+              `Save ${tile.caption}`,
+              saveKind,
+              true,
+            )}
+          </div>
+        ))}
+      </div>
+      <div aria-hidden="true" style={{position:"absolute", width:0, height:0, overflow:"hidden"}}>
+        {tiles.map((tile, index) => (
+          <canvas key={`file-${tile.filename}`} ref={node => { fileRefs.current[index] = node; }} />
+        ))}
       </div>
       {showPrint && (
         <div data-testid="print-preview" style={{background:"#fff", color:"#1a1a1a", borderRadius:8, padding:12, marginBottom:16}}>
@@ -3717,11 +3741,13 @@ function SheetCanvases({ field, playTime, league, opponent, homeScore, awayScore
           <canvas ref={printRef} style={{width:"100%",height:"auto",display:"block",background:"#fff"}} />
         </div>
       )}
-      <div style={{fontSize:12,fontWeight:800,color:"#2ecc71",marginBottom:6}}>Sheet 2 · Play time</div>
-      <div style={{borderRadius:8,overflow:"hidden",marginBottom:8,border:"1px solid rgba(255,255,255,0.08)",background:"#0c1409"}}>
-        <canvas ref={playRef} style={{width:"100%",height:"auto",display:"block"}} />
+      <div data-testid={source === "share" ? "play-time-sheet" : "game-log-play-time"} style={{marginTop:4}}>
+        <div style={{fontSize:12,fontWeight:800,color:"#2ecc71",marginBottom:6}}>Play time</div>
+        <div style={{borderRadius:8,overflow:"hidden",marginBottom:8,border:"1px solid rgba(255,255,255,0.08)",background:"#0c1409"}}>
+          <canvas ref={playRef} style={{width:"100%",height:"auto",display:"block"}} />
+        </div>
+        {saveRow(playFile, playName, playTestId, playHoldId, "Save play time image", "play", false)}
       </div>
-      {saveRow(playFile, playName, playTestId, playHoldId, "Save play time image")}
     </div>
   );
 }
@@ -3757,7 +3783,6 @@ function GameLogSheets({ game }) {
 }
 
 function ShareLineupModal({ players, lineupsByQuarter, pairPlan, afterSubs, startSnapshots, subMode, segments, credit, minQ, quarters = [1, 2, 3, 4], periodAbbrev = "Q", homeScore, awayScore, opponent, league, onClose }) {
-  const [focus, setFocus] = useState("start");
   const [showPrint, setShowPrint] = useState(false);
   const field = useMemo(
     () => decorateShareSheet(
@@ -3771,9 +3796,6 @@ function ShareLineupModal({ players, lineupsByQuarter, pairPlan, afterSubs, star
     [players, lineupsByQuarter, segments, credit, minQ, quarters, periodAbbrev],
   );
   const dual = (field?.quarters || []).some(panel => panel.after);
-  const narrow = useMaxWidth(479);
-  const preview = dual && narrow ? focus : "both";
-  const swipe = usePhaseSwipe(dual, setFocus);
   return (
     <div style={{position:"fixed",inset:0,zIndex:9999,background:"rgba(0,0,0,0.88)",
       display:"flex",alignItems:"center",justifyContent:"center",padding:16}}
@@ -3789,21 +3811,12 @@ function ShareLineupModal({ players, lineupsByQuarter, pairPlan, afterSubs, star
             borderRadius:6,cursor:"pointer",color:"#e8e4dc",fontSize:13,fontWeight:700,padding:"4px 12px",fontFamily:"inherit",
           }}>Close</button>
         </div>
-        <div
-          style={{padding:"14px 16px",overflow:"auto",touchAction:dual ? "pan-y" : "auto"}}
-          onPointerDown={swipe.onPointerDown}
-          onPointerMove={swipe.onPointerMove}
-          onPointerUp={swipe.onPointerUp}
-          onPointerCancel={swipe.onPointerCancel}
-        >
+        <div data-testid="share-body" style={{padding:"14px 16px",overflow:"auto",touchAction:"pan-y"}}>
           <div style={{fontSize:11,color:"#7a7570",marginBottom:12,lineHeight:1.5}}>
             {dual
-              ? (narrow
-                ? "The preview shows one phase at a time. Swipe the sheet to switch. The saved image and print include Start and After subs side by side."
-                : "Each period shows Start, with the sub lines, and After subs beside it. Swipe to move the highlight. The saved image and print include both, without the highlight.")
-              : "Sheet 1 is the field for every period, with the bench and dotted lines to who they sub for. Sheet 2 is the green play-time bars. Save strategy to game day keeps both in the Season log."}
+              ? "Two images per row: Q1 1st half beside Q1 2nd half, then Q2’s halves on the next row. Play time is the full-width image under the grid. Each image saves on its own."
+              : "Two images per row, in period order. Play time is the full-width image under the grid. Each image saves on its own."}
           </div>
-          {dual && <PhaseToggle phase={focus} onChange={setFocus} />}
           <SheetCanvases
             field={field}
             playTime={playTime}
@@ -3811,10 +3824,6 @@ function ShareLineupModal({ players, lineupsByQuarter, pairPlan, afterSubs, star
             opponent={opponent}
             homeScore={homeScore}
             awayScore={awayScore}
-            periodAbbrev={periodAbbrev}
-            periodCount={quarters.length || 4}
-            focus={dual && !narrow ? focus : null}
-            view={preview}
             showPrint={showPrint}
           />
           {dual && (
