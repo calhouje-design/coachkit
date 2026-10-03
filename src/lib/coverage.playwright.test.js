@@ -391,9 +391,16 @@ async function openCoverage(page, width) {
   });
 }
 
-function subLineVisibility() {
-  const node = document.querySelector("[data-sub-lines]");
-  return node ? getComputedStyle(node).visibility : "missing";
+async function linesShownWithin(page, timeout) {
+  try {
+    await page.waitForFunction(() => {
+      const node = document.querySelector("[data-sub-lines]");
+      return !!node && getComputedStyle(node).visibility === "visible";
+    }, null, { timeout });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 for (const width of [320, 390]) {
@@ -410,14 +417,12 @@ for (const width of [320, 390]) {
           while (performance.now() - start < 60) {}
           window.dispatchEvent(new Event("orientationchange"));
         });
-        await page.waitForTimeout(250);
-        if (await page.evaluate(subLineVisibility) !== "visible") rotateStuck += 1;
+        if (!(await linesShownWithin(page, 2000))) rotateStuck += 1;
       }
       await page.evaluate(() => {
         for (let i = 0; i < 25; i += 1) window.dispatchEvent(new Event("resize"));
       });
-      await page.waitForTimeout(250);
-      const burstStuck = (await page.evaluate(subLineVisibility)) === "visible" ? 0 : 1;
+      const burstStuck = (await linesShownWithin(page, 2000)) ? 0 : 1;
       assert.equal(
         rotateStuck + burstStuck,
         0,
@@ -430,78 +435,119 @@ for (const width of [320, 390]) {
   });
 }
 
-test("a buried end dot draws a target ring that misses numbers and neighbour disks", async () => {
-  const page = await browser.newPage({ viewport: { width: 320, height: 640 }, deviceScaleFactor: 1 });
-  try {
-    await openCoverage(page, 320);
-    await page.waitForFunction(() => document.querySelector("[data-sub-end]"));
-    const buried = await page.evaluate(() => {
-      const dot = document.querySelector("[data-sub-end]");
-      const id = dot.getAttribute("data-sub-for");
-      const circle = document.querySelector(`[data-sub-to="${CSS.escape(id)}"]`);
-      const wrap = document.querySelector("[data-phase]");
-      const c = circle.getBoundingClientRect();
-      const w = wrap.getBoundingClientRect();
-      const size = 180;
-      const node = document.createElement("div");
-      node.setAttribute("data-sub-to", "bury-obstacle");
-      node.setAttribute("data-bury", "");
-      node.style.position = "absolute";
-      node.style.left = `${c.x + c.width / 2 - w.left - size / 2}px`;
-      node.style.top = `${c.y + c.height / 2 - w.top - size / 2}px`;
-      node.style.width = `${size}px`;
-      node.style.height = `${size}px`;
-      wrap.appendChild(node);
-      window.dispatchEvent(new Event("orientationchange"));
-      return id;
+async function assertBuriedRing(page, label) {
+  await page.setViewportSize({ width: 320, height: 640 });
+  await page.goto(`${base}/src/lib/harness/coverage.html?shape=4-1-4-1`, { waitUntil: "networkidle" });
+  await page.waitForFunction(() => document.querySelector("[data-sub-end]"));
+  const buried = await page.evaluate(() => {
+    const circles = [...document.querySelectorAll("[data-sub-to]")].map(node => {
+      const rect = node.getBoundingClientRect();
+      return {
+        id: node.getAttribute("data-sub-to"),
+        cx: rect.x + rect.width / 2,
+        cy: rect.y + rect.height / 2,
+        r: Math.min(rect.width, rect.height) / 2,
+        node,
+      };
     });
-    await page.waitForFunction(() => {
-      const lines = document.querySelector("[data-sub-lines]");
-      return lines && getComputedStyle(lines).visibility === "visible" && document.querySelector("[data-sub-target]");
+    const ends = [...document.querySelectorAll("[data-sub-end]")].map(node => node.getAttribute("data-sub-for"));
+    let best = null;
+    ends.forEach(id => {
+      const target = circles.find(circle => circle.id === id);
+      if (!target) return;
+      let gap = Infinity;
+      circles.forEach(circle => {
+        if (circle.id === id) return;
+        gap = Math.min(gap, Math.hypot(target.cx - circle.cx, target.cy - circle.cy) - circle.r - (target.r + 4));
+      });
+      if (!best || gap > best.gap) best = { id, gap, node: target.node };
     });
-    const placed = await page.evaluate((targetId) => {
-      const circles = [...document.querySelectorAll("[data-sub-to]")].filter(node => !node.hasAttribute("data-bury")).map(node => {
-        const rect = node.getBoundingClientRect();
-        return {
-          id: node.getAttribute("data-sub-to"),
-          cx: rect.x + rect.width / 2,
-          cy: rect.y + rect.height / 2,
-          r: Math.min(rect.width, rect.height) / 2,
-        };
-      });
-      const rings = [...document.querySelectorAll("[data-sub-target]")].map(node => {
-        const rect = node.getBoundingClientRect();
-        const forId = node.parentElement?.querySelector("[data-sub-end]")?.getAttribute("data-sub-for") || "";
-        return {
-          forId,
-          cx: rect.x + rect.width / 2,
-          cy: rect.y + rect.height / 2,
-        };
-      });
-      return { circles, rings, targetId };
-    }, buried);
-    assert.ok(placed.rings.length > 0, "target ring is drawn");
-    placed.rings.forEach(ring => {
-      const target = placed.circles.find(circle => circle.id === ring.forId);
-      assert.ok(target, "ring names its target");
-      assert.ok(Math.hypot(ring.cx - target.cx, ring.cy - target.cy) < 2, "ring sits on the target");
-      placed.circles.filter(circle => circle.id !== ring.forId).forEach(circle => {
-        const gap = Math.hypot(ring.cx - circle.cx, ring.cy - circle.cy) - circle.r;
-        assert.ok(gap > 0, `ring is ${(-gap).toFixed(1)}px inside ${circle.id}`);
-      });
+    if (!best) return null;
+    const rect = best.node.getBoundingClientRect();
+    const wrap = document.querySelector("[data-phase]");
+    const origin = wrap.getBoundingClientRect();
+    const size = rect.width + 12;
+    const node = document.createElement("div");
+    node.setAttribute("data-sub-to", "bury-obstacle");
+    node.setAttribute("data-bury", "");
+    node.style.position = "absolute";
+    node.style.left = `${rect.x + rect.width / 2 - origin.left - size / 2}px`;
+    node.style.top = `${rect.y + rect.height / 2 - origin.top - size / 2}px`;
+    node.style.width = `${size}px`;
+    node.style.height = `${size}px`;
+    wrap.appendChild(node);
+    window.dispatchEvent(new Event("orientationchange"));
+    return { id: best.id, gap: best.gap };
+  });
+  assert.ok(buried && buried.gap > 8, `${label} buried a target with room for the stroke`);
+  await page.waitForFunction(() => {
+    const lines = document.querySelector("[data-sub-lines]");
+    return lines && getComputedStyle(lines).visibility === "visible" && document.querySelector("[data-sub-target]");
+  });
+  const placed = await page.evaluate(() => {
+    const circles = [...document.querySelectorAll("[data-sub-to]")].filter(node => !node.hasAttribute("data-bury")).map(node => {
+      const rect = node.getBoundingClientRect();
+      return {
+        id: node.getAttribute("data-sub-to"),
+        cx: rect.x + rect.width / 2,
+        cy: rect.y + rect.height / 2,
+        r: Math.min(rect.width, rect.height) / 2,
+      };
     });
-    const numbers = await page.evaluate(collectScript);
-    const numberBoxes = numbers.filter(box => box.kind === "number");
-    const shown = await page.screenshot({ type: "png" });
-    await page.evaluate(() => {
-      document.querySelectorAll("[data-sub-target]").forEach(node => {
-        node.style.display = "none";
-      });
+    const rings = [...document.querySelectorAll("[data-sub-target]")].map(node => {
+      const rect = node.getBoundingClientRect();
+      const radius = Number(node.getAttribute("r"));
+      const stroke = Number(node.getAttribute("stroke-width")) || 0;
+      const ctm = node.getScreenCTM();
+      const scale = ctm ? Math.hypot(ctm.a, ctm.b) : 1;
+      return {
+        forId: node.parentElement?.querySelector("[data-sub-end]")?.getAttribute("data-sub-for") || "",
+        cx: rect.x + rect.width / 2,
+        cy: rect.y + rect.height / 2,
+        stroke,
+        outer: (radius + stroke / 2) * (scale > 0 ? scale : 1),
+      };
     });
-    const hidden = await page.screenshot({ type: "png" });
-    const diffs = await changedPixels(page, shown.toString("base64"), hidden.toString("base64"), numberBoxes);
-    assert.deepEqual(diffs, [], "ring covers a jersey number");
-  } finally {
-    await page.close();
-  }
-});
+    return { circles, rings };
+  });
+  assert.ok(placed.rings.length > 0, `${label} target ring is drawn`);
+  placed.rings.forEach(ring => {
+    const target = placed.circles.find(circle => circle.id === ring.forId);
+    assert.ok(target, `${label} ring names its target`);
+    assert.ok(ring.stroke > 0, `${label} ring stroke is missing`);
+    assert.ok(Math.hypot(ring.cx - target.cx, ring.cy - target.cy) < 2, `${label} ring sits on the target`);
+    placed.circles.filter(circle => circle.id !== ring.forId).forEach(circle => {
+      const gap = Math.hypot(ring.cx - circle.cx, ring.cy - circle.cy) - circle.r - ring.outer;
+      assert.ok(
+        gap >= -0.5,
+        `${label} ${ring.forId} outer ${ring.outer.toFixed(1)} is ${(-gap).toFixed(1)}px inside ${circle.id}`,
+      );
+    });
+  });
+  const numbers = await page.evaluate(collectScript);
+  const numberBoxes = numbers.filter(box => box.kind === "number");
+  const shown = await page.screenshot({ type: "png" });
+  await page.evaluate(() => {
+    document.querySelectorAll("[data-sub-target]").forEach(node => {
+      node.style.display = "none";
+    });
+  });
+  const hidden = await page.screenshot({ type: "png" });
+  const diffs = await changedPixels(page, shown.toString("base64"), hidden.toString("base64"), numberBoxes);
+  assert.deepEqual(diffs, [], `${label} ring covers a jersey number`);
+}
+
+for (const engineName of ["chromium", "webkit"]) {
+  test(`a buried end dot draws a target ring off neighbour disks in ${engineName}`, async () => {
+    const engine = engineName === "webkit" ? await webkit.launch({ headless: true }) : null;
+    const page = engine
+      ? await engine.newPage({ viewport: { width: 320, height: 640 }, deviceScaleFactor: 1 })
+      : await browser.newPage({ viewport: { width: 320, height: 640 }, deviceScaleFactor: 1 });
+    try {
+      await assertBuriedRing(page, engineName);
+    } finally {
+      await page.close();
+      await engine?.close();
+    }
+  });
+}
