@@ -42,6 +42,7 @@ import {
   stripReturnAtForQuarter,
   vacatedSpotHolder,
   revalidateBackHalfMarks,
+  clearPlayerSegmentsFrom,
   realEventPlayerIds,
   scheduleHalfRotation,
   scheduleWholeGame,
@@ -1263,7 +1264,7 @@ function shapesFor(format, gk, slots) {
   return [{ name: "Standard", label: "Standard", desc: "Default shape for this player count.", slots }];
 }
 
-export function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer, lineupsByQuarter, setLineupsByQuarter, storagePrefix = "ck_guest_", setGames, subMode = true, autoRegen = true, quarterMinutes = null, gameDay, setGameDay, setup }) {
+export function TabGame({ format, league, players, setPlayers, addPlayer, removePlayer, lineupsByQuarter, setLineupsByQuarter, storagePrefix = "ck_guest_", setGames, subMode = true, autoRegen = true, quarterMinutes = null, gameDay, setGameDay, setup, initialNotice = null }) {
   const [quarter,       setQuarterRaw]    = useState(1);
   const [injuryAlerts,  setInjuryAlerts]  = useState([]);
   const [justRegenned,  setJustRegenned]  = useState(false);
@@ -1279,6 +1280,7 @@ export function TabGame({ format, league, players, setPlayers, addPlayer, remove
   const [swapSel, setSwapSel] = useState(null);
   const [fairWarn, setFairWarn] = useState(null);
   const [fairInfo, setFairInfo] = useState(null);
+  const [backHalfNotice, setBackHalfNotice] = useState(initialNotice);
   const [returnAsk, setReturnAsk] = useState(null);
   const [returnToast, setReturnToast] = useState(null);
   const [phaseToast, setPhaseToast] = useState(null);
@@ -1512,14 +1514,19 @@ export function TabGame({ format, league, players, setPlayers, addPlayer, remove
     recentPlanKeys.current = [key, ...recentPlanKeys.current.filter(item => item !== key)].slice(0, 5);
   };
 
-  const applyBackHalfMarks = (roster, nextLineups, nextSegments, fromQuarter) => revalidateBackHalfMarks({
-    players: roster,
-    lineups: nextLineups,
-    segments: nextSegments,
-    fromQuarter,
-    totalQuarters,
-    rate: getOverallRating,
-  });
+  const applyBackHalfMarks = (roster, nextLineups, nextSegments, fromQuarter) => {
+    const checked = revalidateBackHalfMarks({
+      players: roster,
+      lineups: nextLineups,
+      segments: nextSegments,
+      fromQuarter,
+      totalQuarters,
+      rate: getOverallRating,
+      abbrev: abbr,
+    });
+    setBackHalfNotice(checked.notices?.length ? checked.notices.join(" ") : null);
+    return checked;
+  };
 
   const notePlanResult = (nextLineups, roster = players, credit = appearanceCredit, segments = subSegments) => {
     setLineupsByQuarter(nextLineups);
@@ -1852,9 +1859,13 @@ export function TabGame({ format, league, players, setPlayers, addPlayer, remove
     }
     if (!currentL) return;
     let segments = subSegments;
-    if (wasOn) {
+    if (wasOn && live) {
       setAppearanceCredit(credit);
-      if (live) segments = noteSubSegment(segments, playerId, quarter, "left");
+      segments = clearPlayerSegmentsFrom(segments, playerId, Number(quarter) + 1);
+      segments = noteSubSegment(segments, playerId, quarter, "left");
+    } else {
+      if (wasOn) setAppearanceCredit(credit);
+      segments = clearPlayerSegmentsFrom(segments, playerId, quarter);
     }
     const before = new Set((currentL.starters || []).map(slot => slot.player?.id).filter(Boolean));
     const next = pullFromPlan(lineupsByQuarter, playerId, quarter, totalQuarters);
@@ -2825,6 +2836,15 @@ export function TabGame({ format, league, players, setPlayers, addPlayer, remove
           borderRadius:9, padding:"10px 14px", marginBottom:14, fontSize:12, color:"#d6e6f5", lineHeight:1.45,
         }}>
           {fairInfo}
+        </div>
+      )}
+
+      {backHalfNotice && (
+        <div data-testid="back-half-notice" role="status" style={{
+          background:"rgba(93,173,236,0.1)", border:"1px solid rgba(93,173,236,0.35)",
+          borderRadius:9, padding:"10px 14px", marginBottom:14, fontSize:12, color:"#d6e6f5", lineHeight:1.45,
+        }}>
+          {backHalfNotice}
         </div>
       )}
 

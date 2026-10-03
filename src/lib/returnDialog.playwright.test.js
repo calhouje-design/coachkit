@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { access } from "node:fs/promises";
+import { access, copyFile, mkdir } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { createServer } from "vite";
@@ -428,6 +428,28 @@ test("redraw who plays a quarter clears the back-half return", async () => {
     await redraw.click();
     await page.getByText("Q1 redrawn.").waitFor();
     assert.equal(await page.getByTestId("phase-toggle").count(), 0);
+    assert.equal(errors.length, 0, errors.join("\n"));
+  } finally {
+    await page.close();
+  }
+});
+
+test("a stripped back-half mark shows a visible notice", async () => {
+  const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
+  const errors = [];
+  page.on("pageerror", error => errors.push(String(error)));
+  try {
+    await page.goto(`${base}/src/lib/harness/qa-return.html?case=notice`, { waitUntil: "networkidle" });
+    const notice = page.getByTestId("back-half-notice");
+    await notice.waitFor();
+    const text = await notice.innerText();
+    assert.equal(text, "Couldn't keep Wes as 2nd-half only in Q3; he's available for the whole quarter. Adjust if needed.");
+    await notice.evaluate(node => node.scrollIntoView({ block: "center" }));
+    const shot = path.join(os.tmpdir(), "back-half-notice.png");
+    await notice.screenshot({ path: shot });
+    const dir = "/opt/cursor/artifacts/screenshots";
+    await mkdir(dir, { recursive: true });
+    await copyFile(shot, path.join(dir, "back-half-notice.png"));
     assert.equal(errors.length, 0, errors.join("\n"));
   } finally {
     await page.close();

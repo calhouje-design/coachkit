@@ -2,6 +2,7 @@ import { useState } from "react";
 import { createRoot } from "react-dom/client";
 import { TabGame } from "../../App.jsx";
 import {
+  backHalfStripNotice,
   noteSubSegment,
   planAvailability,
   returnToGame,
@@ -14,6 +15,7 @@ const slots = ["GK", "LD", "RD", "LM", "RM", "CF"];
 const positions = ["GK", "LD", "RD", "LM", "RM", "CM", "CF"];
 const params = new URLSearchParams(window.location.search);
 const injury = params.get("case") === "m2";
+const showNotice = params.get("case") === "notice";
 
 const names = ["John Smith", "Wes Johnson", "Jaxon Williams", "Remi Brown", "Sean Jones", "Henry Davis", "Jude Garcia", "Trey Miller", "Maddox Anderson"];
 
@@ -158,6 +160,7 @@ function Harness() {
         setGames={() => {}}
         subMode={!injury}
         autoRegen
+        initialNotice={showNotice ? backHalfStripNotice(players[1], 3, "Q") : null}
         gameDay={gameDay}
         setGameDay={setGameDay}
         setup={setup}
