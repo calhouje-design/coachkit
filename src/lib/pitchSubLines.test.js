@@ -187,7 +187,10 @@ test("a pitch resize remeasures sub lines without a window resize", async () => 
     circle.parentElement.style.left = `${parseFloat(circle.parentElement.style.left) + 36}px`;
     const live = globalThis.__resizeObservers.filter(observer => !observer.disconnected);
     assert.ok(live.length > 0);
-    await act(async () => { live.forEach(observer => observer.callback()); });
+    await act(async () => {
+      live.forEach(observer => observer.callback());
+      await new Promise(resolve => requestAnimationFrame(resolve));
+    });
     const after = Number(view.host.querySelector(`[data-sub-line="${pair.inId}-${pair.outId}"]`).getAttribute("data-x2"));
     assert.ok(Math.abs(after - before - 36) <= 4, `line moved ${after - before}px`);
   } finally {

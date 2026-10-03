@@ -1,4 +1,4 @@
-import { lineStopAtCircle, routeClearOfObstacles } from "./gameDay.js";
+import { lineStopAtCircle, placeTwoWideOnPitch, routeClearOfObstacles } from "./gameDay.js";
 
 const Q_COLORS = {
   1: ["#f4c442", "#b87818"],
@@ -92,10 +92,10 @@ function paintQuarterPanel(ctx, x, y, w, h, panel) {
   ctx.strokeRect(pitchX + pitchW * 0.28, pitchY + 6, pitchW * 0.44, pitchH * 0.14);
   ctx.strokeRect(pitchX + pitchW * 0.28, pitchY + pitchH * 0.86 - 6, pitchW * 0.44, pitchH * 0.14);
 
-  const sx = vx => pitchX + (Number(vx) / 320) * pitchW;
-  const sy = vy => pitchY + (Number(vy) / 480) * pitchH;
-  const rim = (23 / 320) * pitchW;
-  const starters = panel.starters || [];
+  const circle = (46 / 320) * pitchW;
+  const rim = circle / 2;
+  const starters = placeTwoWideOnPitch(panel.starters || [], pitchW, pitchH, circle);
+  const at = (slot) => ({ x: pitchX + slot.x, y: pitchY + slot.y });
   const bench = panel.bench || [];
   const starterById = {};
   starters.forEach(slot => {
@@ -151,30 +151,62 @@ function paintQuarterPanel(ctx, x, y, w, h, panel) {
   ctx.save();
   ctx.font = "bold 8px Arial, sans-serif";
   const nameBoxFor = (slot) => {
-    const px = sx(slot.x);
-    const py = sy(slot.y);
+    const spot = at(slot);
     const nameW = Math.max(18, ctx.measureText(firstName(slot.name).slice(0, 10)).width + 8);
-    return { x: px - nameW / 2, y: py + rim + 2, w: nameW, h: 12 };
+    return { x: spot.x - nameW / 2, y: spot.y + rim + 2, w: nameW, h: 12 };
   };
   const obstaclesFor = (target) => starters.flatMap(slot => {
     const blocks = [nameBoxFor(slot)];
-    if (slot !== target) blocks.unshift({ cx: sx(slot.x), cy: sy(slot.y), r: rim });
+    if (slot !== target) {
+      const spot = at(slot);
+      blocks.unshift({ cx: spot.x, cy: spot.y, r: rim });
+    }
     return blocks;
   });
-  ctx.setLineDash([3, 3]);
-  ctx.strokeStyle = "#2ecc71";
-  ctx.lineWidth = 1.6;
-  ctx.lineJoin = "round";
+  const bounds = { x: pitchX, y: pitchY, w: pitchW, h: pitchH };
+  const benchRect = { x, y, w: benchW, h };
+  const badge = { x: pitchX + 6, y: pitchY + 6, w: 36, h: 18 };
+  const routedLines = [];
+  const elevatedLines = [];
+  const strokeRoute = (points, outline) => {
+    const draw = () => {
+      ctx.beginPath();
+      ctx.moveTo(points[0].x, points[0].y);
+      for (let i = 1; i < points.length; i += 1) ctx.lineTo(points[i].x, points[i].y);
+      ctx.stroke();
+    };
+    if (outline) {
+      ctx.save();
+      ctx.setLineDash([]);
+      ctx.strokeStyle = "#0a0d0f";
+      ctx.lineWidth = 4;
+      ctx.lineJoin = "round";
+      ctx.lineCap = "round";
+      draw();
+      ctx.restore();
+    }
+    ctx.setLineDash([3, 3]);
+    ctx.strokeStyle = "#2ecc71";
+    ctx.lineWidth = 1.6;
+    ctx.lineJoin = "round";
+    ctx.lineCap = "round";
+    draw();
+  };
   cards.forEach(({ player, cardY }) => {
     const target = starterById[pairByIn[player.id]?.outId];
     if (!target) return;
     const dot = dotAt(cardY);
-    const stop = lineStopAtCircle(dot.x, dot.y, sx(target.x), sy(target.y), rim);
-    const points = routeClearOfObstacles(dot.x, dot.y, stop.x, stop.y, obstaclesFor(target));
-    ctx.beginPath();
-    ctx.moveTo(points[0].x, points[0].y);
-    for (let i = 1; i < points.length; i += 1) ctx.lineTo(points[i].x, points[i].y);
-    ctx.stroke();
+    const spot = at(target);
+    const stop = lineStopAtCircle(dot.x, dot.y, spot.x, spot.y, rim);
+    const points = routeClearOfObstacles(dot.x, dot.y, stop.x, stop.y, obstaclesFor(target), 3, {
+      bounds,
+      bench: benchRect,
+      badge,
+      lines: routedLines,
+    });
+    routedLines.push(points);
+    if (points.elevated) elevatedLines.push(points);
+    else strokeRoute(points, false);
   });
   ctx.restore();
   cards.forEach(({ player, cardY }) => {
@@ -210,8 +242,9 @@ function paintQuarterPanel(ctx, x, y, w, h, panel) {
   }
 
   starters.forEach(slot => {
-    const px = sx(slot.x);
-    const py = sy(slot.y);
+    const spot = at(slot);
+    const px = spot.x;
+    const py = spot.y;
     const grad = ctx.createRadialGradient(px - 4, py - 4, 1, px, py, rim);
     grad.addColorStop(0, "#f5c86a");
     grad.addColorStop(1, "#b87818");
@@ -240,6 +273,11 @@ function paintQuarterPanel(ctx, x, y, w, h, panel) {
     ctx.textBaseline = "middle";
     ctx.fillText(label, px, py + rim + 8);
   });
+  if (elevatedLines.length) {
+    ctx.save();
+    elevatedLines.forEach(points => strokeRoute(points, true));
+    ctx.restore();
+  }
   ctx.restore();
 }
 

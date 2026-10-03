@@ -763,7 +763,7 @@ function SoccerField({ lineup, onTap, selectedIdx, quarter, periodAbbrev = "Q", 
 
   return (
     <div ref={rootRef} style={{ position:"relative", width:"100%", margin:"0 auto", userSelect:"none" }}>
-      <svg viewBox="0 0 320 480" style={{ width:"100%", display:"block", borderRadius:10, position:"relative", zIndex:0 }}>
+      <svg data-pitch-svg="" viewBox="0 0 320 480" style={{ width:"100%", display:"block", borderRadius:10, position:"relative", zIndex:0 }}>
         <rect x="5" y="5" width="310" height="470" rx="8" fill="#1e4d1a" stroke="#fff" strokeWidth="1.5"/>
         <rect x="5" y="5" width="310" height="470" rx="8" fill="url(#grass)"/>
         <defs>
@@ -3236,6 +3236,7 @@ export function TabGame({ format, league, players, setPlayers, addPlayer, remove
             >
               {displayLineup && (
                 <div
+                  data-bench-column=""
                   data-drop={phase === "after" ? undefined : "bench-zone"}
                   style={{
                     width:76, flexShrink:0, display:"flex", flexDirection:"column",
@@ -3358,13 +3359,26 @@ export function TabGame({ format, league, players, setPlayers, addPlayer, remove
               </div>
               {subLines.length > 0 && (
                 <svg style={{position:"absolute", inset:0, width:"100%", height:"100%", pointerEvents:"none", zIndex:5, overflow:"visible"}}>
-                  {subLines.map(line => (
+                  {subLines.filter(line => !line.elevated).map(line => (
                     <polyline key={line.key}
                       points={(line.points || [{ x: line.x1, y: line.y1 }, { x: line.x2, y: line.y2 }]).map(point => `${point.x},${point.y}`).join(" ")}
                       fill="none"
                       stroke="#2ecc71" strokeWidth="2" strokeDasharray="5 4" strokeLinecap="round" strokeLinejoin="round"
                     />
                   ))}
+                </svg>
+              )}
+              {subLines.some(line => line.elevated) && (
+                <svg style={{position:"absolute", inset:0, width:"100%", height:"100%", pointerEvents:"none", zIndex:13, overflow:"visible"}}>
+                  {subLines.filter(line => line.elevated).map(line => {
+                    const points = (line.points || [{ x: line.x1, y: line.y1 }, { x: line.x2, y: line.y2 }]).map(point => `${point.x},${point.y}`).join(" ");
+                    return (
+                      <g key={line.key}>
+                        <polyline points={points} fill="none" stroke="#0a0d0f" strokeWidth="5" strokeLinecap="round" strokeLinejoin="round" />
+                        <polyline points={points} fill="none" stroke="#2ecc71" strokeWidth="2" strokeDasharray="5 4" strokeLinecap="round" strokeLinejoin="round" />
+                      </g>
+                    );
+                  })}
                 </svg>
               )}
             </div>

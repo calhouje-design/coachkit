@@ -31,6 +31,7 @@ import {
   formatQuarterEquity,
   lineStopAtCircle,
   routeClearOfObstacles,
+  isMirroredPair,
   fieldMarker,
   shareFieldSheet,
   sharePlayTimeSheet,
@@ -326,7 +327,8 @@ test("a connector stops on the circle rim, not the center", () => {
 
 test("a sub line bends around another circle and the name under it", () => {
   const open = routeClearOfObstacles(0, 0, 40, 0, [{ cx: 20, cy: 40, r: 10 }]);
-  assert.deepEqual(open, [{ x: 0, y: 0 }, { x: 40, y: 0 }]);
+  assert.equal(open.elevated, false);
+  assert.deepEqual(open.map(point => ({ x: point.x, y: point.y })), [{ x: 0, y: 0 }, { x: 40, y: 0 }]);
 
   const circle = { cx: 191.3, cy: 319.8, r: 23 };
   const name = { x: 167.3, y: 344.8, w: 48, h: 12.8 };
@@ -352,6 +354,16 @@ test("a sub line bends around another circle and the name under it", () => {
     }
     assert.ok(nearest >= circle.r + gap - 0.2, `bend comes within ${nearest.toFixed(1)}px of the circle`);
   }
+});
+
+test("a blocked line is drawn elevated instead of cutting through", () => {
+  const wall = { cx: 50, cy: 10, r: 30 };
+  const bounds = { x: 0, y: 0, w: 100, h: 20 };
+  const routed = routeClearOfObstacles(2, 10, 98, 10, [wall], 3, { bounds });
+  assert.equal(routed.elevated, true);
+  assert.deepEqual([...routed], [{ x: 2, y: 10 }, { x: 98, y: 10 }]);
+  const open = routeClearOfObstacles(0, 0, 40, 0, [{ cx: 20, cy: 80, r: 10 }]);
+  assert.equal(open.elevated, false);
 });
 
 test("a crowded 320px line skirts the circle instead of cutting through it", () => {
