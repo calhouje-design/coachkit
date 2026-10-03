@@ -10,6 +10,7 @@ import {
   settleAvailability,
   withoutReturnAt,
   showDoneForToday,
+  backHalfStatusNotice,
   toggleRosterInjured,
   toggleRosterOut,
 } from "./playerStatus.js";
@@ -133,4 +134,22 @@ test("the done-for-today badge renders only while the player is out or injured",
     root.unmount();
   });
   host.remove();
+});
+
+test("an out or injured returner gets a status notice before the mark is cleared", () => {
+  const wes = {
+    id: "p2",
+    name: "Wes Johnson",
+    returnAt: { quarter: 3, half: "back" },
+  };
+  assert.equal(
+    backHalfStatusNotice({ ...wes, out: true, injured: false }),
+    "Wes is marked Out, so his 2nd-half return in Q3 was cleared.",
+  );
+  assert.equal(
+    backHalfStatusNotice({ ...wes, out: false, injured: true }),
+    "Wes is marked Injured, so his 2nd-half return in Q3 was cleared.",
+  );
+  assert.equal(backHalfStatusNotice({ ...wes, out: false, injured: false }), null);
+  assert.equal(backHalfStatusNotice(markOut({ ...wes, out: true }, { returnQuarter: null })), null);
 });

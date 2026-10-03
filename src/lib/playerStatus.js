@@ -16,6 +16,20 @@ export function withoutReturnAt(player) {
   return next;
 }
 
+/**
+ * The returner himself was marked Out or Injured, so the 2nd-half mark is cleared.
+ * Pass the player after out/injured is set and before the mark is removed.
+ */
+export function backHalfStatusNotice(player, abbrev = "Q") {
+  const record = player?.returnAt;
+  const quarter = Number(record?.quarter);
+  if (!record || record.half !== "back" || !quarter) return null;
+  const status = player.injured ? "Injured" : player.out ? "Out" : null;
+  if (!status) return null;
+  const name = String(player?.name || "This player").trim().split(/\s+/)[0] || "This player";
+  return `${name} is marked ${status}, so his 2nd-half return in ${abbrev}${quarter} was cleared.`;
+}
+
 /** Roster Inj toggle. Clears a stale done-for-today mark because availability changed. */
 export function toggleRosterInjured(player) {
   return withoutDoneFlag(withoutReturnAt({ ...player, injured: !player.injured, out: false }));

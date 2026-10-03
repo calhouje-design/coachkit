@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { access, copyFile, mkdir } from "node:fs/promises";
+import { access } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { createServer } from "vite";
@@ -442,14 +442,14 @@ test("a stripped back-half mark shows a visible notice", async () => {
     await page.goto(`${base}/src/lib/harness/qa-return.html?case=notice`, { waitUntil: "networkidle" });
     const notice = page.getByTestId("back-half-notice");
     await notice.waitFor();
-    const text = await notice.innerText();
+    const text = await notice.locator("span").innerText();
     assert.equal(text, "Couldn't keep Wes as 2nd-half only in Q3; he's available for the whole quarter. Adjust if needed.");
+    const dismiss = page.getByTestId("back-half-notice-dismiss");
+    assert.equal(await dismiss.innerText(), "Dismiss");
     await notice.evaluate(node => node.scrollIntoView({ block: "center" }));
-    const shot = path.join(os.tmpdir(), "back-half-notice.png");
-    await notice.screenshot({ path: shot });
-    const dir = "/opt/cursor/artifacts/screenshots";
-    await mkdir(dir, { recursive: true });
-    await copyFile(shot, path.join(dir, "back-half-notice.png"));
+    await notice.screenshot({ path: path.join(os.tmpdir(), "back-half-notice.png") });
+    await dismiss.click();
+    assert.equal(await page.getByTestId("back-half-notice").count(), 0);
     assert.equal(errors.length, 0, errors.join("\n"));
   } finally {
     await page.close();

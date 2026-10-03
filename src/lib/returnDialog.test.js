@@ -26,6 +26,7 @@ import {
   revalidateBackHalfMarks,
   backHalfStripNotice,
   clearPlayerSegmentsFrom,
+  nextBackHalfNotice,
   scheduleHalfRotation,
   scheduleWholeGame,
   segmentAt,
@@ -35,7 +36,7 @@ import {
   vacatedSpotHolder,
 } from "./gameDay.js";
 import { redrawQuarterMembership } from "./fairPlay.js";
-import { markInjured, markOut } from "./playerStatus.js";
+import { backHalfStatusNotice, markInjured, markOut } from "./playerStatus.js";
 import { formationKey, sameAfterLineup, viewAfterSubs, withBackHalfShare } from "./afterSubs.js";
 import {
   availabilityCopy,
@@ -65,15 +66,15 @@ function roster(count = 9) {
   }));
 }
 
-function openSheet(players, subMode, seed = 3) {
+function openSheet(players, subMode, seed = 3, slots = SLOTS, format = "6v6") {
   if (subMode) {
-    return scheduleHalfRotation(players, SLOTS, { minHalves: 4, totalQuarters: 4, seed });
+    return scheduleHalfRotation(players, slots, { minHalves: 4, totalQuarters: 4, seed });
   }
   return {
     lineups: scheduleWholeGame({
       players,
-      format: "6v6",
-      slotOverride: SLOTS,
+      format,
+      slotOverride: slots,
       totalPeriods: 4,
       minFraction: 0.5,
       seed,
@@ -1517,7 +1518,7 @@ function halfCensus(players, lineups, segments, quarter) {
   return { h1, h2, slotN, exact: h1 === slotN && h2 === slotN };
 }
 
-function injureStarter(players, lineups, segments, id, subMode, quarter = 2) {
+function injureStarter(players, lineups, segments, id, subMode, quarter = 2, slots = SLOTS) {
   const absent = players.map(player => (
     player.id === id
       ? { ...player, injured: true, out: false, midGameInjury: true, injuredInQuarter: quarter, returnQuarter: null }
@@ -1531,7 +1532,7 @@ function injureStarter(players, lineups, segments, id, subMode, quarter = 2) {
     quarter,
     lineups,
     segments,
-    slots: SLOTS,
+    slots,
     subMode,
     minHalves: 4,
     totalQuarters: 4,
@@ -1768,7 +1769,7 @@ function withAbsence(state, id, quarter) {
     quarter,
     lineups: state.lineups,
     segments: state.segments,
-    slots: SLOTS,
+    slots: state.slots || SLOTS,
     subMode: state.subMode,
     minHalves: 4,
     totalQuarters: 4,
@@ -1784,7 +1785,7 @@ function returnFor(state, id, quarter, half) {
     half,
     lineups: state.lineups,
     segments: state.segments,
-    slots: SLOTS,
+    slots: state.slots || SLOTS,
     subMode: state.subMode,
     minHalves: 4,
     totalQuarters: 4,
@@ -1825,7 +1826,7 @@ function markAbsentLikeApp(state, id, quarter, mode) {
     quarter,
     lineups: state.lineups,
     segments: state.segments,
-    slots: SLOTS,
+    slots: state.slots || SLOTS,
     subMode: state.subMode,
     minHalves: 4,
     totalQuarters: 4,
@@ -1842,10 +1843,11 @@ function markAbsentLikeApp(state, id, quarter, mode) {
 }
 
 function replanLikeApp(state, fromQuarter) {
+  const slots = state.slots || SLOTS;
   const locked = {};
   for (let q = 1; q < fromQuarter; q += 1) locked[q] = state.lineups[q];
   const planned = state.subMode
-    ? scheduleHalfRotation(state.players, SLOTS, {
+    ? scheduleHalfRotation(state.players, slots, {
       minHalves: 4,
       fromQuarter,
       lockedLineups: locked,
@@ -1855,8 +1857,8 @@ function replanLikeApp(state, fromQuarter) {
     : {
       lineups: scheduleWholeGame({
         players: state.players,
-        format: "6v6",
-        slotOverride: SLOTS,
+        format: state.format || "6v6",
+        slotOverride: slots,
         lockedLineups: locked,
         fromQuarter,
         totalPeriods: 4,
@@ -1884,14 +1886,14 @@ function sheetPlayers(lineup) {
 }
 
 function halfOwners(lineup, segments, quarter) {
-  let h1 = 0;
-  let h2 = 0;
+  const h1Ids = [];
+  const h2Ids = [];
   sheetPlayers(lineup).forEach(id => {
     const mask = playerHalfMask(id, lineup, segmentAt(segments, id, quarter));
-    if (mask[0]) h1 += 1;
-    if (mask[1]) h2 += 1;
+    if (mask[0]) h1Ids.push(id);
+    if (mask[1]) h2Ids.push(id);
   });
-  return { h1, h2 };
+  return { h1: h1Ids.length, h2: h2Ids.length, h1Ids, h2Ids };
 }
 
 function assertBackHalfInvariants(label, raw, checked, fromQuarter) {
@@ -1921,6 +1923,10 @@ function assertBackHalfInvariants(label, raw, checked, fromQuarter) {
       const afterHalves = equityHalves(player.id, { lineups: checked.lineups, segments: checked.segments, credit: {}, quarters: [q] });
       if (afterHalves >= beforeHalves) return;
       assert.equal(beforeHalves - afterHalves, 1, `${label} Q${q} ${player.name} lost more than a half`);
+      const droppedExtraLeft = segmentAt(raw.segments, player.id, q) === "left"
+        && segmentAt(checked.segments, player.id, q) == null
+        && !donorIds.has(player.id);
+      if (droppedExtraLeft) return;
       assert.ok(
         returnerIds.has(player.id) || donorIds.has(player.id),
         `${label} Q${q} ${player.name} lost a half without being the returner or the donor`,
@@ -1928,6 +1934,16 @@ function assertBackHalfInvariants(label, raw, checked, fromQuarter) {
     });
     const owners = halfOwners(lineup, checked.segments, q);
     assert.equal(owners.h2, on, `${label} Q${q} second-half owners ${owners.h2} field ${on}`);
+    assert.equal(new Set(owners.h1Ids).size, owners.h1Ids.length, `${label} Q${q} H1 owners are not distinct`);
+    assert.equal(new Set(owners.h2Ids).size, owners.h2Ids.length, `${label} Q${q} H2 owners are not distinct`);
+    const credit = owners.h1 + owners.h2;
+    const injuryExtras = checked.players.filter(player => (
+      isBackHalfReturn(player, q)
+      && Number(player.injuredInQuarter) === q
+      && segmentAt(checked.segments, player.id, q) !== "entered"
+    )).length;
+    const creditOk = credit === on * 2 || (injuryExtras > 0 && credit === on * 2 + injuryExtras);
+    assert.equal(creditOk, true, `${label} Q${q} credit ${credit} field ${on} extras ${injuryExtras}`);
     checked.players.filter(player => isBackHalfReturn(player, q)).forEach(returner => {
       const view = quarterHalfPresentation(lineup, checked.segments, q, { returnerId: returner.id });
       const who = `${label} ${returner.name || returner.id} Q${q}`;
@@ -1961,13 +1977,15 @@ function assertBackHalfInvariants(label, raw, checked, fromQuarter) {
   });
 }
 
-function markOutManual(state, id, quarter) {
-  const players = state.players.map(player => (
-    player.id === id
-      ? markOut(player, { injuredInQuarter: quarter, returnQuarter: null, midGameInjury: false })
-      : player
-  ));
-  const segments = clearPlayerSegmentsFrom(state.segments, id, quarter);
+function markOutManual(state, id, quarter, mode = "out") {
+  const players = state.players.map(player => {
+    if (player.id !== id) return player;
+    const extra = { injuredInQuarter: quarter, returnQuarter: null };
+    return mode === "injury"
+      ? markInjured(player, { ...extra, midGameInjury: true })
+      : markOut(player, { ...extra, midGameInjury: false });
+  });
+  const segments = clearPlayerSegmentsFrom(state.segments, id, quarter, state.lineups);
   return {
     players,
     lineups: pullFromPlan(state.lineups, id, quarter, 4),
@@ -2136,92 +2154,328 @@ test("marking an out donor clears his future-quarter half", () => {
   }
 });
 
+const FORMAT_SLOTS = {
+  "5v5": ["GK", "LD", "RD", "CM", "CF"],
+  "6v6": SLOTS,
+  "7v7": ["GK", "LD", "RD", "LM", "CM", "RM", "CF"],
+  "9v9": ["GK", "LD", "CD", "RD", "LM", "CM", "RM", "LF", "RF"],
+};
+
+const SWEEP_TRIGGERS = [
+  "Out",
+  "Injured",
+  "earlier back-half return",
+  "whole-quarter return",
+  "Replan",
+  "Replan Q2",
+  "Replan Q3",
+  "Replan Q4",
+  "auto replan off plus Out",
+  "auto replan off plus Injured",
+  "second injury",
+  "second out",
+  "Out Q3",
+  "Injured Q3",
+  "later back-half return",
+  "later whole-quarter return",
+];
+
 test("every replan trigger keeps a back-half constraint or posts a notice", () => {
+  assert.equal(SWEEP_TRIGGERS.length, 16);
   const totals = {};
+  const seen = new Set();
   [true, false].forEach(subMode => {
-    [8, 9, 10, 11, 12].forEach(count => {
-      for (let seed = 1; seed <= 10; seed += 1) {
-        [1, 2].forEach(marks => {
-          const players = namedRoster([
-            "John Smith", "Wes Johnson", "Jaxon Williams", "Remi Brown", "Sean Jones",
-            "Henry Davis", "Jude Garcia", "Trey Miller", "Maddox Anderson", "Leo Martinez",
-            "Nico Thomas", "Owen Clark",
-          ].slice(0, count));
-          const opened = openSheet(players, subMode, seed);
-          let state = { players, lineups: opened.lineups, segments: opened.segments, subMode };
-          const wes = state.players[1];
-          state = withAbsence(state, wes.id, 1);
-          state = returnFor(state, wes.id, 3, "back");
-          if (state.refused) return;
-          if (marks === 2) {
-            const other = state.players[2];
-            state = withAbsence(state, other.id, 1);
-            state = returnFor(state, other.id, 4, "back");
+    Object.entries(FORMAT_SLOTS).forEach(([format, slots]) => {
+      [8, 9, 10, 11, 12].forEach(count => {
+        for (let seed = 1; seed <= 10; seed += 1) {
+          [1, 2].forEach(marks => {
+            const players = namedRoster([
+              "John Smith", "Wes Johnson", "Jaxon Williams", "Remi Brown", "Sean Jones",
+              "Henry Davis", "Jude Garcia", "Trey Miller", "Maddox Anderson", "Leo Martinez",
+              "Nico Thomas", "Owen Clark",
+            ].slice(0, count));
+            const opened = openSheet(players, subMode, seed, slots, format);
+            let state = {
+              players, lineups: opened.lineups, segments: opened.segments, subMode, slots, format,
+            };
+            const wes = state.players[1];
+            state = withAbsence(state, wes.id, 1);
+            state = returnFor(state, wes.id, 3, "back");
             if (state.refused) return;
-          }
-          const mode = `${subMode ? "sub" : "full"} ${marks === 1 ? "1 injury" : "2 injuries"}`;
-          const jaxon = state.players.find(player => player.name.startsWith("Jaxon")) || state.players[3];
-          const run = (name, from, raw) => {
-            const checked = revalidateBackHalfMarks({
-              players: raw.players,
-              lineups: raw.lineups,
-              segments: raw.segments,
-              fromQuarter: from,
-              totalQuarters: 4,
-            });
-            const label = `${mode} seed ${seed} roster ${count} ${name}`;
-            assertBackHalfInvariants(label, raw, checked, from);
-            const key = `${subMode ? "sub" : "full"} ${name}`;
-            const kept = isBackHalfReturn(checked.players.find(player => player.id === wes.id), 3);
-            totals[key] = totals[key] || { kept: 0, stripped: 0 };
-            totals[key][kept ? "kept" : "stripped"] += 1;
-          };
-          run("Out", 1, markAbsentLikeApp({ ...state }, jaxon.id, 1, "out"));
-          run("Injured", 1, markAbsentLikeApp({ ...state }, jaxon.id, 1, "injury"));
-          const earlierSit = withAbsence(state, jaxon.id, 1);
-          const earlierBack = returnFor(earlierSit, jaxon.id, 2, "back");
-          if (!earlierBack.refused) run("earlier back-half return", 3, earlierBack);
-          const whole = returnFor(withAbsence(state, jaxon.id, 1), jaxon.id, 2, "whole");
-          if (!whole.refused) run("whole-quarter return", 2, whole);
-          run("Replan", 1, replanLikeApp(state, 1));
-          const outfield = (state.lineups[2]?.starters || []).find(slot => slot.player && !isGkPosition(slot.pos) && slot.player.id !== wes.id);
-          if (outfield) run("auto replan off plus Out", 2, markOutManual(state, outfield.player.id, 2));
-          const q2starter = (state.lineups[2]?.starters || []).find(slot => slot.player && !isGkPosition(slot.pos));
-          if (q2starter) {
-            const injured = injureStarter(state.players, state.lineups, state.segments, q2starter.player.id, subMode, 2);
-            const returned = returnToGame({
-              players: injured.players, playerId: q2starter.player.id, quarter: 2, half: "back",
-              lineups: injured.lineups, segments: injured.segments, slots: SLOTS, subMode, minHalves: 4, totalQuarters: 4, livePeriod: true,
-            });
-            if (!returned.refused) {
-              const other = (returned.lineups[2]?.starters || []).find(slot => (
-                slot.player && !isGkPosition(slot.pos) && slot.player.id !== q2starter.player.id
-              ));
-              if (other) {
-                run("second injury", 2, markAbsentLikeApp({
-                  players: returned.players, lineups: returned.lineups, segments: returned.segments, subMode,
-                }, other.player.id, 2, "injury"));
+            if (marks === 2) {
+              const other = state.players[2];
+              state = withAbsence(state, other.id, 1);
+              state = returnFor(state, other.id, 4, "back");
+              if (state.refused) return;
+            }
+            const mode = `${format} ${subMode ? "sub" : "full"} ${marks === 1 ? "1 injury" : "2 injuries"}`;
+            const jaxon = state.players.find(player => player.name.startsWith("Jaxon")) || state.players[3];
+            const run = (name, from, raw) => {
+              const checked = revalidateBackHalfMarks({
+                players: raw.players,
+                lineups: raw.lineups,
+                segments: raw.segments,
+                fromQuarter: from,
+                totalQuarters: 4,
+              });
+              const label = `${mode} seed ${seed} roster ${count} ${name}`;
+              assertBackHalfInvariants(label, raw, checked, from);
+              const key = `${format} ${subMode ? "sub" : "full"} ${name}`;
+              const kept = isBackHalfReturn(checked.players.find(player => player.id === wes.id), 3);
+              totals[key] = totals[key] || { kept: 0, stripped: 0 };
+              totals[key][kept ? "kept" : "stripped"] += 1;
+              seen.add(`${format} ${subMode ? "sub" : "full"} ${name}`);
+            };
+            const q3starter = (state.lineups[3]?.starters || []).find(slot => (
+              slot.player && !isGkPosition(slot.pos) && slot.player.id !== wes.id
+            ));
+            run("Out", 1, markAbsentLikeApp({ ...state }, jaxon.id, 1, "out"));
+            run("Injured", 1, markAbsentLikeApp({ ...state }, jaxon.id, 1, "injury"));
+            const earlierSit = withAbsence(state, jaxon.id, 1);
+            const earlierBack = returnFor(earlierSit, jaxon.id, 2, "back");
+            if (!earlierBack.refused) run("earlier back-half return", 3, earlierBack);
+            const whole = returnFor(withAbsence(state, jaxon.id, 1), jaxon.id, 2, "whole");
+            if (!whole.refused) run("whole-quarter return", 2, whole);
+            run("Replan", 1, replanLikeApp(state, 1));
+            run("Replan Q2", 2, replanLikeApp(state, 2));
+            run("Replan Q3", 3, replanLikeApp(state, 3));
+            run("Replan Q4", 4, replanLikeApp(state, 4));
+            const outfield = (state.lineups[2]?.starters || []).find(slot => slot.player && !isGkPosition(slot.pos) && slot.player.id !== wes.id);
+            if (outfield) {
+              run("auto replan off plus Out", 2, markOutManual(state, outfield.player.id, 2));
+              run("auto replan off plus Injured", 2, markOutManual(state, outfield.player.id, 2, "injury"));
+            }
+            const q2starter = (state.lineups[2]?.starters || []).find(slot => slot.player && !isGkPosition(slot.pos));
+            if (q2starter) {
+              const injured = injureStarter(
+                state.players, state.lineups, state.segments, q2starter.player.id, subMode, 2, slots,
+              );
+              const returned = returnToGame({
+                players: injured.players, playerId: q2starter.player.id, quarter: 2, half: "back",
+                lineups: injured.lineups, segments: injured.segments, slots, subMode, minHalves: 4, totalQuarters: 4, livePeriod: true,
+              });
+              if (!returned.refused) {
+                const other = (returned.lineups[2]?.starters || []).find(slot => (
+                  slot.player && !isGkPosition(slot.pos) && slot.player.id !== q2starter.player.id
+                ));
+                if (other) {
+                  const carried = {
+                    players: returned.players, lineups: returned.lineups, segments: returned.segments, subMode, slots, format,
+                  };
+                  run("second injury", 2, markAbsentLikeApp(carried, other.player.id, 2, "injury"));
+                  run("second out", 2, markAbsentLikeApp(carried, other.player.id, 2, "out"));
+                }
               }
             }
-          }
-        });
-      }
+            if (q3starter) {
+              run("Out Q3", 3, markAbsentLikeApp({ ...state }, q3starter.player.id, 3, "out"));
+              run("Injured Q3", 3, markAbsentLikeApp({ ...state }, q3starter.player.id, 3, "injury"));
+            }
+            const laterBack = returnFor(withAbsence(state, jaxon.id, 1), jaxon.id, 4, "back");
+            if (!laterBack.refused) run("later back-half return", 4, laterBack);
+            const laterWhole = returnFor(withAbsence(state, jaxon.id, 1), jaxon.id, 4, "whole");
+            if (!laterWhole.refused) run("later whole-quarter return", 4, laterWhole);
+          });
+        }
+      });
     });
   });
-  assert.deepEqual(totals, {
-    "sub Out": { kept: 80, stripped: 0 },
-    "sub Injured": { kept: 80, stripped: 0 },
-    "sub earlier back-half return": { kept: 60, stripped: 20 },
-    "sub whole-quarter return": { kept: 60, stripped: 20 },
-    "sub Replan": { kept: 80, stripped: 0 },
-    "sub auto replan off plus Out": { kept: 70, stripped: 10 },
-    "sub second injury": { kept: 61, stripped: 19 },
+  SWEEP_TRIGGERS.forEach(name => {
+    ["5v5", "6v6", "7v7", "9v9"].forEach(format => {
+      ["sub", "full"].forEach(mode => {
+        const key = `${format} ${mode} ${name}`;
+        assert.ok(seen.has(key), `${key} never ran`);
+        assert.ok(totals[key].kept + totals[key].stripped > 0, `${key} had no cases`);
+      });
+    });
+  });
+  const six = {};
+  Object.entries(totals).forEach(([key, value]) => {
+    if (key.startsWith("6v6 ")) six[key.slice(4)] = value;
+  });
+  assert.deepEqual(six, {
+    "sub Out": { kept: 20, stripped: 60 },
+    "sub Injured": { kept: 20, stripped: 60 },
+    "sub earlier back-half return": { kept: 40, stripped: 40 },
+    "sub whole-quarter return": { kept: 40, stripped: 40 },
+    "sub Replan": { kept: 60, stripped: 20 },
+    "sub Replan Q2": { kept: 20, stripped: 60 },
+    "sub Replan Q3": { kept: 15, stripped: 65 },
+    "sub Replan Q4": { kept: 80, stripped: 0 },
+    "sub auto replan off plus Out": { kept: 30, stripped: 50 },
+    "sub auto replan off plus Injured": { kept: 30, stripped: 50 },
+    "sub second injury": { kept: 1, stripped: 79 },
+    "sub second out": { kept: 1, stripped: 79 },
+    "sub Out Q3": { kept: 5, stripped: 75 },
+    "sub Injured Q3": { kept: 5, stripped: 75 },
+    "sub later back-half return": { kept: 80, stripped: 0 },
+    "sub later whole-quarter return": { kept: 80, stripped: 0 },
     "full Out": { kept: 100, stripped: 0 },
     "full Injured": { kept: 100, stripped: 0 },
     "full earlier back-half return": { kept: 100, stripped: 0 },
     "full whole-quarter return": { kept: 100, stripped: 0 },
     "full Replan": { kept: 100, stripped: 0 },
-    "full auto replan off plus Out": { kept: 90, stripped: 10 },
+    "full Replan Q2": { kept: 100, stripped: 0 },
+    "full Replan Q3": { kept: 100, stripped: 0 },
+    "full Replan Q4": { kept: 100, stripped: 0 },
+    "full auto replan off plus Out": { kept: 75, stripped: 25 },
+    "full auto replan off plus Injured": { kept: 75, stripped: 25 },
     "full second injury": { kept: 90, stripped: 10 },
+    "full second out": { kept: 90, stripped: 10 },
+    "full Out Q3": { kept: 0, stripped: 100 },
+    "full Injured Q3": { kept: 0, stripped: 100 },
+    "full later back-half return": { kept: 100, stripped: 0 },
+    "full later whole-quarter return": { kept: 100, stripped: 0 },
   });
+});
+
+function quarterCredit(players, lineups, segments, quarter) {
+  return players.reduce((sum, player) => sum + quarterHalves(player.id, lineups, segments, quarter), 0);
+}
+
+test("Wes is not given John, who already owns Sean's first half", () => {
+  const players = namedRoster([
+    "John Smith", "Wes Johnson", "Jaxon Williams", "Remi Brown", "Sean Jones",
+    "Henry Davis", "Jude Garcia", "Trey Miller", "Maddox Anderson",
+  ]);
+  const [john, wes, jaxon, remi, sean, henry, jude, trey, maddox] = players;
+  const starters = [
+    { pos: "GK", player: henry },
+    { pos: "LD", player: wes },
+    { pos: "RD", player: jude },
+    { pos: "LM", player: sean },
+    { pos: "RM", player: trey },
+    { pos: "CF", player: maddox },
+  ];
+  const marked = players.map(player => (
+    player.id === wes.id
+      ? { ...player, returnQuarter: 3, injuredInQuarter: 1, returnAt: { quarter: 3, half: "back" } }
+      : player
+  ));
+  const trap = {
+    3: { starters: starters.map(slot => ({ ...slot })), bench: [john, remi, jaxon] },
+  };
+  const trapSegments = {
+    [sean.id]: { 3: "entered" },
+    [trey.id]: { 3: "entered" },
+    [maddox.id]: { 3: "entered" },
+    [john.id]: { 3: "left" },
+    [remi.id]: { 3: "left" },
+    [jaxon.id]: { 3: "left" },
+  };
+  assert.equal(quarterCredit(players, trap, trapSegments, 3), 12);
+  const trapped = revalidateBackHalfMarks({
+    players: marked, lineups: trap, segments: trapSegments, fromQuarter: 3, totalQuarters: 4,
+  });
+  assert.equal(quarterCredit(players, trapped.lineups, trapped.segments, 3), 12);
+  const owners = halfOwners(trapped.lineups[3], trapped.segments, 3);
+  assert.equal(new Set(owners.h1Ids).size, owners.h1Ids.length);
+  assert.equal(owners.h1 + owners.h2, 12);
+  if (isBackHalfReturn(trapped.players.find(player => player.id === wes.id), 3)) {
+    const view = quarterHalfPresentation(trapped.lineups[3], trapped.segments, 3, { returnerId: wes.id });
+    assert.notEqual(view.pairs[0].outId, john.id);
+    assert.equal(segmentAt(trapped.segments, john.id, 3), "left");
+  } else {
+    assert.deepEqual(trapped.notices, [backHalfStripNotice(wes, 3, "Q")]);
+    assert.equal(segmentAt(trapped.segments, john.id, 3), "left");
+    assert.equal(segmentAt(trapped.segments, sean.id, 3), "entered");
+  }
+
+  const openBench = {
+    3: { starters: starters.map(slot => ({ ...slot })), bench: [john, remi, jaxon] },
+  };
+  const openSegments = {
+    [sean.id]: { 3: "entered" },
+    [john.id]: { 3: "left" },
+  };
+  assert.equal(quarterCredit(players, openBench, openSegments, 3), 12);
+  const installed = revalidateBackHalfMarks({
+    players: marked, lineups: openBench, segments: openSegments, fromQuarter: 3, totalQuarters: 4,
+  });
+  assert.equal(installed.notices.length, 0);
+  assert.equal(isBackHalfReturn(installed.players.find(player => player.id === wes.id), 3), true);
+  assert.equal(quarterCredit(players, installed.lineups, installed.segments, 3), 12);
+  const view = quarterHalfPresentation(installed.lineups[3], installed.segments, 3, { returnerId: wes.id });
+  assert.equal(view.pairs[0].outId, remi.id);
+  assert.notEqual(view.pairs[0].outId, john.id);
+  assert.equal(segmentAt(installed.segments, john.id, 3), "left");
+  assert.equal(segmentAt(installed.segments, sean.id, 3), "entered");
+  assert.equal(view.start.starters.some(slot => slot.player?.id === wes.id), false);
+});
+
+test("clearing an out player's half also clears his partner", () => {
+  const players = namedRoster([
+    "John Smith", "Wes Johnson", "Jaxon Williams", "Remi Brown", "Sean Jones",
+    "Henry Davis", "Jude Garcia", "Trey Miller", "Maddox Anderson",
+  ]);
+  const field = players.slice(0, 6);
+  const bench = players.slice(6);
+  const lineups = {};
+  for (let quarter = 1; quarter <= 4; quarter += 1) {
+    lineups[quarter] = {
+      starters: SLOTS.map((pos, index) => ({ pos, player: field[index] })),
+      bench: bench.map(player => ({ ...player })),
+    };
+  }
+  const entered = field[4];
+  const left = bench[0];
+  const segments = {
+    [entered.id]: { 2: "entered" },
+    [left.id]: { 2: "left" },
+  };
+  assert.equal(quarterCredit(players, lineups, segments, 1)
+    + quarterCredit(players, lineups, segments, 2)
+    + quarterCredit(players, lineups, segments, 3)
+    + quarterCredit(players, lineups, segments, 4), 48);
+  const cleared = clearPlayerSegmentsFrom(segments, left.id, 2, lineups);
+  assert.equal(segmentAt(cleared, left.id, 2), null);
+  assert.equal(segmentAt(cleared, entered.id, 2), null);
+  const total = [1, 2, 3, 4].reduce((sum, quarter) => (
+    sum + quarterCredit(players, lineups, cleared, quarter)
+  ), 0);
+  assert.equal(total, 48);
+});
+
+test("an out or injured returner is cleared with a status notice", () => {
+  const players = namedRoster([
+    "John Smith", "Wes Johnson", "Jaxon Williams", "Remi Brown", "Sean Jones",
+    "Henry Davis", "Jude Garcia", "Trey Miller", "Maddox Anderson",
+  ]);
+  const wes = players[1];
+  const john = players[0];
+  ["out", "injury"].forEach(mode => {
+    const marked = players.map(player => {
+      if (player.id !== wes.id) return player;
+      return {
+        ...player,
+        out: mode === "out",
+        injured: mode === "injury",
+        returnQuarter: 3,
+        returnAt: { quarter: 3, half: "back" },
+      };
+    });
+    const lineups = {
+      3: {
+        starters: SLOTS.map((pos, index) => ({ pos, player: index === 1 ? wes : players[index + 3] })),
+        bench: [john, players[2], players[7]],
+      },
+    };
+    const segments = { [wes.id]: { 3: "entered" }, [john.id]: { 3: "left" } };
+    const checked = revalidateBackHalfMarks({
+      players: marked, lineups, segments, fromQuarter: 3, totalQuarters: 4,
+    });
+    const status = mode === "out" ? "Out" : "Injured";
+    assert.equal(isBackHalfReturn(checked.players.find(player => player.id === wes.id), 3), false, status);
+    assert.deepEqual(checked.notices, [backHalfStatusNotice(marked.find(player => player.id === wes.id), "Q")], status);
+    assert.equal(checked.notices[0], `Wes is marked ${status}, so his 2nd-half return in Q3 was cleared.`);
+  });
+});
+
+test("a silent replan leaves the back-half notice up", () => {
+  const sentence = backHalfStripNotice({ name: "Wes Johnson" }, 3, "Q");
+  assert.equal(nextBackHalfNotice(sentence, ""), sentence);
+  assert.equal(nextBackHalfNotice(sentence, "   "), sentence);
+  const status = "Wes is marked Out, so his 2nd-half return in Q3 was cleared.";
+  assert.equal(nextBackHalfNotice(sentence, status), status);
+  assert.equal(nextBackHalfNotice(null, ""), null);
 });

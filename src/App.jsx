@@ -42,6 +42,7 @@ import {
   stripReturnAtForQuarter,
   vacatedSpotHolder,
   revalidateBackHalfMarks,
+  nextBackHalfNotice,
   clearPlayerSegmentsFrom,
   realEventPlayerIds,
   scheduleHalfRotation,
@@ -81,7 +82,7 @@ import { PhaseToggle, usePhaseSwipe } from "./components/PhaseToggle.jsx";
 import { FORMATION_TEMPLATES, clampPeriod, formationNameForPeriod, preservePlayedBase, reapplyBase, reshapeLineup, withPeriodOverride, withoutPeriodOverride, normalizeFormationOverrides } from "./lib/formations.js";
 import { CIRCLE_DIAMETER, LABEL_GAP, LABEL_LETTER_SPACING_EM, labelProbeCss, layoutFieldPlayers, labelWidth, roundLabelWidth } from "./lib/fieldLayout.js";
 import { commitReturn, finishedQuarterList, quarterIsLive } from "./lib/returnDialog.js";
-import { markInjured, markOut, settleAvailability, showDoneForToday } from "./lib/playerStatus.js";
+import { backHalfStatusNotice, markInjured, markOut, settleAvailability, showDoneForToday } from "./lib/playerStatus.js";
 import { ReturnDialog } from "./components/ReturnDialog.jsx";
 import { AvailabilityMark, RosterAvailabilityButtons } from "./components/AvailabilityMark.js";
 import { PITCH_LAYER, usePitchSubLines, useReportFieldLayout } from "./lib/pitchSubLines.js";
@@ -1386,7 +1387,22 @@ export function TabGame({ format, league, players, setPlayers, addPlayer, remove
   const [swapSel, setSwapSel] = useState(null);
   const [fairWarn, setFairWarn] = useState(null);
   const [fairInfo, setFairInfo] = useState(null);
-  const [backHalfNotice, setBackHalfNotice] = useState(initialNotice);
+  const storedNotice = normalizeGameDay(gameDay).backHalfNotice || null;
+  const [initialNoticeHidden, setInitialNoticeHidden] = useState(false);
+  const backHalfNotice = storedNotice || (initialNoticeHidden ? null : initialNotice) || null;
+  const setBackHalfNotice = (value) => {
+    setGameDay(prev => {
+      const base = normalizeGameDay(prev);
+      const resolved = typeof value === "function" ? value(base.backHalfNotice) : value;
+      const next = resolved || null;
+      if ((base.backHalfNotice || null) === next) return prev;
+      return { ...base, backHalfNotice: next };
+    });
+  };
+  const clearBackHalfNotice = () => {
+    setInitialNoticeHidden(true);
+    setBackHalfNotice(null);
+  };
   const [returnAsk, setReturnAsk] = useState(null);
   const [returnToast, setReturnToast] = useState(null);
   const [phaseToast, setPhaseToast] = useState(null);
@@ -1630,7 +1646,8 @@ export function TabGame({ format, league, players, setPlayers, addPlayer, remove
       rate: getOverallRating,
       abbrev: abbr,
     });
-    setBackHalfNotice(checked.notices?.length ? checked.notices.join(" ") : null);
+    const incoming = checked.notices?.length ? checked.notices.join(" ") : "";
+    setBackHalfNotice(current => nextBackHalfNotice(current, incoming));
     return checked;
   };
 
@@ -1907,12 +1924,18 @@ export function TabGame({ format, league, players, setPlayers, addPlayer, remove
     const wasOn = !!currentL?.starters?.some(slot => slot.player?.id === playerId);
     const live = running || (clockRef.current || 0) > 0 || periodHasRealEvent(realPeriodEvents, quarter);
     if (wasOn) bankLeave(playerId);
+    let statusNotice = null;
     const updatedPlayers = players.map(p => {
       if (p.id !== playerId) return p;
       const extra = { injuredInQuarter: quarter, returnQuarter: null };
+      const pending = mode === "out"
+        ? { ...p, out: true, injured: false }
+        : { ...p, injured: true, out: false };
+      statusNotice = backHalfStatusNotice(pending, abbr);
       if (mode === "out") return markOut(p, { ...extra, midGameInjury: false });
       return markInjured(p, { ...extra, midGameInjury: true });
     });
+    if (statusNotice) setBackHalfNotice(statusNotice);
     setPlayers(updatedPlayers);
     dropQueued(playerId);
     if (mode === "injury") setInjuryAlerts(prev => [...prev, { player, quarter, id: Date.now() }]);
@@ -1971,7 +1994,7 @@ export function TabGame({ format, league, players, setPlayers, addPlayer, remove
       segments = noteSubSegment(segments, playerId, quarter, "left");
     } else {
       if (wasOn) setAppearanceCredit(credit);
-      segments = clearPlayerSegmentsFrom(segments, playerId, quarter);
+      segments = clearPlayerSegmentsFrom(segments, playerId, quarter, lineupsByQuarter);
     }
     const before = new Set((currentL.starters || []).map(slot => slot.player?.id).filter(Boolean));
     const next = pullFromPlan(lineupsByQuarter, playerId, quarter, totalQuarters);
@@ -2080,6 +2103,7 @@ export function TabGame({ format, league, players, setPlayers, addPlayer, remove
     setLineupsByQuarter(prev => ({ ...prev, [quarter]: { ...currentLineup, starters: newStarters } }));
     setSwapSel(null);
     setFairWarn(null);
+    clearBackHalfNotice();
   };
 
   const swapBenchAndField = (fieldIdx, benchPlayerId, options = {}) => {
@@ -2121,6 +2145,7 @@ export function TabGame({ format, league, players, setPlayers, addPlayer, remove
     setLineupsByQuarter(nextAll);
     setSwapSel(null);
     warnIfShort(nextAll, players, credit, nextSegments);
+    clearBackHalfNotice();
     return true;
   };
 
@@ -2184,6 +2209,7 @@ export function TabGame({ format, league, players, setPlayers, addPlayer, remove
     setAfterSubs(prev => ({ ...(prev || {}), [String(quarter)]: decision.override }));
     setSwapSel(null);
     setFairWarn(null);
+    clearBackHalfNotice();
   };
 
   const onFieldTap = (idx) => {
@@ -2223,6 +2249,7 @@ export function TabGame({ format, league, players, setPlayers, addPlayer, remove
         [quarter]: retargetPair(prev?.[quarter], swapSel.playerId, outPlayer.id, currentLineup),
       }));
       setSwapSel(null);
+      clearBackHalfNotice();
       setQueueNote(`${playerName(swapSel.playerId)} on for ${outPlayer.name}. The dotted line moved. Drag when you want them to switch now.`);
       return;
     }
@@ -2281,6 +2308,7 @@ export function TabGame({ format, league, players, setPlayers, addPlayer, remove
     setLineupsByQuarter(nextAll);
     setSwapSel(null);
     warnIfShort(nextAll);
+    clearBackHalfNotice();
   };
 
   const applyDrag = (result) => {
@@ -2949,8 +2977,16 @@ export function TabGame({ format, league, players, setPlayers, addPlayer, remove
         <div data-testid="back-half-notice" role="status" style={{
           background:"rgba(93,173,236,0.1)", border:"1px solid rgba(93,173,236,0.35)",
           borderRadius:9, padding:"10px 14px", marginBottom:14, fontSize:12, color:"#d6e6f5", lineHeight:1.45,
+          display:"flex", gap:12, alignItems:"flex-start", justifyContent:"space-between",
         }}>
-          {backHalfNotice}
+          <span>{backHalfNotice}</span>
+          <button type="button" data-testid="back-half-notice-dismiss" onClick={clearBackHalfNotice} style={{
+            flexShrink:0, minHeight:44, padding:"0 12px", borderRadius:8, cursor:"pointer",
+            border:"1px solid rgba(214,230,245,0.45)", background:"transparent", color:"#d6e6f5",
+            fontFamily:"inherit", fontSize:12, fontWeight:700,
+          }}>
+            Dismiss
+          </button>
         </div>
       )}
 
