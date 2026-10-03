@@ -1,4 +1,6 @@
-import { FIELD_BASE, fieldMarker } from "./gameDay.js";
+import { fieldMarker, isMirroredPair, lineBand, pitchCenterDisc, twoWideCenters } from "./gameDay.js";
+
+export { lineBand };
 
 /** Circle drawn on the Game Day field. Fixed CSS pixels, not a share of the pitch. */
 export const CIRCLE_DIAMETER = 46;
@@ -24,16 +26,6 @@ const CHAR_W = {
   v: 4.5, w: 6.5, x: 4.5, y: 4.5, z: 4,
   " ": 2.25, ".": 2.25, "'": 2.52, "-": 3, "…": 6.5,
 };
-
-const BANDS = [
-  { id: "gk", minY: 82 },
-  { id: "def", minY: 65 },
-  { id: "cdm", minY: 54 },
-  { id: "mid", minY: 44 },
-  { id: "cam", minY: 34 },
-  { id: "wing", minY: 26 },
-  { id: "fwd", minY: 0 },
-];
 
 /** Matches the name label drawn on the circle. */
 export const LABEL_FONT_SIZE = 9;
@@ -88,11 +80,6 @@ export function sideMarginForLine(count, fieldWidth, {
 export function labelProbeCss(fontFamily) {
   const family = fontFamily || "Georgia, serif";
   return `position:absolute;visibility:hidden;white-space:nowrap;pointer-events:none;font-family:${family};font-size:${LABEL_FONT_SIZE}px;font-weight:800;line-height:1.2;letter-spacing:${LABEL_LETTER_SPACING_EM}em;padding:1px 4px;`;
-}
-
-export function lineBand(pos) {
-  const y = (FIELD_BASE[pos] || { y: 50 }).y;
-  return (BANDS.find(band => y >= band.minY) || BANDS[BANDS.length - 1]).id;
 }
 
 /** Shorten a name so it fits maxWidth. Full text stays available to the caller. */
@@ -197,14 +184,16 @@ function markerRects(item, circle, labelGap, labelHeight) {
  * the middle of the field. Circles stay put. The label stays inside the
  * field and clear of a neighbor label or circle.
  */
-function widenOuterLabels(items, { width, circle, labelHeight, labelGap, boxGap, measureLabel }) {
+function widenOuterLabels(items, { width, height, circle, labelHeight, labelGap, boxGap, measureLabel, guardCenter = false, onlyCount = 0, only = null }) {
   items.forEach((item, index) => {
+    if (only && !only.has(item)) return;
+    if (onlyCount && item.lineCount !== onlyCount) return;
     if (!item.name || item.label === item.name) return;
     if (item.lineCount < 2) return;
     if (item.lineIndex !== 0 && item.lineIndex !== item.lineCount - 1) return;
     const fullWidth = measureLabel(item.name);
     if (!(fullWidth > 0)) return;
-    const span = outerLabelSpan(item, items, { width, circle, labelHeight, labelGap, boxGap });
+    const span = outerLabelSpan(item, items, { width, height, circle, labelHeight, labelGap, boxGap, guardCenter });
     if (!span || fullWidth > span.hi - span.lo + 0.01) return;
     let labelLeft = item.x - fullWidth / 2;
     if (labelLeft < span.lo) labelLeft = span.lo;
@@ -224,7 +213,7 @@ function widenOuterLabels(items, { width, circle, labelHeight, labelGap, boxGap,
   });
 }
 
-function outerLabelSpan(item, items, { width, circle, labelHeight, labelGap, boxGap }) {
+function outerLabelSpan(item, items, { width, height, circle, labelHeight, labelGap, boxGap, guardCenter = false }) {
   const leftOuter = item.lineIndex === 0;
   let lo = 0;
   let hi = width;
@@ -241,17 +230,26 @@ function outerLabelSpan(item, items, { width, circle, labelHeight, labelGap, box
       else lo = Math.max(lo, drawn.circle.x + drawn.circle.width + boxGap);
     }
   });
+  if (guardCenter) {
+    const block = centerLabelBlock(item, { width, height, circle, labelHeight, labelGap, boxGap });
+    if (block) {
+      if (leftOuter) hi = Math.min(hi, block.lo);
+      else lo = Math.max(lo, block.hi);
+    }
+  }
   if (hi - lo < 1) return null;
   return { lo, hi };
 }
 
 /**
  * Spread each horizontal line across the field and keep circles and name
- * labels from overlapping. A 4-wide line stays nearly straight: even spacing
- * first, then the smallest outside-up / center-down nudge that clears the
- * labels. A 5-wide line staggers alternate players only when the names do
- * not fit. Long names shorten to a first name and last initial, then an
- * ellipsis, before that nudge grows.
+ * labels from overlapping. A mirrored left/right pair sits about a third of the
+ * way in from each sideline, stopping short of the center circle. A 4-wide
+ * line stays nearly straight: even spacing first, then the smallest
+ * outside-up / center-down nudge that clears the labels. A 5-wide line
+ * staggers alternate players only when the names do not fit. Long names
+ * shorten to a first name and last initial, then an ellipsis, before that
+ * nudge grows.
  */
 export function layoutFieldPlayers(starters, {
   fieldWidth,
@@ -325,7 +323,7 @@ export function layoutFieldPlayers(starters, {
   });
 
   liftLabelsOffCircles(items, { circle, labelHeight, labelGap, boxGap });
-  let caps = maxWidths(items, { width, circle, labelHeight, labelGap, boxGap });
+  let caps = maxWidths(items, { width, height, circle, labelHeight, labelGap, boxGap });
   for (let pass = 0; pass < 4; pass++) {
     items.forEach((item, i) => {
       item.fieldWidth = width;
@@ -334,11 +332,12 @@ export function layoutFieldPlayers(starters, {
       const measured = item.label ? measureLabel(item.label) : 0;
       item.labelBoxWidth = Math.min(measured, Math.max(0, caps[i]));
     });
-    widenOuterLabels(items, { width, circle, labelHeight, labelGap, boxGap, measureLabel });
+    widenOuterLabels(items, { width, height, circle, labelHeight, labelGap, boxGap, measureLabel });
     const crowded = collidingLabelIndexes(items, circle, labelGap, labelHeight, boxGap);
     if (!crowded.size) break;
     caps = caps.map((cap, i) => (crowded.has(i) ? Math.max(0, cap - 4) : cap));
   }
+  pullTwoWideInward(items, { width, height, circle, labelHeight, labelGap, boxGap, measureLabel });
 
   return items.map(item => {
     const rects = markerRects(item, circle, labelGap, labelHeight);
@@ -365,7 +364,7 @@ export function layoutFieldPlayers(starters, {
  * Same-line neighbors are left to the width cap; lifting them one by one
  * pulls a staggered row apart.
  */
-function liftLabelsOffCircles(items, { circle, labelHeight, labelGap, boxGap }) {
+function liftLabelsOffCircles(items, { circle, labelHeight, labelGap, boxGap, lineCount = null, only = null }) {
   const minY = circle / 2;
   const reach = circle / 2 + 48;
   const bands = new Map();
@@ -378,6 +377,8 @@ function liftLabelsOffCircles(items, { circle, labelHeight, labelGap, boxGap }) 
     return mid(b) - mid(a);
   });
   ordered.forEach(group => {
+    if (lineCount != null && group[0]?.lineCount !== lineCount) return;
+    if (only && !group.every(item => only.has(item))) return;
     let lift = 0;
     group.forEach(item => {
       items.forEach(other => {
@@ -395,7 +396,88 @@ function liftLabelsOffCircles(items, { circle, labelHeight, labelGap, boxGap }) 
   });
 }
 
-function maxWidths(items, { width, circle, labelHeight, labelGap, boxGap }) {
+function mirroredTwoWideSet(items) {
+  const groups = new Map();
+  items.forEach(item => {
+    if (item.lineCount !== 2) return;
+    if (!groups.has(item.band)) groups.set(item.band, []);
+    groups.get(item.band).push(item);
+  });
+  const mirrored = new Set();
+  groups.forEach(group => {
+    if (group.length === 2 && isMirroredPair(group[0].pos, group[1].pos)) {
+      group.forEach(item => mirrored.add(item));
+    }
+  });
+  return mirrored;
+}
+
+function placeTwoWideXs(items, width, height, circle, boxGap) {
+  const groups = new Map();
+  items.forEach(item => {
+    if (item.lineCount !== 2) return;
+    if (!groups.has(item.band)) groups.set(item.band, []);
+    groups.get(item.band).push(item);
+  });
+  groups.forEach(group => {
+    if (group.length !== 2 || !isMirroredPair(group[0].pos, group[1].pos)) return;
+    group.sort((a, b) => a.lineIndex - b.lineIndex);
+    const lineY = group.reduce((sum, item) => sum + item.y, 0) / group.length;
+    const [left, right] = twoWideCenters(width, height, lineY, { circle, gap: boxGap });
+    group[0].x = left;
+    group[1].x = right;
+  });
+}
+
+/**
+ * Move a finished mirrored pair inward. Every other line, including a
+ * 2-player band that is not a left/right pair, keeps the first pass.
+ */
+function pullTwoWideInward(items, { width, height, circle, labelHeight, labelGap, boxGap, measureLabel }) {
+  const mirrored = mirroredTwoWideSet(items);
+  if (!mirrored.size) return;
+  placeTwoWideXs(items, width, height, circle, boxGap);
+  liftLabelsOffCircles(items, { circle, labelHeight, labelGap, boxGap, lineCount: 2, only: mirrored });
+  placeTwoWideXs(items, width, height, circle, boxGap);
+  let caps = maxWidths(items, { width, height, circle, labelHeight, labelGap, boxGap, guardCenter: true });
+  for (let pass = 0; pass < 4; pass++) {
+    items.forEach((item, i) => {
+      if (!mirrored.has(item)) return;
+      item.fieldWidth = width;
+      item.labelLeft = null;
+      item.label = fitPlayerLabel(item.name, caps[i], measureLabel);
+      const measured = item.label ? measureLabel(item.label) : 0;
+      item.labelBoxWidth = Math.min(measured, Math.max(0, caps[i]));
+    });
+    widenOuterLabels(items, {
+      width, height, circle, labelHeight, labelGap, boxGap, measureLabel,
+      guardCenter: true,
+      only: mirrored,
+    });
+    const crowded = collidingLabelIndexes(items, circle, labelGap, labelHeight, boxGap);
+    if (![...crowded].some(i => mirrored.has(items[i]))) break;
+    caps = caps.map((cap, i) => (
+      mirrored.has(items[i]) && crowded.has(i) ? Math.max(0, cap - 4) : cap
+    ));
+  }
+}
+
+/** X range where a name under this circle would enter the center circle. */
+function centerLabelBlock(item, { width, height, circle, labelHeight, labelGap, boxGap }) {
+  if (item.lineCount !== 2) return null;
+  const mark = pitchCenterDisc(width, height);
+  const top = item.y + circle / 2 + labelGap;
+  const bottom = top + labelHeight;
+  const radius = mark.r + boxGap;
+  if (!(radius > 0)) return null;
+  const yNear = Math.min(Math.max(mark.cy, top), bottom);
+  const dy = yNear - mark.cy;
+  if (Math.abs(dy) >= radius) return null;
+  const half = Math.sqrt(Math.max(0, radius * radius - dy * dy));
+  return { lo: mark.cx - half, hi: mark.cx + half };
+}
+
+function maxWidths(items, { width, height, circle, labelHeight, labelGap, boxGap, guardCenter = false }) {
   return items.map((item, i) => {
     let maxW = Math.min(item.x * 2, (width - item.x) * 2) - 1;
     const top = item.y + circle / 2 + labelGap;
@@ -411,6 +493,14 @@ function maxWidths(items, { width, circle, labelHeight, labelGap, boxGap }) {
         maxW = Math.min(maxW, 2 * (dx - circle / 2 - boxGap));
       }
     });
+    const block = guardCenter
+      ? centerLabelBlock(item, { width, height, circle, labelHeight, labelGap, boxGap })
+      : null;
+    if (block) {
+      if (item.x <= block.lo) maxW = Math.min(maxW, Math.max(0, (block.lo - item.x) * 2));
+      else if (item.x >= block.hi) maxW = Math.min(maxW, Math.max(0, (item.x - block.hi) * 2));
+      else maxW = 0;
+    }
     return Math.max(0, maxW);
   });
 }
