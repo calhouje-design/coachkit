@@ -126,12 +126,17 @@ serial("canShare true shares a PNG File in the same turn and does not fall back"
     assert.equal(shareCalled, true);
     const result = await pending;
     assert.equal(result.method, "share");
+    assert.equal(seen[0], seen[1]);
+    assert.deepEqual(Object.keys(seen[0]), ["files"]);
+    assert.equal(seen[0].title, undefined);
+    assert.equal(seen[0].text, undefined);
+    assert.equal(seen[0].url, undefined);
     assert.equal(seen[0].files.length, 1);
     assert.equal(seen[0].files[0] instanceof File, true);
     assert.equal(seen[0].files[0].name, FILENAME);
     assert.equal(seen[0].files[0].type, "image/png");
-    assert.equal(seen[1].files[0], seen[0].files[0]);
-    assert.equal(seen[1].title, TITLE);
+    assert.equal(typeof seen[0].files[0].lastModified, "number");
+    assert.ok(seen[0].files[0].lastModified > 0);
     assert.equal(clicks.length, 0);
     assert.equal(document.querySelector("[data-testid='save-image-overlay']"), null);
   } finally {

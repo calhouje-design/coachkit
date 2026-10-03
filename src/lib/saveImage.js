@@ -1,4 +1,4 @@
-export const SAVE_IMAGE_HINT = "Press and hold the image, then tap Save to Photos.";
+export const SAVE_IMAGE_HINT = "Press and hold the image, then tap Save to Photos (or Add to Photos).";
 
 const REVOKE_DELAY_MS = 45000;
 const SHARE_LOCK_MS = 30000;
@@ -169,14 +169,14 @@ function asPngFile(blob, filename) {
   if (typeof File !== "undefined" && blob instanceof File && blob.type === "image/png" && blob.name === name) {
     return blob;
   }
-  return new File([blob], name, { type: "image/png" });
+  return new File([blob], name, { type: "image/png", lastModified: Date.now() });
 }
 
-function canShareFile(file) {
+function canSharePayload(payload) {
   try {
     return typeof navigator !== "undefined"
       && typeof navigator.canShare === "function"
-      && navigator.canShare({ files: [file] });
+      && navigator.canShare(payload);
   } catch {
     return false;
   }
@@ -345,14 +345,14 @@ function settleOverlay(file) {
   }
 }
 
-function deliver(blob, filename, title) {
+function deliver(blob, filename) {
   const file = asPngFile(blob, filename);
-  const shareTitle = title || filename || file.name;
-  if (!canShareFile(file)) return Promise.resolve(fallback(file, file.name));
+  const payload = { files: [file] };
+  if (!canSharePayload(payload)) return Promise.resolve(fallback(file, file.name));
   let pending;
   const generation = armShareWatch();
   try {
-    pending = navigator.share({ files: [file], title: shareTitle });
+    pending = navigator.share(payload);
   } catch (error) {
     releaseShare(generation);
     if (isShareCancel(error)) return Promise.resolve({ ok: false, reason: "abort" });
@@ -376,7 +376,16 @@ function deliver(blob, filename, title) {
  * Save a PNG. Web Share runs in this turn when `blob` is already encoded,
  * so a tap can still open the iOS sheet. Pass a canvas only from a prepare step.
  */
-export function saveImage({ blob, canvas, filename = "CoachKit.png", title } = {}) {
+export function showHoldToSave(blob) {
+  if (!blob) return;
+  try {
+    showHoldOverlay(blob);
+  } catch {
+    showSaveError();
+  }
+}
+
+export function saveImage({ blob, canvas, filename = "CoachKit.png" } = {}) {
   if (shareInFlight) {
     showShareBusy();
     return Promise.resolve({ ok: false, reason: "pending" });
@@ -386,8 +395,8 @@ export function saveImage({ blob, canvas, filename = "CoachKit.png", title } = {
       showSaveError();
       return { ok: false, reason: "error" };
     });
-    if (blob) return settled(deliver(blob, filename, title));
-    if (canvas) return canvasToPngBlob(canvas).then((next) => deliver(next, filename, title)).catch(() => {
+    if (blob) return settled(deliver(blob, filename));
+    if (canvas) return canvasToPngBlob(canvas).then((next) => deliver(next, filename)).catch(() => {
       showSaveError();
       return { ok: false, reason: "error" };
     });

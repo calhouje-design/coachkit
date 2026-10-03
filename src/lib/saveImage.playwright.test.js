@@ -1,7 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { execSync } from "node:child_process";
 import { createServer } from "vite";
 import { devices, webkit } from "playwright";
+import { SAVE_IMAGE_HINT } from "./saveImage.js";
 
 let server;
 let browser;
@@ -35,7 +37,11 @@ function shareStub() {
       isFile: typeof File !== "undefined" && file instanceof File,
       eventType: window.event?.type || "",
       userActive: navigator.userActivation?.isActive === true,
-      title: data?.title || "",
+      keys: Object.keys(data || {}),
+      title: data?.title,
+      text: data?.text,
+      url: data?.url,
+      lastModified: file?.lastModified || 0,
       file,
     });
     return Promise.resolve();
@@ -56,6 +62,10 @@ async function pngShares(page) {
         eventType: entry.eventType,
         userActive: entry.userActive,
         title: entry.title,
+        text: entry.text,
+        url: entry.url,
+        keys: entry.keys,
+        lastModified: entry.lastModified,
         size: entry.file.size,
         png: bytes[0] === 137 && bytes[1] === 80 && bytes[2] === 78 && bytes[3] === 71,
       });
@@ -87,9 +97,13 @@ test("iPhone Web Share receives the field, play-time, and game-log PNG files fro
       assert.equal(row.userActive, true, row.name);
       assert.equal(row.png, true, row.name);
       assert.ok(row.size > 1000, `${row.name} size ${row.size}`);
+      assert.deepEqual(row.keys, ["files"], row.name);
+      assert.equal(row.title, undefined, row.name);
+      assert.equal(row.text, undefined, row.name);
+      assert.equal(row.url, undefined, row.name);
+      assert.equal(typeof row.lastModified, "number", row.name);
+      assert.ok(row.lastModified > 0, row.name);
     }
-    assert.equal(shares[0].title, "CoachKit field");
-    assert.equal(shares[1].title, "CoachKit play time");
 
     await page.getByTestId("share-modal").getByRole("button", { name: "Close" }).click();
     await page.getByRole("button", { name: "Game Log" }).click();
@@ -107,6 +121,10 @@ test("iPhone Web Share receives the field, play-time, and game-log PNG files fro
       assert.equal(row.userActive, true, row.name);
       assert.equal(row.png, true, row.name);
       assert.ok(row.size > 1000, `${row.name} size ${row.size}`);
+      assert.deepEqual(row.keys, ["files"], row.name);
+      assert.equal(row.title, undefined, row.name);
+      assert.equal(row.text, undefined, row.name);
+      assert.equal(row.url, undefined, row.name);
     }
     assert.equal(errors.length, 0, errors.join("\n"));
   } finally {
@@ -184,6 +202,82 @@ test("a collapsed 12-game log encodes nothing until one game is expanded", async
   }
 });
 
+async function cachedHoldImage(page, testId) {
+  const before = await page.evaluate(() => window.__encodes);
+  await page.getByTestId(testId).click();
+  await page.getByTestId("save-image-overlay").waitFor();
+  const info = await page.evaluate(async () => {
+    const img = document.querySelector("[data-testid='save-image-preview']");
+    const hint = document.querySelector("[data-testid='save-image-hint']")?.textContent || "";
+    const src = img?.src || "";
+    const response = await fetch(src);
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    return {
+      hint,
+      src,
+      png: bytes[0] === 137 && bytes[1] === 80 && bytes[2] === 78 && bytes[3] === 71,
+      size: bytes.length,
+      encodes: window.__encodes,
+    };
+  });
+  assert.equal(info.hint, SAVE_IMAGE_HINT, testId);
+  assert.equal(info.src.startsWith("blob:"), true, info.src);
+  assert.equal(info.src.includes("data:"), false, info.src);
+  assert.equal(info.png, true, testId);
+  assert.ok(info.size > 1000, `${testId} size ${info.size}`);
+  assert.equal(info.encodes, before, testId);
+  await page.getByTestId("save-image-overlay").getByRole("button", { name: "Close" }).click();
+  await page.getByTestId("save-image-overlay").waitFor({ state: "hidden" });
+}
+
+test("press and hold opens the cached PNG for every save button", async () => {
+  const context = await browser.newContext({ ...devices["iPhone 13"] });
+  await context.addInitScript(() => {
+    window.__encodes = 0;
+    const proto = HTMLCanvasElement.prototype;
+    const original = proto.toBlob;
+    proto.toBlob = function countToBlob(...args) {
+      window.__encodes += 1;
+      return original.apply(this, args);
+    };
+  });
+  const page = await context.newPage();
+  page.setDefaultTimeout(20000);
+  try {
+    await page.goto(`${base}/src/lib/harness/save-image.html`, { waitUntil: "networkidle" });
+    await page.getByRole("button", { name: "Share lineup" }).click();
+    await page.getByTestId("hold-field-image").waitFor();
+    await page.waitForFunction(() => !document.querySelector("[data-testid='hold-field-image']")?.disabled);
+    await cachedHoldImage(page, "hold-field-image");
+    await cachedHoldImage(page, "hold-play-time-image");
+    await page.getByTestId("share-modal").getByRole("button", { name: "Close" }).click();
+    await page.getByRole("button", { name: "Game Log" }).click();
+    await page.getByTestId("game-log-sheets").locator("summary").click();
+    await page.getByTestId("hold-game-log-field").waitFor();
+    await page.waitForFunction(() => !document.querySelector("[data-testid='hold-game-log-field']")?.disabled);
+    await cachedHoldImage(page, "hold-game-log-field");
+    await cachedHoldImage(page, "hold-game-log-play");
+  } finally {
+    await page.close();
+    await context.close();
+  }
+});
+
+test("settings footer shows the short build SHA", async () => {
+  const context = await browser.newContext({ ...devices["iPhone 13"] });
+  const page = await context.newPage();
+  page.setDefaultTimeout(20000);
+  const sha = execSync("git rev-parse --short HEAD", { encoding: "utf8" }).trim();
+  try {
+    await page.goto(`${base}/src/lib/harness/save-image.html`, { waitUntil: "networkidle" });
+    await page.getByTestId("build-stamp").waitFor();
+    assert.equal(await page.getByTestId("build-stamp").innerText(), `Build ${sha}`);
+  } finally {
+    await page.close();
+    await context.close();
+  }
+});
+
 test("encoding at tap time fails the in-click share checks", async () => {
   const context = await browser.newContext({ ...devices["iPhone 13"] });
   await context.addInitScript(shareStub);
@@ -198,7 +292,7 @@ test("encoding at tap time fails the in-click share checks", async () => {
           const canvas = document.getElementById("c");
           const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
           const file = new File([blob], "late.png", { type: "image/png" });
-          await navigator.share({ files: [file], title: "late" });
+          await navigator.share({ files: [file] });
         });
       </script>
     </body>`);

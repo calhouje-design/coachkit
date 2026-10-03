@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { TabGame, TabSeason } from "../../App.jsx";
+import BuildStamp from "../../components/BuildStamp.jsx";
 import { scheduleHalfRotation, shareFieldSheet, sharePlayTimeSheet } from "../gameDay.js";
 import { resolveSetup } from "../leagueRules.js";
 
@@ -141,6 +142,7 @@ function Harness() {
           setPracticeAttendance={setPracticeAttendance}
         />
       </div>
+      <BuildStamp />
     </div>
   );
 }

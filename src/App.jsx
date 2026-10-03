@@ -76,7 +76,8 @@ import { AvailabilityMark, RosterAvailabilityButtons } from "./components/Availa
 import { usePitchSubLines, useReportFieldLayout } from "./lib/pitchSubLines.js";
 import { SAY_PLAY_TIME, sayDivision, sayDivisionKey } from "./lib/sayEastGuide.js";
 import { paintFieldSheet, paintPlayTimeSheet } from "./lib/sharePaint.js";
-import { canvasToPngBlob, saveImage } from "./lib/saveImage.js";
+import { canvasToPngBlob, saveImage, showHoldToSave } from "./lib/saveImage.js";
+import BuildStamp from "./components/BuildStamp.jsx";
 import { useTeamCloud } from "./lib/teamCloud.js";
 import { bindField, normalizeGameDay, snapshotFromStorage } from "./lib/teamSnapshot.js";
 import {
@@ -1239,6 +1240,7 @@ function GameSettings({
         </div>
         <div style={{fontSize: 11, color: C.muted, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase", marginBottom: 8}}>Weather</div>
         <WeatherButton />
+        <BuildStamp />
       </div>
     </div>
   );
@@ -3511,6 +3513,23 @@ const sheetSaveBtn = {
   fontFamily: "inherit",
 };
 
+const sheetHoldBtn = {
+  flex: "0 1 108px",
+  minHeight: 44,
+  padding: "4px 2px",
+  border: "none",
+  background: "transparent",
+  color: "#9a948c",
+  fontWeight: 700,
+  fontSize: 11,
+  lineHeight: 1.25,
+  fontFamily: "inherit",
+  cursor: "pointer",
+  textAlign: "center",
+  textDecoration: "underline",
+  textUnderlineOffset: "2px",
+};
+
 function useMaxWidth(max) {
   const query = `(max-width: ${max}px)`;
   const [matches, setMatches] = useState(() => typeof window !== "undefined" && window.matchMedia(query).matches);
@@ -3558,18 +3577,30 @@ function SheetCanvases({ field, playTime, league, opponent, homeScore, awayScore
       if (cancelled) return;
       const fieldBlob = fieldResult.status === "fulfilled" ? fieldResult.value : null;
       const playBlob = playResult.status === "fulfilled" ? playResult.value : null;
-      setFieldFile(fieldBlob ? new File([fieldBlob], fieldName, { type: "image/png" }) : null);
-      setPlayFile(playBlob ? new File([playBlob], playName, { type: "image/png" }) : null);
+      setFieldFile(fieldBlob ? new File([fieldBlob], fieldName, { type: "image/png", lastModified: Date.now() }) : null);
+      setPlayFile(playBlob ? new File([playBlob], playName, { type: "image/png", lastModified: Date.now() }) : null);
     });
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [contentKey, fieldName, playName]);
   const fieldTestId = source === "game-log" ? "save-game-log-field" : "save-field-image";
   const playTestId = source === "game-log" ? "save-game-log-play" : "save-play-time-image";
-  const saveReady = (file, filename, title) => {
+  const fieldHoldId = source === "game-log" ? "hold-game-log-field" : "hold-field-image";
+  const playHoldId = source === "game-log" ? "hold-game-log-play" : "hold-play-time-image";
+  const saveReady = (file, filename) => {
     if (!file) return;
-    saveImage({ blob: file, filename, title }).catch(() => {});
+    saveImage({ blob: file, filename }).catch(() => {});
   };
+  const saveRow = (file, filename, testId, holdId, readyLabel) => (
+    <div style={{display:"flex", gap:8, alignItems:"center"}}>
+      <button type="button" data-testid={testId} disabled={!file} onClick={() => saveReady(file, filename)} style={{...sheetSaveBtn, opacity: file ? 1 : 0.6}}>
+        {file ? readyLabel : "Preparing image…"}
+      </button>
+      <button type="button" data-testid={holdId} disabled={!file} onClick={() => file && showHoldToSave(file)} style={{...sheetHoldBtn, opacity: file ? 1 : 0.45}}>
+        Press and hold to save
+      </button>
+    </div>
+  );
   return (
     <div data-image-source={source}>
       <div style={{fontSize:12,fontWeight:800,color:"#e8a020",marginBottom:6}}>{previewTitle}</div>
@@ -3577,9 +3608,9 @@ function SheetCanvases({ field, playTime, league, opponent, homeScore, awayScore
         <canvas ref={fieldRef} style={{width:"100%",height:"auto",display:"block",touchAction:dual ? "pan-y" : "auto"}} />
       </div>
       <canvas ref={fileRef} data-testid="share-file" aria-hidden="true" />
-      <button type="button" data-testid={fieldTestId} disabled={!fieldFile} onClick={() => saveReady(fieldFile, fieldName, "CoachKit field")} style={{...sheetSaveBtn, width:"100%", marginBottom:16, opacity: fieldFile ? 1 : 0.6}}>
-        {fieldFile ? "Save field image" : "Preparing image…"}
-      </button>
+      <div style={{marginBottom:16}}>
+        {saveRow(fieldFile, fieldName, fieldTestId, fieldHoldId, "Save field image")}
+      </div>
       {showPrint && (
         <div data-testid="print-preview" style={{background:"#fff", color:"#1a1a1a", borderRadius:8, padding:12, marginBottom:16}}>
           <div style={{fontSize:14, fontWeight:800, marginBottom:8}}>Print preview</div>
@@ -3591,9 +3622,7 @@ function SheetCanvases({ field, playTime, league, opponent, homeScore, awayScore
       <div style={{borderRadius:8,overflow:"hidden",marginBottom:8,border:"1px solid rgba(255,255,255,0.08)",background:"#0c1409"}}>
         <canvas ref={playRef} style={{width:"100%",height:"auto",display:"block"}} />
       </div>
-      <button type="button" data-testid={playTestId} disabled={!playFile} onClick={() => saveReady(playFile, playName, "CoachKit play time")} style={{...sheetSaveBtn, width:"100%", opacity: playFile ? 1 : 0.6}}>
-        {playFile ? "Save play time image" : "Preparing image…"}
-      </button>
+      {saveRow(playFile, playName, playTestId, playHoldId, "Save play time image")}
     </div>
   );
 }
