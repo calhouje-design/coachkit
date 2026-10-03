@@ -143,6 +143,18 @@ export function resolveDragDrop(source, drop) {
  * If they were on the field, the first bench player who is not already starting fills that spot.
  * Past minutes are not touched here — the caller banks them.
  */
+/** The bench player who fills this spot. Same choice as pullFromQuarter. */
+export function benchReplacementId(lineup, playerId) {
+  if (!lineup?.starters || !playerId) return null;
+  const wasOn = lineup.starters.some(slot => slot.player?.id === playerId);
+  if (!wasOn) return null;
+  const stayingIds = new Set(
+    lineup.starters.map(slot => slot.player?.id).filter(id => id && id !== playerId)
+  );
+  const sub = (lineup.bench || []).find(player => player?.id && player.id !== playerId && !stayingIds.has(player.id));
+  return sub?.id || null;
+}
+
 export function pullFromQuarter(lineup, playerId) {
   if (!lineup?.starters) return lineup;
   const wasOn = lineup.starters.some(slot => slot.player?.id === playerId);
@@ -369,64 +381,6 @@ export function shareFieldSheet({ lineups, pairPlan, subMode = true, quarters = 
 }
 
 /**
- * Share/print for a back-half return: Start is the first half (returner off),
- * After is the second half (returner on for the player who came off).
- * Sub mode keeps that quarter's normal pairs and adds the returner pair.
- * Other quarters stay as the sheet already drew them.
- */
-export function withBackHalfShare(sheet, {
-  players,
-  lineups,
-  segments,
-  periodAbbrev = "Q",
-  pairPlan = {},
-  minutesById = {},
-  subMode = true,
-} = {}) {
-  if (!sheet?.quarters) return sheet;
-  let changed = false;
-  const quarters = sheet.quarters.map(panel => {
-    const q = panel.quarter;
-    const returner = (players || []).find(player => isBackHalfReturn(player, q));
-    if (!returner) return panel;
-    const lineup = lineups?.[q] || lineups?.[String(q)];
-    const view = quarterHalfPresentation(lineup, segments, q, { returnerId: returner.id });
-    if (!view?.pairs?.length) return panel;
-    changed = true;
-    const next = lineups?.[q + 1] || lineups?.[String(q + 1)] || null;
-    const manual = pairPlan?.[q] || pairPlan?.[String(q)] || [];
-    const pairs = subMode
-      ? backHalfShownPairs({
-        start: view.start,
-        returnerPair: view.pairs[0],
-        nextLineup: next,
-        minutesById,
-        manualPairs: manual,
-      })
-      : view.pairs;
-    const start = shareFieldSheet({
-      lineups: { [q]: view.start },
-      subMode: false,
-      quarters: [q],
-      periodAbbrev,
-    }).quarters[0];
-    const after = shareFieldSheet({
-      lineups: { [q]: view.after },
-      subMode: false,
-      quarters: [q],
-      periodAbbrev,
-    }).quarters[0];
-    return {
-      ...start,
-      label: panel.label,
-      pairs: pairs.map(pair => ({ inId: pair.inId, outId: pair.outId })),
-      after: { ...after, label: panel.label, pairs: [] },
-    };
-  });
-  return changed ? { ...sheet, quarters } : sheet;
-}
-
-/**
  * Sheet 2. One row per active player, with the same full / split / bench cells
  * as the Play Time chart.
  */
@@ -601,11 +555,13 @@ export function isBackHalfReturn(player, quarter) {
  * Start is the end lineup with the returner still on the bench.
  * After is the stored end lineup. One pair brings the returner on for the player who sat the second half.
  * The donor is the first bench player marked "left" — installBackHalfReturn places that player first.
+ * A same-quarter injury leaves the returner unmarked (they already played the first part) and still swaps.
  */
 export function quarterHalfPresentation(lineup, segments, quarter, { returnerId } = {}) {
   if (!lineup?.starters || !returnerId) return null;
   const q = Number(quarter);
-  if (segmentAt(segments, returnerId, q) !== "entered") return null;
+  const mark = segmentAt(segments, returnerId, q);
+  if (mark !== "entered" && mark != null) return null;
   const index = lineup.starters.findIndex(slot => (
     slot.player?.id === returnerId && !isGkPosition(slot.pos)
   ));
@@ -657,6 +613,24 @@ export function backHalfShownPairs({
   });
   const auto = planBenchRotation(start, { minutesById, nextLineup });
   return pairsForDisplay(auto, manual, start);
+}
+
+/** Drop a back-half mark for one quarter. Whole-quarter returnQuarter stays. Later quarters stay. */
+export function stripReturnAtForQuarter(players, quarter) {
+  const q = Number(quarter);
+  if (!q) return players;
+  let changed = false;
+  const next = (players || []).map(player => {
+    const record = readReturn(player);
+    if (!record || record.half !== "back" || record.quarter !== q) return player;
+    if (!player?.returnAt && player?.returnHalf == null) return player;
+    changed = true;
+    const copy = { ...player };
+    delete copy.returnAt;
+    delete copy.returnHalf;
+    return copy;
+  });
+  return changed ? next : players;
 }
 
 /** Drop back-half marks whose quarter is being replanned. Whole-quarter returnQuarter stays. */
@@ -1886,6 +1860,21 @@ function pickBackHalfDonor(lineup, segments, quarter, {
   return ranked[0] || null;
 }
 
+/**
+ * The injury replacement, when they are still an outfield starter.
+ * A goalkeeper, or a player the replan has taken off, is not a donor.
+ */
+function replacementDonor(lineup, replacedBy) {
+  if (!replacedBy || !lineup?.starters) return null;
+  const gkId = goalkeeperId(lineup);
+  if (gkId && String(gkId) === String(replacedBy)) return null;
+  const index = lineup.starters.findIndex(slot => (
+    slot.player?.id === replacedBy && !isGkPosition(slot.pos)
+  ));
+  if (index < 0) return null;
+  return { slot: lineup.starters[index], index };
+}
+
 /** True when this quarter still has an outfield player who can sit the second half. */
 export function backHalfDonorAvailable({
   lineup,
@@ -1896,6 +1885,7 @@ export function backHalfDonorAvailable({
   lineups,
   totalQuarters = 4,
   rate = () => 0,
+  replacedBy = null,
 } = {}) {
   if (!lineup?.starters || !returnerId) return false;
   let base = {
@@ -1905,6 +1895,7 @@ export function backHalfDonorAvailable({
   if (base.starters.some(slot => slot.player?.id === returnerId)) {
     base = pullFromQuarter(base, returnerId);
   }
+  if (replacementDonor(base, replacedBy)) return true;
   const gkId = goalkeeperId(base);
   const picked = pickBackHalfDonor(base, segments, quarter, {
     excludeIds: [returnerId, gkId, ...(protectedIds || [])],
@@ -1931,6 +1922,7 @@ export function installBackHalfReturn({
   totalQuarters = 4,
   rate = () => 0,
   protectedIds = [],
+  replacedBy = null,
 } = {}) {
   if (!returning?.id) return { lineups: lineups || {}, segments: segments || {} };
   const q = Number(quarter);
@@ -1946,7 +1938,8 @@ export function installBackHalfReturn({
     base = { ...base, bench: base.bench.filter(player => player?.id !== returning.id) };
   }
   const gkId = goalkeeperId(base);
-  const picked = pickBackHalfDonor(base, priorSegments, q, {
+  const direct = Number(returning.injuredInQuarter) === q ? replacementDonor(base, replacedBy || returning.replacedBy) : null;
+  const picked = direct || pickBackHalfDonor(base, priorSegments, q, {
     excludeIds: [returning.id, gkId, ...(protectedIds || [])],
     lineups: priorLineups,
     totalQuarters,
@@ -1980,9 +1973,18 @@ export function installBackHalfReturn({
     if (!kind) return;
     nextSegments = writePeriodSegment(nextSegments, playerId, q, kind);
   });
+  const donorHalves = equityHalves(donor.id, {
+    lineups: priorLineups,
+    segments: priorSegments,
+    credit: {},
+    quarters: [q],
+  });
   nextSegments = writePeriodSegment(nextSegments, donor.id, q, "left");
   const earlier = segmentAt(priorSegments, returning.id, q);
-  if (earlier !== "left") {
+  // A player who already started this quarter keeps that half when the donor
+  // can give one up. If the donor was already on for one half, the returner
+  // takes only the back half so the quarter total stays the same.
+  if (earlier !== "left" || donorHalves < 2) {
     nextSegments = writePeriodSegment(nextSegments, returning.id, q, "entered");
   }
   if (gkId) nextSegments = writePeriodSegment(nextSegments, gkId, q, null);
@@ -2023,6 +2025,8 @@ export function returnToGame({
 } = {}) {
   const q = Math.max(1, Number(quarter) || 1);
   const halfKind = half === "back" ? "back" : "whole";
+  const absent = (players || []).find(player => player?.id === playerId);
+  const replacedBy = Number(absent?.injuredInQuarter) === q ? (absent?.replacedBy || null) : null;
   if (halfKind === "back" && !backHalfDonorAvailable({
     lineup: lineups?.[q] || lineups?.[String(q)],
     segments,
@@ -2032,6 +2036,7 @@ export function returnToGame({
     lineups,
     totalQuarters,
     rate,
+    replacedBy,
   })) {
     return { source, players, lineups, segments, regenerated: false, refused: true };
   }
@@ -2045,6 +2050,7 @@ export function returnToGame({
       returnQuarter: q,
       injuredInQuarter: player.injuredInQuarter || player.returnQuarter || q,
     };
+    delete next.replacedBy;
     if (halfKind === "back") next.returnAt = { quarter: q, half: "back" };
     else return clearReturnAt(next);
     return next;
@@ -2088,6 +2094,7 @@ export function returnToGame({
     totalQuarters,
     rate,
     protectedIds,
+    replacedBy,
   });
   return {
     source,

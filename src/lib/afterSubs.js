@@ -1,6 +1,14 @@
 /** Start / After subs. Position drags never change who is on, and never flag a real event. */
 
-import { applyBenchRotation, fieldMarker, isGkPosition } from "./gameDay.js";
+import {
+  applyBenchRotation,
+  backHalfShownPairs,
+  fieldMarker,
+  isBackHalfReturn,
+  isGkPosition,
+  quarterHalfPresentation,
+  shareFieldSheet,
+} from "./gameDay.js";
 
 export function formationKey(lineup) {
   return (lineup?.starters || []).map(slot => slot?.pos || "").join("|");
@@ -105,6 +113,11 @@ export function projectAfterSubs(derived, slotMap) {
   (derived.bench || []).forEach(push);
   (derived.starters || []).forEach(slot => push(slot?.player));
   return { starters, bench };
+}
+
+/** The lineup the After phase shows. The field, share, and print all use this. */
+export function sameAfterLineup(start, pairs, override) {
+  return viewAfterSubs(start, pairs, override).lineup;
 }
 
 export function viewAfterSubs(start, pairs, override) {
@@ -431,4 +444,77 @@ export function decorateShareSheet(sheet, {
     return { ...panel, after };
   });
   return { ...sheet, quarters };
+}
+
+function paintLineup(lineup, quarter, periodAbbrev) {
+  return shareFieldSheet({
+    lineups: { [quarter]: lineup },
+    subMode: false,
+    quarters: [quarter],
+    periodAbbrev,
+  }).quarters[0];
+}
+
+/**
+ * Share/print for a back-half return.
+ * Start is the first half. After is the same lineup the live After phase shows.
+ * Sub mode keeps that quarter's normal pairs and adds the returner pair.
+ */
+export function withBackHalfShare(sheet, {
+  players,
+  lineups,
+  segments,
+  periodAbbrev = "Q",
+  pairPlan = {},
+  minutesById = {},
+  subMode = null,
+  afterSubs = {},
+  snapshots = {},
+} = {}) {
+  if (!sheet?.quarters) return sheet;
+  const useSubs = subMode == null ? sheet.subMode !== false : !!subMode;
+  let changed = false;
+  const quarters = sheet.quarters.map(panel => {
+    const q = panel.quarter;
+    const returner = (players || []).find(player => isBackHalfReturn(player, q));
+    if (!returner) return panel;
+    const lineup = lineups?.[q] || lineups?.[String(q)];
+    const snapshot = snapshots?.[q] || snapshots?.[String(q)] || null;
+    if (snapshot?.starters?.length && lineup) {
+      changed = true;
+      const startLineup = lineupFromSnapshot(snapshot, players || []);
+      const start = paintLineup(startLineup, q, periodAbbrev);
+      const after = paintLineup(lineup, q, periodAbbrev);
+      return {
+        ...start,
+        label: panel.label,
+        pairs: (snapshot.pairs || []).map(pair => ({ inId: pair.inId, outId: pair.outId })),
+        after: { ...after, label: panel.label, pairs: [] },
+      };
+    }
+    const view = quarterHalfPresentation(lineup, segments, q, { returnerId: returner.id });
+    if (!view?.pairs?.length) return panel;
+    changed = true;
+    const next = lineups?.[q + 1] || lineups?.[String(q + 1)] || null;
+    const manual = pairPlan?.[q] || pairPlan?.[String(q)] || [];
+    const pairs = useSubs
+      ? backHalfShownPairs({
+        start: view.start,
+        returnerPair: view.pairs[0],
+        nextLineup: next,
+        minutesById,
+        manualPairs: manual,
+      })
+      : view.pairs;
+    const override = afterSubs?.[q] || afterSubs?.[String(q)] || null;
+    const start = paintLineup(view.start, q, periodAbbrev);
+    const after = paintLineup(sameAfterLineup(view.start, pairs, override), q, periodAbbrev);
+    return {
+      ...start,
+      label: panel.label,
+      pairs: pairs.map(pair => ({ inId: pair.inId, outId: pair.outId })),
+      after: { ...after, label: panel.label, pairs: [] },
+    };
+  });
+  return changed ? { ...sheet, quarters } : sheet;
 }

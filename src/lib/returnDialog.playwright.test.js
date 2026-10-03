@@ -332,6 +332,106 @@ test("full mode shows Start and After only for a back-half quarter", async () =>
   }
 });
 
+async function fieldIds(page) {
+  return page.locator("[data-testid^='field-player-']").evaluateAll(nodes => (
+    nodes.map(node => node.getAttribute("data-player-id")).filter(Boolean)
+  ));
+}
+
+async function benchIds(page) {
+  return page.locator("[data-testid='bench-player']").evaluateAll(nodes => (
+    nodes.map(node => node.getAttribute("data-player-id")).filter(Boolean)
+  ));
+}
+
+test("sub-mode share and print After match the live After for a 2nd-half return", async () => {
+  const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
+  const errors = [];
+  page.on("pageerror", error => errors.push(String(error)));
+  try {
+    await page.goto(`${base}/src/lib/harness/qa-return.html`, { waitUntil: "networkidle" });
+    await page.getByRole("button", { name: "Q2" }).click();
+    await page.getByTestId("phase-toggle").waitFor();
+    await page.getByTestId("phase-after").click();
+    await page.getByTestId("phase-caption").waitFor();
+    const afterIds = await fieldIds(page);
+    const afterBench = await benchIds(page);
+    assert.equal(afterIds.includes("p1"), true, "John is on");
+    assert.equal(afterIds.includes("p3"), true, "Jaxon is on");
+    assert.equal(afterIds.includes("p4"), false, "Remi is off");
+    assert.equal(afterIds.includes("p5"), false, "Sean is off");
+    assert.deepEqual(afterBench.slice().sort(), ["p4", "p5", "p7"]);
+    await page.screenshot({ path: "/opt/cursor/artifacts/screenshots/m1-app-after.png", fullPage: true });
+    await page.getByRole("button", { name: "Share lineup" }).click();
+    const sheet = page.getByTestId("share-sheet");
+    await sheet.waitFor();
+    const share = page.getByTestId("share-after-2");
+    await share.waitFor({ state: "attached" });
+    assert.equal(await share.getAttribute("data-ids"), afterIds.join(","));
+    assert.equal(await share.getAttribute("data-bench"), afterBench.join(","));
+    await page.getByTestId("share-modal").getByTestId("phase-after").click();
+    await page.waitForFunction(() => document.querySelector("[data-testid='share-sheet']")?.getAttribute("data-preview") === "after");
+    await page.getByTestId("share-sheet").screenshot({ path: "/opt/cursor/artifacts/screenshots/m1-share.png" });
+    await page.getByTestId("open-print-preview").click();
+    const print = page.getByTestId("print-after-2");
+    await print.waitFor({ state: "attached" });
+    assert.equal(await print.getAttribute("data-ids"), afterIds.join(","));
+    assert.equal(await print.getAttribute("data-bench"), afterBench.join(","));
+    await page.getByTestId("print-preview").screenshot({ path: "/opt/cursor/artifacts/screenshots/m1-print.png" });
+    assert.equal(errors.length, 0, errors.join("\n"));
+  } finally {
+    await page.close();
+  }
+});
+
+test("full mode shows Start and After when an injured player returns for the same quarter", async () => {
+  const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
+  const errors = [];
+  page.on("pageerror", error => errors.push(String(error)));
+  try {
+    await page.goto(`${base}/src/lib/harness/qa-return.html?case=m2`, { waitUntil: "networkidle" });
+    await page.getByRole("button", { name: "Q2" }).click();
+    const toggle = page.getByTestId("phase-toggle");
+    await toggle.scrollIntoViewIfNeeded();
+    await toggle.waitFor();
+    const startIds = await fieldIds(page);
+    assert.equal(startIds.includes("p1"), true, "John starts");
+    assert.equal(startIds.includes("p2"), false, "Wes is still off");
+    assert.equal(startIds[0], "p6", "Henry stays in goal");
+    await page.screenshot({ path: "/opt/cursor/artifacts/screenshots/m2-start.png", fullPage: true });
+    await page.getByTestId("phase-after").click();
+    await page.getByTestId("phase-caption").waitFor();
+    const afterIds = await fieldIds(page);
+    assert.equal(afterIds.includes("p2"), true, "Wes is back");
+    assert.equal(afterIds.includes("p1"), false, "John sits the second half");
+    assert.equal(afterIds[0], "p6", "the goalkeeper stays");
+    await page.screenshot({ path: "/opt/cursor/artifacts/screenshots/m2-after.png", fullPage: true });
+    assert.equal(errors.length, 0, errors.join("\n"));
+  } finally {
+    await page.close();
+  }
+});
+
+test("redraw who plays a quarter clears the back-half return", async () => {
+  const page = await browser.newPage({ viewport: { width: 390, height: 900 } });
+  const errors = [];
+  page.on("pageerror", error => errors.push(String(error)));
+  try {
+    await page.goto(`${base}/src/lib/harness/back-half.html?mode=full`, { waitUntil: "networkidle" });
+    const toggle = page.getByTestId("phase-toggle");
+    await toggle.scrollIntoViewIfNeeded();
+    await toggle.waitFor();
+    const redraw = page.getByRole("button", { name: "Redraw who plays Q1" });
+    await redraw.scrollIntoViewIfNeeded();
+    await redraw.click();
+    await page.getByText("Q1 redrawn.").waitFor();
+    assert.equal(await page.getByTestId("phase-toggle").count(), 0);
+    assert.equal(errors.length, 0, errors.join("\n"));
+  } finally {
+    await page.close();
+  }
+});
+
 test("escape and the backdrop leave the return dialog without a confirm", async () => {
   const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
   try {

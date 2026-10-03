@@ -34,13 +34,14 @@ import {
   GK_FULL_QUARTER_REASON,
   shareFieldSheet,
   sharePlayTimeSheet,
-  withBackHalfShare,
   isBackHalfReturn,
   quarterHalfPresentation,
   backHalfShownPairs,
   backHalfEarnedMinutes,
   backHalfDonorAvailable,
   stripReturnAtFrom,
+  stripReturnAtForQuarter,
+  benchReplacementId,
   realEventPlayerIds,
   scheduleHalfRotation,
   scheduleWholeGame,
@@ -72,7 +73,8 @@ import {
   reconcileAfterSubsMap,
   replanPhaseState,
   runAfterSubs,
-  viewAfterSubs,
+  sameAfterLineup,
+  withBackHalfShare,
 } from "./lib/afterSubs.js";
 import { PhaseToggle, usePhaseSwipe } from "./components/PhaseToggle.jsx";
 import { FORMATION_TEMPLATES, clampPeriod, formationNameForPeriod, preservePlayedBase, reapplyBase, reshapeLineup, withPeriodOverride, withoutPeriodOverride, normalizeFormationOverrides } from "./lib/formations.js";
@@ -1782,8 +1784,13 @@ export function TabGame({ format, league, players, setPlayers, addPlayer, remove
     if (wasOn) bankLeave(playerId);
     const updatedPlayers = players.map(p => {
       if (p.id !== playerId) return p;
-      if (mode === "out") return markOut(p, { midGameInjury: false, injuredInQuarter: quarter, returnQuarter: null });
-      return markInjured(p, { midGameInjury: true, injuredInQuarter: quarter, returnQuarter: null });
+      const extra = { injuredInQuarter: quarter, returnQuarter: null };
+      if (wasOn && live) {
+        const incoming = benchReplacementId(currentL, playerId);
+        if (incoming) extra.replacedBy = incoming;
+      }
+      if (mode === "out") return markOut(p, { ...extra, midGameInjury: false });
+      return markInjured(p, { ...extra, midGameInjury: true });
     });
     setPlayers(updatedPlayers);
     dropQueued(playerId);
@@ -2177,6 +2184,7 @@ export function TabGame({ format, league, players, setPlayers, addPlayer, remove
       return;
     }
     const nextAll = { ...lineupsByQuarter, [quarter]: result.lineup };
+    setPlayers(prev => stripReturnAtForQuarter(prev, quarter));
     setLineupsByQuarter(nextAll);
     setScrambleNote(`${abbr}${quarter} redrawn. The other ${noun} were left alone.`);
     warnIfShort(nextAll);
@@ -2270,11 +2278,11 @@ export function TabGame({ format, league, players, setPlayers, addPlayer, remove
   });
   const phase = controlOn && fieldPhase === "after" ? "after" : "start";
   const phaseStart = halfView?.start || currentLineup;
-  const afterView = phase === "after" && !ran && phaseStart
-    ? viewAfterSubs(phaseStart, shownPairs, periodOverride)
+  const afterLineup = phase === "after" && !ran && phaseStart
+    ? sameAfterLineup(phaseStart, shownPairs, periodOverride)
     : null;
   const displayLineup = phase === "after"
-    ? (ran ? currentLineup : afterView?.lineup || currentLineup)
+    ? (ran ? currentLineup : afterLineup || currentLineup)
     : (ran ? lineupFromSnapshot(snapshot, players) : phaseStart);
   const linePairs = phase === "start" ? (ran ? (snapshot?.pairs || []) : shownPairs) : [];
   const readOnlyStart = phase === "start" && ran;
@@ -2506,7 +2514,10 @@ export function TabGame({ format, league, players, setPlayers, addPlayer, remove
           segments: subSegments,
           periodAbbrev: abbr,
           pairPlan,
+          minutesById,
           subMode,
+          afterSubs,
+          snapshots: startSnapshots,
         }),
         playTime: sharePlayTimeSheet({ ...sheetInput, quarters: periodList, periodAbbrev: abbr }),
       },
@@ -3363,6 +3374,8 @@ export function TabGame({ format, league, players, setPlayers, addPlayer, remove
                     const partner = linePairs.find(pair => pair.inId === p.id);
                     return (
                       <div key={p.id}
+                        data-testid="bench-player"
+                        data-player-id={p.id}
                         data-drop={phase === "after" ? undefined : `bench:${p.id}`}
                         onPointerDown={e => {
                           if (phase === "after") return;
@@ -3494,16 +3507,20 @@ export function TabGame({ format, league, players, setPlayers, addPlayer, remove
             const onAfter = Number(q) === Number(quarter) && fieldPhase === "after";
             return !!(snap?.starters?.length) || onAfter;
           }}
-          donorAvailable={q => backHalfDonorAvailable({
-            lineup: lineupsByQuarter[q] || lineupsByQuarter[String(q)],
-            segments: subSegments,
-            quarter: q,
-            returnerId: returnAsk.playerId,
-            lineups: lineupsByQuarter,
-            totalQuarters,
-            protectedIds: realEventPlayerIds(realPeriodEvents, q),
-            rate: getOverallRating,
-          })}
+          donorAvailable={q => {
+            const asking = players.find(player => player.id === returnAsk.playerId);
+            return backHalfDonorAvailable({
+              lineup: lineupsByQuarter[q] || lineupsByQuarter[String(q)],
+              segments: subSegments,
+              quarter: q,
+              returnerId: returnAsk.playerId,
+              lineups: lineupsByQuarter,
+              totalQuarters,
+              protectedIds: realEventPlayerIds(realPeriodEvents, q),
+              rate: getOverallRating,
+              replacedBy: Number(asking?.injuredInQuarter) === Number(q) ? asking?.replacedBy : null,
+            });
+          }}
           onCancel={() => applyReturnChoice({ type: "cancel" })}
           onConfirm={applyReturnChoice}
           onSwitchQuarter={setQuarter}
@@ -3566,6 +3583,7 @@ export function TabGame({ format, league, players, setPlayers, addPlayer, remove
           players={players}
           lineupsByQuarter={lineupsByQuarter}
           pairPlan={pairPlan}
+          minutesById={minutesById}
           afterSubs={afterSubs}
           startSnapshots={startSnapshots}
           subMode={subMode}
@@ -3633,6 +3651,7 @@ function SheetCanvases({ field, playTime, league, opponent, homeScore, awayScore
       <div style={{fontSize:12,fontWeight:800,color:"#e8a020",marginBottom:6}}>{previewTitle}</div>
       <div data-testid="share-sheet" data-dual={dual ? "true" : "false"} data-preview={view} style={{borderRadius:8,overflow:"hidden",marginBottom:8,border:"1px solid rgba(255,255,255,0.08)",background:"#0c1409",touchAction:dual ? "pan-y" : "auto"}}>
         <canvas ref={fieldRef} style={{width:"100%",height:"auto",display:"block",touchAction:dual ? "pan-y" : "auto"}} />
+        <AfterLineupMarks field={field} prefix="share" />
       </div>
       <canvas ref={fileRef} data-testid="share-file" aria-hidden="true" />
       <button type="button" onClick={() => downloadCanvas(fileRef.current, `CoachKit_Field_${periodAbbrev}1-${periodAbbrev}${periodCount}.png`)} style={{...sheetSaveBtn, width:"100%", marginBottom:16}}>
@@ -3643,6 +3662,7 @@ function SheetCanvases({ field, playTime, league, opponent, homeScore, awayScore
           <div style={{fontSize:14, fontWeight:800, marginBottom:8}}>Print preview</div>
           <div style={{fontSize:12, marginBottom:8, lineHeight:1.4}}>Start and After subs, side by side, for each period that has subs.</div>
           <canvas ref={printRef} style={{width:"100%",height:"auto",display:"block",background:"#fff"}} />
+          <AfterLineupMarks field={field} prefix="print" />
         </div>
       )}
       <div style={{fontSize:12,fontWeight:800,color:"#2ecc71",marginBottom:6}}>Sheet 2 · Play time</div>
@@ -3656,7 +3676,19 @@ function SheetCanvases({ field, playTime, league, opponent, homeScore, awayScore
   );
 }
 
-function ShareLineupModal({ players, lineupsByQuarter, pairPlan, afterSubs, startSnapshots, subMode, segments, credit, minQ, quarters = [1, 2, 3, 4], periodAbbrev = "Q", homeScore, awayScore, opponent, league, onClose }) {
+function AfterLineupMarks({ field, prefix }) {
+  return (field?.quarters || []).filter(panel => panel.after).map(panel => (
+    <span
+      key={panel.quarter}
+      data-testid={`${prefix}-after-${panel.quarter}`}
+      data-ids={(panel.after.starters || []).map(slot => slot.id || "").join(",")}
+      data-bench={(panel.after.bench || []).map(player => player.id || "").join(",")}
+      hidden
+    />
+  ));
+}
+
+function ShareLineupModal({ players, lineupsByQuarter, pairPlan, minutesById = {}, afterSubs, startSnapshots, subMode, segments, credit, minQ, quarters = [1, 2, 3, 4], periodAbbrev = "Q", homeScore, awayScore, opponent, league, onClose }) {
   const [focus, setFocus] = useState("start");
   const [showPrint, setShowPrint] = useState(false);
   const field = useMemo(
@@ -3669,9 +3701,12 @@ function ShareLineupModal({ players, lineupsByQuarter, pairPlan, afterSubs, star
       segments,
       periodAbbrev,
       pairPlan,
+      minutesById,
       subMode,
+      afterSubs,
+      snapshots: startSnapshots,
     }),
-    [lineupsByQuarter, pairPlan, afterSubs, startSnapshots, subMode, quarters, periodAbbrev, players, segments],
+    [lineupsByQuarter, pairPlan, minutesById, afterSubs, startSnapshots, subMode, quarters, periodAbbrev, players, segments],
   );
   const playTime = useMemo(
     () => sharePlayTimeSheet({ players, lineups: lineupsByQuarter, segments, credit, minQ, quarters, periodAbbrev }),
