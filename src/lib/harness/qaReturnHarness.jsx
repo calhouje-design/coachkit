@@ -2,11 +2,11 @@ import { useState } from "react";
 import { createRoot } from "react-dom/client";
 import { TabGame } from "../../App.jsx";
 import {
-  benchReplacementId,
   noteSubSegment,
   planAvailability,
   returnToGame,
   scheduleHalfRotation,
+  vacatedSpotHolder,
 } from "../gameDay.js";
 import { resolveSetup } from "../leagueRules.js";
 
@@ -81,16 +81,15 @@ function injuryReturn() {
       bench: [...bench],
     };
   }
-  const replacedBy = benchReplacementId(lineups[2], wes.id);
-  const injured = players.map(player => (
+  const absent = players.map(player => (
     player.id === wes.id
-      ? { ...player, injured: true, out: false, midGameInjury: true, injuredInQuarter: 2, returnQuarter: null, replacedBy }
+      ? { ...player, injured: true, out: false, midGameInjury: true, injuredInQuarter: 2, returnQuarter: null }
       : player
   ));
   const gone = planAvailability({
     autoRegen: true,
     kind: "absent",
-    players: injured,
+    players: absent,
     absentId: wes.id,
     quarter: 2,
     lineups,
@@ -101,6 +100,10 @@ function injuryReturn() {
     totalQuarters: 4,
     livePeriod: true,
   });
+  const replacedBy = vacatedSpotHolder(lineups[2], gone.lineups[2], wes.id);
+  const injured = absent.map(player => (
+    player.id === wes.id ? { ...player, replacedBy } : player
+  ));
   const marked = noteSubSegment(gone.segments, wes.id, 2, "left");
   return returnToGame({
     players: injured,

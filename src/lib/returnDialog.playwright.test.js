@@ -1,6 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { access } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { createServer } from "vite";
 import { chromium, devices, webkit } from "playwright";
 
@@ -361,7 +363,7 @@ test("sub-mode share and print After match the live After for a 2nd-half return"
     assert.equal(afterIds.includes("p4"), false, "Remi is off");
     assert.equal(afterIds.includes("p5"), false, "Sean is off");
     assert.deepEqual(afterBench.slice().sort(), ["p4", "p5", "p7"]);
-    await page.screenshot({ path: "/opt/cursor/artifacts/screenshots/m1-app-after.png", fullPage: true });
+    await page.screenshot({ path: path.join(os.tmpdir(), "m1-app-after.png"), fullPage: true });
     await page.getByRole("button", { name: "Share lineup" }).click();
     const sheet = page.getByTestId("share-sheet");
     await sheet.waitFor();
@@ -371,13 +373,13 @@ test("sub-mode share and print After match the live After for a 2nd-half return"
     assert.equal(await share.getAttribute("data-bench"), afterBench.join(","));
     await page.getByTestId("share-modal").getByTestId("phase-after").click();
     await page.waitForFunction(() => document.querySelector("[data-testid='share-sheet']")?.getAttribute("data-preview") === "after");
-    await page.getByTestId("share-sheet").screenshot({ path: "/opt/cursor/artifacts/screenshots/m1-share.png" });
+    await page.getByTestId("share-sheet").screenshot({ path: path.join(os.tmpdir(), "m1-share.png") });
     await page.getByTestId("open-print-preview").click();
     const print = page.getByTestId("print-after-2");
     await print.waitFor({ state: "attached" });
     assert.equal(await print.getAttribute("data-ids"), afterIds.join(","));
     assert.equal(await print.getAttribute("data-bench"), afterBench.join(","));
-    await page.getByTestId("print-preview").screenshot({ path: "/opt/cursor/artifacts/screenshots/m1-print.png" });
+    await page.getByTestId("print-preview").screenshot({ path: path.join(os.tmpdir(), "m1-print.png") });
     assert.equal(errors.length, 0, errors.join("\n"));
   } finally {
     await page.close();
@@ -398,14 +400,14 @@ test("full mode shows Start and After when an injured player returns for the sam
     assert.equal(startIds.includes("p1"), true, "John starts");
     assert.equal(startIds.includes("p2"), false, "Wes is still off");
     assert.equal(startIds[0], "p6", "Henry stays in goal");
-    await page.screenshot({ path: "/opt/cursor/artifacts/screenshots/m2-start.png", fullPage: true });
+    await page.screenshot({ path: path.join(os.tmpdir(), "m2-start.png"), fullPage: true });
     await page.getByTestId("phase-after").click();
     await page.getByTestId("phase-caption").waitFor();
     const afterIds = await fieldIds(page);
     assert.equal(afterIds.includes("p2"), true, "Wes is back");
     assert.equal(afterIds.includes("p1"), false, "John sits the second half");
     assert.equal(afterIds[0], "p6", "the goalkeeper stays");
-    await page.screenshot({ path: "/opt/cursor/artifacts/screenshots/m2-after.png", fullPage: true });
+    await page.screenshot({ path: path.join(os.tmpdir(), "m2-after.png"), fullPage: true });
     assert.equal(errors.length, 0, errors.join("\n"));
   } finally {
     await page.close();

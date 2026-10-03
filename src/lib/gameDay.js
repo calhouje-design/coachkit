@@ -155,6 +155,19 @@ export function benchReplacementId(lineup, playerId) {
   return sub?.id || null;
 }
 
+/**
+ * Who fills the injured player's spot after the replan.
+ * Slot order stays put. The player in that slot is the one who came on.
+ */
+export function vacatedSpotHolder(beforeLineup, afterLineup, absentId) {
+  if (!beforeLineup?.starters || !afterLineup?.starters || !absentId) return null;
+  const index = beforeLineup.starters.findIndex(slot => slot.player?.id === absentId);
+  if (index < 0) return null;
+  const holder = afterLineup.starters[index]?.player?.id || null;
+  if (!holder || holder === absentId) return null;
+  return holder;
+}
+
 export function pullFromQuarter(lineup, playerId) {
   if (!lineup?.starters) return lineup;
   const wasOn = lineup.starters.some(slot => slot.player?.id === playerId);
@@ -1973,18 +1986,12 @@ export function installBackHalfReturn({
     if (!kind) return;
     nextSegments = writePeriodSegment(nextSegments, playerId, q, kind);
   });
-  const donorHalves = equityHalves(donor.id, {
-    lineups: priorLineups,
-    segments: priorSegments,
-    credit: {},
-    quarters: [q],
-  });
   nextSegments = writePeriodSegment(nextSegments, donor.id, q, "left");
   const earlier = segmentAt(priorSegments, returning.id, q);
-  // A player who already started this quarter keeps that half when the donor
-  // can give one up. If the donor was already on for one half, the returner
-  // takes only the back half so the quarter total stays the same.
-  if (earlier !== "left" || donorHalves < 2) {
+  // The return credits the back half. A half already played before the injury
+  // stays, so a player marked "left" finishes on the field with no split mark.
+  // The donor keeps the front half, including when that was their only half.
+  if (earlier !== "left") {
     nextSegments = writePeriodSegment(nextSegments, returning.id, q, "entered");
   }
   if (gkId) nextSegments = writePeriodSegment(nextSegments, gkId, q, null);

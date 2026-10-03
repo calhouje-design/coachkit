@@ -41,7 +41,7 @@ import {
   backHalfDonorAvailable,
   stripReturnAtFrom,
   stripReturnAtForQuarter,
-  benchReplacementId,
+  vacatedSpotHolder,
   realEventPlayerIds,
   scheduleHalfRotation,
   scheduleWholeGame,
@@ -1785,10 +1785,6 @@ export function TabGame({ format, league, players, setPlayers, addPlayer, remove
     const updatedPlayers = players.map(p => {
       if (p.id !== playerId) return p;
       const extra = { injuredInQuarter: quarter, returnQuarter: null };
-      if (wasOn && live) {
-        const incoming = benchReplacementId(currentL, playerId);
-        if (incoming) extra.replacedBy = incoming;
-      }
       if (mode === "out") return markOut(p, { ...extra, midGameInjury: false });
       return markInjured(p, { ...extra, midGameInjury: true });
     });
@@ -1824,11 +1820,19 @@ export function TabGame({ format, league, players, setPlayers, addPlayer, remove
         totalQuarters,
         livePeriod: live,
       });
+      let roster = updatedPlayers;
+      if (wasOn && live) {
+        const holder = vacatedSpotHolder(currentL, planned.lineups?.[quarter], playerId);
+        if (holder) {
+          roster = roster.map(p => (p.id === playerId ? { ...p, replacedBy: holder } : p));
+          setPlayers(roster);
+        }
+      }
       let segments = planned.segments;
       if (wasOn && live) segments = noteSubSegment(segments, playerId, quarter, "left");
       setAppearanceCredit(credit);
       setSubSegments(segments);
-      notePlanResult(planned.lineups, updatedPlayers, credit, segments);
+      notePlanResult(planned.lineups, roster, credit, segments);
       syncStints(planned.lineups[quarter]);
       return;
     }
@@ -1846,6 +1850,9 @@ export function TabGame({ format, league, players, setPlayers, addPlayer, remove
         credit = setAppearanceCreditFor(credit, incoming, quarter, false);
         setAppearanceCredit(credit);
         setSubSegments(prev => noteSubSegment(prev, incoming, quarter, "entered"));
+      }
+      if (wasOn && live) {
+        setPlayers(prev => prev.map(p => (p.id === playerId ? { ...p, replacedBy: incoming } : p)));
       }
     }
     setLineupsByQuarter(next);
@@ -1888,14 +1895,18 @@ export function TabGame({ format, league, players, setPlayers, addPlayer, remove
       running,
     }, choice);
     if (!result.changed) return;
-    setPlayers(result.players);
+    const backHalfYes = choice.available !== false && choice.half === "back";
+    const roster = result.regenerated && !backHalfYes
+      ? stripReturnAtFrom(result.players, choice.available ? Number(choice.quarter) : Number(choice.quarter) + 1)
+      : result.players;
+    setPlayers(roster);
     setFairInfo(result.fairInfo);
     setReturnToast(result.toast);
     if (!result.regenerated && result.lineups === lineupsByQuarter) return;
     if (result.regenerated) {
       setRealPeriodEvents(result.realEvents);
       setSubSegments(result.segments);
-      notePlanResult(result.lineups, result.players, appearanceCredit, result.segments);
+      notePlanResult(result.lineups, roster, appearanceCredit, result.segments);
       syncStints(result.lineups[quarter]);
       return;
     }

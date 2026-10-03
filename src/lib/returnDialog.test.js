@@ -28,8 +28,9 @@ import {
   shareFieldSheet,
   stripReturnAtFrom,
   stripReturnAtForQuarter,
-  benchReplacementId,
+  vacatedSpotHolder,
 } from "./gameDay.js";
+import { redrawQuarterMembership } from "./fairPlay.js";
 import { formationKey, sameAfterLineup, viewAfterSubs, withBackHalfShare } from "./afterSubs.js";
 import {
   availabilityCopy,
@@ -1084,17 +1085,15 @@ test("full mode: Wes injured in Q2 comes back at the half for John, who replaced
       bench: [...bench],
     };
   }
-  const replacedBy = benchReplacementId(lineups[2], wes.id);
-  assert.equal(replacedBy, john.id);
-  const injured = players.map(player => (
+  const absent = players.map(player => (
     player.id === wes.id
-      ? { ...player, injured: true, out: false, midGameInjury: true, injuredInQuarter: 2, returnQuarter: null, replacedBy }
+      ? { ...player, injured: true, out: false, midGameInjury: true, injuredInQuarter: 2, returnQuarter: null }
       : player
   ));
   const gone = planAvailability({
     autoRegen: true,
     kind: "absent",
-    players: injured,
+    players: absent,
     absentId: wes.id,
     quarter: 2,
     lineups,
@@ -1105,6 +1104,11 @@ test("full mode: Wes injured in Q2 comes back at the half for John, who replaced
     totalQuarters: 4,
     livePeriod: true,
   });
+  const replacedBy = vacatedSpotHolder(lineups[2], gone.lineups[2], wes.id);
+  assert.equal(replacedBy, john.id);
+  const injured = absent.map(player => (
+    player.id === wes.id ? { ...player, replacedBy } : player
+  ));
   const marked = noteSubSegment(gone.segments, wes.id, 2, "left");
   assert.equal(gone.lineups[2].starters.find(slot => slot.pos === "LD").player.id, john.id);
   const before = players.reduce((sum, player) => sum + quarterHalves(player.id, gone.lineups, marked, 2), 0);
@@ -1148,16 +1152,15 @@ test("sub mode: Leo's injury replacement is the donor for the same quarter", () 
     const opened = openSheet(players, true, seed);
     const beforeLineup = opened.lineups[2];
     if (!beforeLineup?.starters?.some(slot => slot.player?.id === leo.id)) continue;
-    const replacedBy = benchReplacementId(beforeLineup, leo.id);
-    const injured = players.map(player => (
+    const absent = players.map(player => (
       player.id === leo.id
-        ? { ...player, injured: true, out: false, midGameInjury: true, injuredInQuarter: 2, returnQuarter: null, replacedBy }
+        ? { ...player, injured: true, out: false, midGameInjury: true, injuredInQuarter: 2, returnQuarter: null }
         : player
     ));
     const gone = planAvailability({
       autoRegen: true,
       kind: "absent",
-      players: injured,
+      players: absent,
       absentId: leo.id,
       quarter: 2,
       lineups: opened.lineups,
@@ -1168,6 +1171,10 @@ test("sub mode: Leo's injury replacement is the donor for the same quarter", () 
       totalQuarters: 4,
       livePeriod: true,
     });
+    const replacedBy = vacatedSpotHolder(beforeLineup, gone.lineups[2], leo.id);
+    const injured = absent.map(player => (
+      player.id === leo.id ? { ...player, replacedBy } : player
+    ));
     const marked = noteSubSegment(gone.segments, leo.id, 2, "left");
     const before = players.reduce((sum, player) => sum + quarterHalves(player.id, gone.lineups, marked, 2), 0);
     const back = returnToGame({
@@ -1184,7 +1191,6 @@ test("sub mode: Leo's injury replacement is the donor for the same quarter", () 
       livePeriod: true,
     });
     const afterSum = players.reduce((sum, player) => sum + quarterHalves(player.id, back.lineups, back.segments, 2), 0);
-    assert.equal(afterSum, before, `sum seed ${seed}`);
     const view = quarterHalfPresentation(back.lineups[2], back.segments, 2, { returnerId: leo.id });
     assert.ok(view?.pairs?.length, `presentation seed ${seed}`);
     const gk = goalkeeperId(back.lineups[2]);
@@ -1210,13 +1216,11 @@ test("sub mode: Leo's injury replacement is the donor for the same quarter", () 
     assert.equal(after.starters.some(slot => slot.player?.id === leo.id), true);
     const donorId = view.pairs[0].outId;
     const donorBefore = quarterHalves(donorId, gone.lineups, marked, 2);
-    if (donorBefore >= 2) {
-      assert.equal(quarterHalves(leo.id, back.lineups, back.segments, 2), 2, `returner seed ${seed}`);
-      assert.equal(quarterHalves(donorId, back.lineups, back.segments, 2), 1, `donor seed ${seed}`);
-    } else {
-      assert.equal(quarterHalves(leo.id, back.lineups, back.segments, 2), 1, `returner seed ${seed}`);
-      assert.equal(quarterHalves(donorId, back.lineups, back.segments, 2), 1, `donor seed ${seed}`);
-    }
+    assert.notEqual(segmentAt(back.segments, leo.id, 2), "entered", `returner mark seed ${seed}`);
+    assert.equal(segmentAt(back.segments, donorId, 2), "left", `donor mark seed ${seed}`);
+    assert.equal(quarterHalves(leo.id, back.lineups, back.segments, 2), 2, `returner seed ${seed}`);
+    assert.equal(quarterHalves(donorId, back.lineups, back.segments, 2), 1, `donor seed ${seed}`);
+    assert.equal(afterSum, before + (donorBefore >= 2 ? 0 : 1), `sum seed ${seed}`);
     checked += 1;
   }
   assert.ok(checked >= 8, `checked ${checked}`);
@@ -1279,4 +1283,283 @@ test("redraw of one quarter clears returnAt for that quarter only", () => {
   assert.equal(next[2].returnQuarter, 2);
   assert.equal(next[2].returnAt, undefined);
   assert.equal(stripReturnAtForQuarter(players, 4), players);
+});
+
+test("a donor who only had one half still gives up the back half", () => {
+  [true, false].forEach(subMode => {
+    const players = namedRoster([
+      "John Smith", "Wes Johnson", "Jaxon Williams", "Remi Brown", "Sean Jones",
+      "Henry Davis", "Jude Garcia", "Trey Miller", "Maddox Anderson",
+    ]);
+    const john = players[0];
+    const wes = players[1];
+    const starters = [
+      { pos: "GK", player: players[5] },
+      { pos: "LD", player: john },
+      { pos: "RD", player: players[2] },
+      { pos: "LM", player: players[3] },
+      { pos: "RM", player: players[4] },
+      { pos: "CF", player: players[6] },
+    ];
+    const bench = [wes, players[7], players[8]];
+    const lineups = {};
+    for (let q = 1; q <= 4; q += 1) {
+      lineups[q] = {
+        starters: starters.map(slot => ({ ...slot })),
+        bench: [...bench],
+      };
+    }
+    const segments = {
+      [wes.id]: { 2: "left" },
+      [john.id]: { 2: "entered" },
+    };
+    const injured = players.map(player => (
+      player.id === wes.id
+        ? { ...player, injured: true, out: false, midGameInjury: true, injuredInQuarter: 2, returnQuarter: null, replacedBy: john.id }
+        : player
+    ));
+    assert.equal(quarterHalves(wes.id, lineups, segments, 2), 1);
+    assert.equal(quarterHalves(john.id, lineups, segments, 2), 1);
+    const before = players.reduce((sum, player) => sum + quarterHalves(player.id, lineups, segments, 2), 0);
+    const back = returnToGame({
+      players: injured,
+      playerId: wes.id,
+      quarter: 2,
+      half: "back",
+      lineups,
+      segments,
+      slots: SLOTS,
+      subMode,
+      minHalves: 4,
+      totalQuarters: 4,
+      livePeriod: true,
+    });
+    assert.notEqual(segmentAt(back.segments, wes.id, 2), "entered", `sub ${subMode}`);
+    assert.equal(quarterHalves(wes.id, back.lineups, back.segments, 2), 2, `sub ${subMode}`);
+    assert.equal(segmentAt(back.segments, john.id, 2), "left", `sub ${subMode}`);
+    assert.equal(quarterHalves(john.id, back.lineups, back.segments, 2), 1, `sub ${subMode}`);
+    const after = players.reduce((sum, player) => sum + quarterHalves(player.id, back.lineups, back.segments, 2), 0);
+    assert.equal(after, before + 1, `sub ${subMode}`);
+    const view = quarterHalfPresentation(back.lineups[2], back.segments, 2, { returnerId: wes.id });
+    assert.equal(view.pairs[0].outId, john.id, `sub ${subMode}`);
+    assert.notEqual(view.pairs[0].outId, goalkeeperId(back.lineups[2]));
+  });
+});
+
+function sitOut(players, id, quarter) {
+  return players.map(player => (
+    player.id === id
+      ? { ...player, out: true, injured: false, injuredInQuarter: quarter, returnQuarter: null }
+      : player
+  ));
+}
+
+test("a whole-quarter return leaves other back-half marks for the app to strip", () => {
+  const players = namedRoster([
+    "John Smith", "Wes Johnson", "Jaxon Williams", "Remi Brown", "Sean Jones",
+    "Henry Davis", "Jude Garcia", "Trey Miller", "Maddox Anderson",
+  ]);
+  const wes = players.find(player => player.name.startsWith("Wes"));
+  const jaxon = players.find(player => player.name.startsWith("Jaxon"));
+  const remi = players.find(player => player.name.startsWith("Remi"));
+  const opened = openSheet(players, true, 2);
+  const wesPlayers = sitOut(players, wes.id, 1);
+  const wesGone = planAvailability({
+    autoRegen: true,
+    kind: "absent",
+    players: wesPlayers,
+    absentId: wes.id,
+    quarter: 1,
+    lineups: opened.lineups,
+    segments: opened.segments,
+    slots: SLOTS,
+    subMode: true,
+    minHalves: 4,
+    totalQuarters: 4,
+  });
+  const wesBack = returnToGame({
+    players: wesPlayers,
+    playerId: wes.id,
+    quarter: 2,
+    half: "back",
+    lineups: wesGone.lineups,
+    segments: wesGone.segments,
+    slots: SLOTS,
+    subMode: true,
+    minHalves: 4,
+    totalQuarters: 4,
+  });
+  assert.equal(isBackHalfReturn(wesBack.players.find(player => player.id === wes.id), 2), true);
+  const jaxonPlayers = sitOut(wesBack.players, jaxon.id, 1);
+  const jaxonGone = planAvailability({
+    autoRegen: true,
+    kind: "absent",
+    players: jaxonPlayers,
+    absentId: jaxon.id,
+    quarter: 1,
+    lineups: wesBack.lineups,
+    segments: wesBack.segments,
+    slots: SLOTS,
+    subMode: true,
+    minHalves: 4,
+    totalQuarters: 4,
+  });
+  const jaxonBack = returnToGame({
+    players: jaxonPlayers,
+    playerId: jaxon.id,
+    quarter: 3,
+    half: "back",
+    lineups: jaxonGone.lineups,
+    segments: jaxonGone.segments,
+    slots: SLOTS,
+    subMode: true,
+    minHalves: 4,
+    totalQuarters: 4,
+  });
+  assert.equal(isBackHalfReturn(jaxonBack.players.find(player => player.id === wes.id), 2), true);
+  assert.equal(isBackHalfReturn(jaxonBack.players.find(player => player.id === jaxon.id), 3), true);
+  const remiPlayers = sitOut(jaxonBack.players, remi.id, 1);
+  const remiGone = planAvailability({
+    autoRegen: true,
+    kind: "absent",
+    players: remiPlayers,
+    absentId: remi.id,
+    quarter: 1,
+    lineups: jaxonBack.lineups,
+    segments: jaxonBack.segments,
+    slots: SLOTS,
+    subMode: true,
+    minHalves: 4,
+    totalQuarters: 4,
+  });
+  const whole = returnToGame({
+    players: remiPlayers,
+    playerId: remi.id,
+    quarter: 2,
+    half: "whole",
+    lineups: remiGone.lineups,
+    segments: remiGone.segments,
+    slots: SLOTS,
+    subMode: true,
+    minHalves: 4,
+    totalQuarters: 4,
+  });
+  const viaDialog = commitReturn({
+    players: remiPlayers,
+    playerId: remi.id,
+    lineups: remiGone.lineups,
+    segments: remiGone.segments,
+    hasSheet: true,
+    autoRegen: true,
+    subMode: true,
+    totalQuarters: 4,
+    slots: SLOTS,
+    minHalves: 4,
+    quarters: [1, 2, 3, 4],
+  }, { type: "confirm", quarter: 2, available: true, half: "whole" });
+  assert.equal(isBackHalfReturn(whole.players.find(player => player.id === wes.id), 2), true);
+  assert.equal(isBackHalfReturn(whole.players.find(player => player.id === jaxon.id), 3), true);
+  assert.equal(isBackHalfReturn(viaDialog.players.find(player => player.id === wes.id), 2), true);
+  assert.equal(isBackHalfReturn(viaDialog.players.find(player => player.id === jaxon.id), 3), true);
+  const stripped = stripReturnAtFrom(whole.players, 2);
+  assert.equal(isBackHalfReturn(stripped.find(player => player.id === wes.id), 2), false);
+  assert.equal(isBackHalfReturn(stripped.find(player => player.id === jaxon.id), 3), false);
+  assert.equal(stripped.find(player => player.id === wes.id).returnQuarter, 2);
+  assert.equal(stripped.find(player => player.id === jaxon.id).returnQuarter, 3);
+  const redraw = redrawQuarterMembership(stripped, whole.lineups, 2, 2, 4, {
+    segments: whole.segments,
+    lockGoalkeeper: true,
+  });
+  assert.equal(redraw.ok, true, redraw.reason);
+});
+
+function sameQuarterInjurySweep(subMode) {
+  const totals = { cases: 0, donorMatch: 0, sumSame: 0, sumPlus: 0, sumOther: 0 };
+  [9, 10].forEach(count => {
+    for (let seed = 1; seed <= 60; seed += 1) {
+      const players = roster(count);
+      const opened = openSheet(players, subMode, seed);
+      const before = opened.lineups[2];
+      (before?.starters || []).forEach(slot => {
+        if (!slot.player || isGkPosition(slot.pos)) return;
+        const id = slot.player.id;
+        totals.cases += 1;
+        const absent = players.map(player => (
+          player.id === id
+            ? { ...player, injured: true, out: false, midGameInjury: true, injuredInQuarter: 2, returnQuarter: null }
+            : player
+        ));
+        const gone = planAvailability({
+          autoRegen: true,
+          kind: "absent",
+          players: absent,
+          absentId: id,
+          quarter: 2,
+          lineups: opened.lineups,
+          segments: opened.segments,
+          slots: SLOTS,
+          subMode,
+          minHalves: 4,
+          totalQuarters: 4,
+          livePeriod: true,
+        });
+        const replacedBy = vacatedSpotHolder(before, gone.lineups[2], id);
+        const injured = absent.map(player => (
+          player.id === id ? { ...player, replacedBy } : player
+        ));
+        const marked = noteSubSegment(gone.segments, id, 2, "left");
+        const beforeSum = players.reduce((sum, player) => sum + quarterHalves(player.id, gone.lineups, marked, 2), 0);
+        const back = returnToGame({
+          players: injured,
+          playerId: id,
+          quarter: 2,
+          half: "back",
+          lineups: gone.lineups,
+          segments: marked,
+          slots: SLOTS,
+          subMode,
+          minHalves: 4,
+          totalQuarters: 4,
+          livePeriod: true,
+        });
+        const view = quarterHalfPresentation(back.lineups[2], back.segments, 2, { returnerId: id });
+        const gk = goalkeeperId(gone.lineups[2]);
+        const eligible = replacedBy && replacedBy !== gk && (gone.lineups[2]?.starters || []).some(item => (
+          item.player?.id === replacedBy && !isGkPosition(item.pos)
+        ));
+        assert.equal(eligible, true, `holder sub ${subMode} seed ${seed} ${id}`);
+        assert.equal(view?.pairs?.[0]?.outId, replacedBy, `donor sub ${subMode} seed ${seed} ${id}`);
+        assert.notEqual(view.pairs[0].outId, gk);
+        totals.donorMatch += 1;
+        const donorBefore = quarterHalves(replacedBy, gone.lineups, marked, 2);
+        assert.notEqual(segmentAt(back.segments, id, 2), "entered");
+        assert.equal(segmentAt(back.segments, replacedBy, 2), "left");
+        assert.equal(quarterHalves(id, back.lineups, back.segments, 2), 2);
+        assert.equal(quarterHalves(replacedBy, back.lineups, back.segments, 2), 1);
+        const afterSum = players.reduce((sum, player) => sum + quarterHalves(player.id, back.lineups, back.segments, 2), 0);
+        const delta = afterSum - beforeSum;
+        if (donorBefore >= 2) assert.equal(delta, 0, `sum sub ${subMode} seed ${seed} ${id}`);
+        else assert.equal(delta, 1, `sum sub ${subMode} seed ${seed} ${id}`);
+        if (delta === 0) totals.sumSame += 1;
+        else if (delta === 1) totals.sumPlus += 1;
+        else totals.sumOther += 1;
+      });
+    }
+  });
+  return totals;
+}
+
+test("the post-replan spot holder donates in every same-quarter injury", () => {
+  const sub = sameQuarterInjurySweep(true);
+  const full = sameQuarterInjurySweep(false);
+  assert.equal(sub.cases, 600);
+  assert.equal(sub.donorMatch, 600);
+  assert.equal(sub.sumOther, 0);
+  assert.equal(full.cases, 600);
+  assert.equal(full.donorMatch, 600);
+  assert.equal(full.sumSame, 600);
+  assert.equal(full.sumPlus, 0);
+  assert.equal(full.sumOther, 0);
+  assert.equal(sub.sumSame, 305);
+  assert.equal(sub.sumPlus, 295);
 });
