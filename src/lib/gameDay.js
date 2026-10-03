@@ -2703,7 +2703,19 @@ function onFieldPlayerCount(lineup) {
   return (lineup?.starters || []).filter(slot => slot?.player?.id).length;
 }
 
-function quarterCreditTotal(players, lineup, segments, quarter) {
+function sheetIdSet(lineup) {
+  const ids = new Set();
+  (lineup?.starters || []).forEach(slot => {
+    if (slot?.player?.id) ids.add(String(slot.player.id));
+  });
+  (lineup?.bench || []).forEach(player => {
+    if (player?.id) ids.add(String(player.id));
+  });
+  return ids;
+}
+
+/** Credit only players on this quarter's sheet. An Out or Injured player left off the sheet does not count. */
+function quarterCreditTotal(_players, lineup, segments, quarter) {
   const seen = new Set();
   let total = 0;
   const add = (id) => {
@@ -2713,10 +2725,19 @@ function quarterCreditTotal(players, lineup, segments, quarter) {
     if (mask[0]) total += 1;
     if (mask[1]) total += 1;
   };
-  (players || []).forEach(player => add(player?.id));
   (lineup?.starters || []).forEach(slot => add(slot?.player?.id));
   (lineup?.bench || []).forEach(player => add(player?.id));
   return total;
+}
+
+/** A leftover "left" on an Out or Injured player who is not on the sheet. It is an extra, not a second copy of a half. */
+function offSheetLeftExtras(players, lineup, segments, quarter) {
+  const onSheet = sheetIdSet(lineup);
+  return (players || []).filter(player => {
+    if (!player?.id || onSheet.has(String(player.id))) return false;
+    if (!player.out && !player.injured) return false;
+    return segmentAt(segments, player.id, quarter) === "left";
+  }).length;
 }
 
 function halfOwnerList(lineup, segments, quarter) {
@@ -2747,11 +2768,31 @@ function injuryHalfExtras(returners, segments, quarter) {
   )).length;
 }
 
-function reinstallHolds(players, beforeLineup, beforeSegments, afterLineup, afterSegments, quarter, returners) {
+/**
+ * The re-installed returner is off the start lineup, on at the half, and not the goalkeeper.
+ * The donor's "left" mark has to be new. Clearing the goalkeeper's mark is not a pair.
+ */
+function reinstallPairIsNew(beforeSegments, afterLineup, afterSegments, quarter, returnerId) {
+  if (!returnerId || !afterLineup?.starters) return false;
+  const slot = afterLineup.starters.find(item => item?.player?.id === returnerId);
+  if (!slot || isGkPosition(slot.pos)) return false;
+  const mark = segmentAt(afterSegments, returnerId, quarter);
+  if (!playerHalfMask(returnerId, afterLineup, mark)[1]) return false;
+  const view = quarterHalfPresentation(afterLineup, afterSegments, quarter, { returnerId });
+  if (!view?.pairs?.[0]?.outId) return false;
+  if ((view.start?.starters || []).some(item => item?.player?.id === returnerId)) return false;
+  const donorId = view.pairs[0].outId;
+  const keeper = goalkeeperId(afterLineup);
+  if (keeper && String(donorId) === String(keeper)) return false;
+  if ((afterLineup.starters || []).some(item => String(item?.player?.id) === String(donorId))) return false;
+  const afterDonor = segmentAt(afterSegments, donorId, quarter);
+  const beforeDonor = segmentAt(beforeSegments, donorId, quarter);
+  return afterDonor === "left" && beforeDonor !== "left";
+}
+
+function reinstallHolds(players, _beforeLineup, beforeSegments, afterLineup, afterSegments, quarter, returners, returnerId) {
   if (!afterLineup?.starters?.length) return false;
-  const beforeTotal = quarterCreditTotal(players, beforeLineup, beforeSegments, quarter);
   const afterTotal = quarterCreditTotal(players, afterLineup, afterSegments, quarter);
-  if (afterTotal !== beforeTotal) return false;
   const on = onFieldPlayerCount(afterLineup);
   const owners = halfOwnerList(afterLineup, afterSegments, quarter);
   if (new Set(owners.h1).size !== owners.h1.length || new Set(owners.h2).size !== owners.h2.length) return false;
@@ -2763,10 +2804,11 @@ function reinstallHolds(players, beforeLineup, beforeSegments, afterLineup, afte
   const waiting = (afterLineup.bench || []).filter(player => player?.id).length;
   if (on + waiting >= size && on < size) return false;
   const extras = injuryHalfExtras(returners, afterSegments, quarter);
-  const left = quarterMarks(afterSegments, quarter, "left").length;
+  const left = quarterMarks(afterSegments, quarter, "left").length - offSheetLeftExtras(players, afterLineup, afterSegments, quarter);
   const entered = quarterMarks(afterSegments, quarter, "entered").length;
   // A same-quarter injury may add one real first half (on*2+extras). A replan that
   // already folded that half into a full quarter stays at on*2 with balanced splits.
+  // Do not compare against the post-replan total: that total is already short, or it already includes the injury +1.
   const injuryShape = extras > 0
     && owners.h1.length === on + extras
     && afterTotal === on * 2 + extras
@@ -2774,7 +2816,8 @@ function reinstallHolds(players, beforeLineup, beforeSegments, afterLineup, afte
   const evenShape = owners.h1.length === on
     && afterTotal === on * 2
     && left === entered;
-  return injuryShape || evenShape;
+  if (!(injuryShape || evenShape)) return false;
+  return reinstallPairIsNew(beforeSegments, afterLineup, afterSegments, quarter, returnerId);
 }
 
 function pullReplacing(lineup, playerId, avoid) {
@@ -3035,14 +3078,13 @@ function repairShortHalf(lineup, segments, quarter, returners) {
  * The donor is not the goalkeeper, and every left mark has its entered partner.
  * A same-quarter injury is benched when he is on the field at the half, not when his first half is blank.
  */
-function validKeptPair(lineup, segments, quarter, returner) {
+function validKeptPair(lineup, segments, quarter, returner, players = []) {
   if (!lineup?.starters || !returner?.id || returner.out || returner.injured) return null;
   const q = Number(quarter);
   const onSlot = lineup.starters.find(slot => slot.player?.id === returner.id && !isGkPosition(slot.pos));
   if (!onSlot) return null;
   const mark = segmentAt(segments, returner.id, q);
   const sameInjury = Number(returner.injuredInQuarter) === q;
-  if (mark === "entered" && sameInjury) return null;
   if (mark !== "entered" && !(mark == null && sameInjury)) return null;
   if ((lineup.starters || []).some(slot => slot.player?.id && segmentAt(segments, slot.player.id, q) === "left")) return null;
   const view = quarterHalfPresentation(lineup, segments, q, { returnerId: returner.id });
@@ -3053,29 +3095,44 @@ function validKeptPair(lineup, segments, quarter, returner) {
   if (keeper && String(donorId) === String(keeper)) return null;
   if ((lineup.starters || []).some(slot => String(slot.player?.id) === String(donorId))) return null;
   const donorMark = segmentAt(segments, donorId, q);
-  const leftCount = quarterMarks(segments, q, "left").length;
+  const offLeft = offSheetLeftExtras(players, lineup, segments, q);
+  const sheetLeft = quarterMarks(segments, q, "left").length - offLeft;
   const enteredCount = quarterMarks(segments, q, "entered").length;
   if (mark === "entered") {
-    if (donorMark === "left" && leftCount === enteredCount && leftCount >= 1) return { donorId };
-    if (donorMark == null && leftCount === 0 && enteredCount === 1) return { donorId };
+    if (donorMark === "left" && sheetLeft === enteredCount && sheetLeft >= 1) return { donorId };
+    if (donorMark == null && String(lineup.bench?.[0]?.id) === String(donorId)) {
+      if (sheetLeft === 0 && enteredCount === 1) return { donorId };
+      // Two injuries: the install leaves this returner entered and the donor unmarked at the front of the bench.
+      if (sameInjury && sheetLeft === enteredCount && enteredCount >= 1) return { donorId };
+    }
     return null;
   }
-  if (donorMark === "left" && leftCount === enteredCount + 1) return { donorId };
+  if (donorMark === "left" && sheetLeft === enteredCount + 1) return { donorId };
   // A later replan can fold the injury's extra first half into a full, balanced quarter.
   // The returner is still on at the half for a left donor, and the credit total is intact.
-  if (donorMark === "left" && leftCount === enteredCount && leftCount >= 1) {
+  if (donorMark === "left" && sheetLeft === enteredCount && sheetLeft >= 1) {
     const on = (lineup.starters || []).filter(slot => slot?.player?.id).length;
-    if (quarterCreditTotal([], lineup, segments, q) === on * 2) return { donorId };
+    if (quarterCreditTotal(players, lineup, segments, q) === on * 2) return { donorId };
   }
-  // Cleared entered-donor: both marks are blank, and he already sits first on the bench.
-  if (donorMark == null && leftCount === enteredCount && String(lineup.bench?.[0]?.id) === String(donorId)) {
-    return { donorId };
+  // The app's own same-quarter install sometimes leaves the donor unmarked: he played only
+  // the second half, so he has no "left". He already sits first on the bench. The extra
+  // first half, when the injury still has one, is not his.
+  if (donorMark == null && String(lineup.bench?.[0]?.id) === String(donorId)) {
+    if (sheetLeft === enteredCount) return { donorId };
+    if (sameInjury && sheetLeft === enteredCount + 1) return { donorId };
   }
   return null;
 }
 
 function lineupAt(lineups, quarter) {
   return lineups?.[quarter] || lineups?.[String(quarter)] || null;
+}
+
+function quarterStateKey(lineup, segments, quarter) {
+  const on = (lineup?.starters || []).map(slot => `${slot?.pos || ""}:${slot?.player?.id || ""}`).join(",");
+  const bench = (lineup?.bench || []).map(player => player?.id || "").join(",");
+  const marks = Object.keys(segments || {}).sort().map(id => `${id}:${segmentAt(segments, id, quarter) || ""}`).join(";");
+  return `${on}|${bench}|${marks}`;
 }
 
 function writeLineup(lineups, quarter, lineup) {
@@ -3109,6 +3166,13 @@ export function revalidateBackHalfMarks({
 } = {}) {
   const from = Math.max(1, Number(fromQuarter) || 1);
   const last = Math.max(from, Number(totalQuarters) || from);
+  const anyMark = (players || []).some(player => {
+    const record = readReturn(player);
+    return !!record && record.half === "back" && record.quarter >= from && record.quarter <= last;
+  });
+  if (!anyMark) {
+    return { players: players || [], lineups: lineups || {}, segments: segments || {}, notices: [] };
+  }
   let nextPlayers = players || [];
   let nextLineups = { ...(lineups || {}) };
   let nextSegments = segments || {};
@@ -3117,16 +3181,17 @@ export function revalidateBackHalfMarks({
     if (text && !notices.includes(text)) notices.push(text);
   };
   for (let q = from; q <= last; q += 1) {
+    const beforeKey = quarterStateKey(lineupAt(nextLineups, q), nextSegments, q);
     const existing = lineupAt(nextLineups, q);
     const returners = nextPlayers.filter(player => hasBackHalfMark(player, q));
+    const quarterDonors = [];
     if (existing?.starters) {
       const protect = [];
       returners.forEach(returner => {
-        const kept = validKeptPair(existing, nextSegments, q, returner);
+        const kept = validKeptPair(existing, nextSegments, q, returner, nextPlayers);
         if (kept?.donorId) protect.push(kept.donorId);
       });
-      let filled = fillOpenFieldExcept(existing, protect);
-      if (fieldIsShort(filled)) filled = fillOpenField(existing.starters, existing.bench);
+      const filled = fillOpenFieldExcept(existing, protect);
       nextLineups = writeLineup(nextLineups, q, filled);
     }
     returners.forEach(returner => {
@@ -3138,11 +3203,12 @@ export function revalidateBackHalfMarks({
         return;
       }
       const lineup = lineupAt(nextLineups, q);
-      const kept = validKeptPair(lineup, nextSegments, q, returner);
-      if (kept && !fieldIsShort(lineup)) {
+      const kept = validKeptPair(lineup, nextSegments, q, returner, nextPlayers);
+      if (kept) {
         const seated = seatDonorFirst(lineup, kept.donorId);
         if (seated !== lineup) nextLineups = writeLineup(nextLineups, q, seated);
         protectedIds = [...protectedIds, kept.donorId];
+        quarterDonors.push(kept.donorId);
         return;
       }
       const blocked = [...protectedIds];
@@ -3157,7 +3223,7 @@ export function revalidateBackHalfMarks({
           const applied = applyReinstallDonor(lineup, sheet, returner, donorId, q);
           if (!applied) return;
           const still = nextPlayers.filter(player => hasBackHalfMark(player, q));
-          if (reinstallHolds(nextPlayers, lineup, nextSegments, applied.lineup, applied.segments, q, still)) {
+          if (reinstallHolds(nextPlayers, lineup, nextSegments, applied.lineup, applied.segments, q, still, returner.id)) {
             chosen = applied;
           }
         });
@@ -3177,17 +3243,25 @@ export function revalidateBackHalfMarks({
       nextLineups = writeLineup(nextLineups, q, chosen.lineup);
       nextSegments = chosen.segments;
       const donorId = chosen.lineup?.bench?.[0]?.id;
-      if (donorId) protectedIds = [...protectedIds, donorId];
+      if (donorId) {
+        protectedIds = [...protectedIds, donorId];
+        quarterDonors.push(donorId);
+      }
     });
     const after = lineupAt(nextLineups, q);
     if (after?.starters && fieldIsShort(after)) {
-      nextLineups = writeLineup(nextLineups, q, fillOpenField(after.starters, after.bench));
+      nextLineups = writeLineup(nextLineups, q, fillOpenFieldExcept(after, quarterDonors));
     }
     const settled = lineupAt(nextLineups, q);
     if (settled?.starters) {
+      const changed = quarterStateKey(settled, nextSegments, q) !== beforeKey;
       nextSegments = clearOnFieldLeft(settled, nextSegments, q);
       const staying = nextPlayers.filter(player => hasBackHalfMark(player, q));
-      nextSegments = repairShortHalf(settled, nextSegments, q, staying);
+      const on = onFieldPlayerCount(settled);
+      const owned = halfOwnerList(settled, nextSegments, q).h1.length;
+      const allowed = injuryHalfExtras(staying, nextSegments, q);
+      const broken = owned < on || owned > on + allowed;
+      if (changed || broken) nextSegments = repairShortHalf(settled, nextSegments, q, staying);
     }
   }
   return { players: nextPlayers, lineups: nextLineups, segments: nextSegments, notices };

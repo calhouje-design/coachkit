@@ -21,6 +21,7 @@ import {
   setAppearanceCreditFor,
   noteSubSegment,
   segmentAt,
+  playerHalfMask,
   markQuarterSub,
   playCellKind,
   planBenchRotation,
@@ -1406,6 +1407,10 @@ export function TabGame({ format, league, players, setPlayers, addPlayer, remove
     setInitialNoticeHidden(true);
     setBackHalfNotice(null);
   };
+  const lineupRosterKey = (lineup) => [
+    (lineup?.starters || []).map(slot => slot?.player?.id || "").join(","),
+    (lineup?.bench || []).map(player => player?.id || "").join(","),
+  ].join("|");
   const [returnAsk, setReturnAsk] = useState(null);
   const [returnToast, setReturnToast] = useState(null);
   const [phaseToast, setPhaseToast] = useState(null);
@@ -1924,9 +1929,10 @@ export function TabGame({ format, league, players, setPlayers, addPlayer, remove
     const player = players.find(p => p.id === playerId);
     if (!player) return;
     const currentL = lineupsByQuarter[quarter];
-    const wasOn = !!currentL?.starters?.some(slot => slot.player?.id === playerId);
+    const onFieldNow = !!currentL?.starters?.some(slot => slot.player?.id === playerId);
+    const wasOn = playerHalfMask(playerId, currentL, segmentAt(subSegments, playerId, quarter))[0];
     const live = running || (clockRef.current || 0) > 0 || periodHasRealEvent(realPeriodEvents, quarter);
-    if (wasOn) bankLeave(playerId);
+    if (onFieldNow) bankLeave(playerId);
     let statusNotice = null;
     const updatedPlayers = players.map(p => {
       if (p.id !== playerId) return p;
@@ -1972,7 +1978,7 @@ export function TabGame({ format, league, players, setPlayers, addPlayer, remove
         livePeriod: live,
       });
       let roster = updatedPlayers;
-      if (wasOn && live) {
+      if (onFieldNow && live) {
         const holder = vacatedSpotHolder(currentL, planned.lineups?.[quarter], playerId);
         if (holder) {
           roster = roster.map(p => (p.id === playerId ? { ...p, replacedBy: holder } : p));
@@ -1993,8 +1999,11 @@ export function TabGame({ format, league, players, setPlayers, addPlayer, remove
     let segments = subSegments;
     if (wasOn && live) {
       setAppearanceCredit(credit);
-      segments = clearPlayerSegmentsFrom(segments, playerId, Number(quarter) + 1);
+      segments = clearPlayerSegmentsFrom(segments, playerId, Number(quarter) + 1, lineupsByQuarter);
       segments = noteSubSegment(segments, playerId, quarter, "left");
+    } else if (onFieldNow && live && segmentAt(subSegments, playerId, quarter) === "entered") {
+      segments = clearPlayerSegmentsFrom(segments, playerId, Number(quarter) + 1, lineupsByQuarter);
+      segments = clearPlayerSegmentsFrom(segments, playerId, quarter);
     } else {
       if (wasOn) setAppearanceCredit(credit);
       segments = clearPlayerSegmentsFrom(segments, playerId, quarter, lineupsByQuarter);
@@ -2010,7 +2019,7 @@ export function TabGame({ format, league, players, setPlayers, addPlayer, remove
         setAppearanceCredit(credit);
         segments = noteSubSegment(segments, incoming, quarter, "entered");
       }
-      if (wasOn && live) {
+      if (onFieldNow && live) {
         roster = roster.map(p => (p.id === playerId ? { ...p, replacedBy: incoming } : p));
       }
     }
@@ -2103,10 +2112,11 @@ export function TabGame({ format, league, players, setPlayers, addPlayer, remove
     const playerA = newStarters[idxA]?.player || null;
     newStarters[idxA] = { ...newStarters[idxA], player: newStarters[idxB]?.player || null };
     newStarters[idxB] = { ...newStarters[idxB], player: playerA };
-    setLineupsByQuarter(prev => ({ ...prev, [quarter]: { ...currentLineup, starters: newStarters } }));
+    const nextLineup = { ...currentLineup, starters: newStarters };
+    setLineupsByQuarter(prev => ({ ...prev, [quarter]: nextLineup }));
     setSwapSel(null);
     setFairWarn(null);
-    clearBackHalfNotice();
+    if (lineupRosterKey(currentLineup) !== lineupRosterKey(nextLineup)) clearBackHalfNotice();
   };
 
   const swapBenchAndField = (fieldIdx, benchPlayerId, options = {}) => {
@@ -2148,7 +2158,7 @@ export function TabGame({ format, league, players, setPlayers, addPlayer, remove
     setLineupsByQuarter(nextAll);
     setSwapSel(null);
     warnIfShort(nextAll, players, credit, nextSegments);
-    clearBackHalfNotice();
+    if (lineupRosterKey(lineup) !== lineupRosterKey(nextLineup)) clearBackHalfNotice();
     return true;
   };
 
@@ -2209,10 +2219,11 @@ export function TabGame({ format, league, players, setPlayers, addPlayer, remove
       refuseGoalkeeper();
       return;
     }
+    const previousOverride = (afterSubs || {})[String(quarter)] || null;
     setAfterSubs(prev => ({ ...(prev || {}), [String(quarter)]: decision.override }));
     setSwapSel(null);
     setFairWarn(null);
-    clearBackHalfNotice();
+    if (JSON.stringify(previousOverride) !== JSON.stringify(decision.override || null)) clearBackHalfNotice();
   };
 
   const onFieldTap = (idx) => {
@@ -2252,7 +2263,6 @@ export function TabGame({ format, league, players, setPlayers, addPlayer, remove
         [quarter]: retargetPair(prev?.[quarter], swapSel.playerId, outPlayer.id, currentLineup),
       }));
       setSwapSel(null);
-      clearBackHalfNotice();
       setQueueNote(`${playerName(swapSel.playerId)} on for ${outPlayer.name}. The dotted line moved. Drag when you want them to switch now.`);
       return;
     }
@@ -2311,7 +2321,7 @@ export function TabGame({ format, league, players, setPlayers, addPlayer, remove
     setLineupsByQuarter(nextAll);
     setSwapSel(null);
     warnIfShort(nextAll);
-    clearBackHalfNotice();
+    if (lineupRosterKey(currentLineup) !== lineupRosterKey(nextAll[quarter])) clearBackHalfNotice();
   };
 
   const applyDrag = (result) => {
