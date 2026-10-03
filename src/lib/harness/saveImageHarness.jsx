@@ -16,16 +16,18 @@ const players = ["Ann", "Bea", "Cal", "Dee", "Eve", "Fay", "Gia", "Hal"].map((na
   ratings: {},
 }));
 
+const params = new URLSearchParams(typeof window === "undefined" ? "" : window.location.search);
+const periodCount = params.get("periods") === "halves" ? 2 : 4;
 const planned = scheduleHalfRotation(players, slots, {
-  minHalves: 4,
-  totalQuarters: 4,
+  minHalves: periodCount === 2 ? 2 : 4,
+  totalQuarters: periodCount,
   rate: () => 1,
 });
 
 const setup = resolveSetup({
   league: "U10",
   format: "6v6",
-  settings: { org: "us-soccer", subMode: true, periods: 4 },
+  settings: { org: "us-soccer", subMode: true, periods: periodCount },
 });
 
 const logPlayers = players.slice(0, 6);
@@ -41,6 +43,24 @@ const logField = shareFieldSheet({
   quarters: [1, 2],
   periodAbbrev: "H",
 });
+const splitLog = params.get("log") === "split";
+const splitField = splitLog ? {
+  ...logField,
+  quarters: logField.quarters.map((panel, index) => {
+    if (index !== 0) return { ...panel, label: "Q2", quarter: 2 };
+    const starters = panel.starters.map((slot, slotIndex) => {
+      if (slotIndex === 1) return { ...panel.starters[2], idx: slot.idx };
+      if (slotIndex === 2) return { ...panel.starters[1], idx: slot.idx };
+      return slot;
+    });
+    return {
+      ...panel,
+      label: "Q1",
+      quarter: 1,
+      after: { ...panel, label: "Q1", quarter: 1, starters, pairs: [] },
+    };
+  }),
+} : logField;
 const logPlay = sharePlayTimeSheet({
   players: logPlayers,
   lineups: logLineups,
@@ -64,7 +84,7 @@ const loggedGame = {
     periods: 2,
     league: "U10",
     format: "6v6",
-    sheets: { field: logField, playTime: logPlay },
+    sheets: { field: splitField, playTime: logPlay },
   },
 };
 
@@ -79,6 +99,7 @@ function loggedGames() {
 }
 
 function Harness() {
+  const subMode = new URLSearchParams(window.location.search).get("sub") !== "0";
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [lineups, setLineups] = useState(planned.lineups);
   const [roster, setRoster] = useState(players);
@@ -145,7 +166,7 @@ function Harness() {
         lineupsByQuarter={lineups}
         setLineupsByQuarter={setLineups}
         setGames={setGames}
-        subMode
+        subMode={subMode}
         autoRegen
         gameDay={gameDay}
         setGameDay={setGameDay}

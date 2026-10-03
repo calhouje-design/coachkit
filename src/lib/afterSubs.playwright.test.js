@@ -72,59 +72,80 @@ test("Start and After subs at 390px stay independent, and the share sheet shows 
     const sheet = page.getByTestId("share-sheet");
     await sheet.waitFor();
     assert.equal(await sheet.getAttribute("data-dual"), "true");
+    assert.deepEqual(await sheet.getByTestId("field-tile-label").allInnerTexts(), [
+      "Q1 · 1st half",
+      "Q1 · 2nd half",
+      "Q2 · 1st half",
+      "Q2 · 2nd half",
+      "Q3 · 1st half",
+      "Q3 · 2nd half",
+      "Q4 · 1st half",
+      "Q4 · 2nd half",
+    ]);
+    const layout = await sheet.evaluate(node => {
+      const rect = (el) => {
+        const box = el.getBoundingClientRect();
+        return { x: box.x, y: box.y, width: box.width, height: box.height };
+      };
+      const tiles = [...node.querySelectorAll("[data-testid='field-tile']")].map(rect);
+      const play = rect(node.querySelector("[data-testid='play-time-sheet']"));
+      const modal = node.closest("[data-testid='share-modal']");
+      const body = node.closest("[data-testid='share-body']") || modal;
+      return {
+        columns: getComputedStyle(node.querySelector("[data-testid='field-grid']")).gridTemplateColumns.split(" ").filter(Boolean).length,
+        tiles,
+        play,
+        modalOverflow: modal.scrollWidth - modal.clientWidth,
+        bodyOverflow: body.scrollWidth - body.clientWidth,
+      };
+    });
+    assert.equal(layout.columns, 2);
+    assert.ok(Math.abs(layout.tiles[0].y - layout.tiles[1].y) < 8);
+    assert.ok(layout.tiles[1].x > layout.tiles[0].x + 20);
+    assert.ok(layout.tiles[2].y > layout.tiles[0].y + 40);
+    assert.ok(Math.abs(layout.tiles[2].y - layout.tiles[3].y) < 8);
+    assert.ok(layout.play.y > layout.tiles[layout.tiles.length - 1].y);
+    assert.ok(layout.modalOverflow <= 1, `modal overflow ${layout.modalOverflow}`);
+    assert.ok(layout.bodyOverflow <= 1, `body overflow ${layout.bodyOverflow}`);
     await page.getByTestId("open-print-preview").click();
     await page.getByTestId("print-preview").waitFor();
     assert.equal(errors.length, 0, errors.join("\n"));
-    const preview = sheet.locator("canvas").first();
-    assert.equal(await preview.getAttribute("data-view"), "start");
-    assert.equal(await preview.getAttribute("data-focused"), "false");
-    const file = page.getByTestId("share-file");
-    assert.equal(await file.getAttribute("data-view"), "both");
-    assert.equal(await file.getAttribute("data-focused"), "false");
-    const previewWidth = await preview.evaluate(node => node.width);
-    const fileWidth = await file.evaluate(node => node.width);
-    assert.ok(previewWidth < fileWidth, `narrow preview ${previewWidth} should be narrower than the saved sheet ${fileWidth}`);
   } finally {
     await page.close();
   }
 });
 
-async function touchSwipe(page, from, to) {
-  const session = await page.context().newCDPSession(page);
-  const point = (x, y) => ({ x: Math.round(x), y: Math.round(y) });
-  await session.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [point(from.x, from.y)] });
-  const steps = 8;
-  for (let step = 1; step <= steps; step += 1) {
-    const x = from.x + ((to.x - from.x) * step) / steps;
-    const y = from.y + ((to.y - from.y) * step) / steps;
-    await session.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [point(x, y)] });
-  }
-  await session.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
-  await session.detach();
-}
-
-test("a touch swipe on the share canvas switches phase both ways", async () => {
-  const page = await browser.newPage({ viewport: { width: 390, height: 844 }, hasTouch: true });
+test("the share grid stays two columns at 320px with no sideways overflow", async () => {
+  const page = await browser.newPage({ viewport: { width: 320, height: 700 } });
   const errors = [];
   page.on("pageerror", error => errors.push(String(error)));
   try {
     await page.goto(`${base}/src/lib/harness/after-subs.html`, { waitUntil: "networkidle" });
     await page.getByRole("button", { name: "Share lineup" }).click();
-    const modal = page.getByTestId("share-modal");
-    const sheet = modal.getByTestId("share-sheet");
+    const sheet = page.getByTestId("share-sheet");
     await sheet.waitFor();
-    const canvas = sheet.locator("canvas");
-    await canvas.scrollIntoViewIfNeeded();
-    const box = await canvas.boundingBox();
-    const y = box.y + Math.min(80, box.height / 3);
-    const mid = box.x + box.width / 2;
-    assert.equal(await modal.getByTestId("phase-start").getAttribute("aria-checked"), "true");
-    await touchSwipe(page, { x: mid + 100, y }, { x: mid - 120, y });
-    assert.equal(await modal.getByTestId("phase-after").getAttribute("aria-checked"), "true");
-    assert.equal(await canvas.getAttribute("data-view"), "after");
-    await touchSwipe(page, { x: mid - 100, y }, { x: mid + 120, y });
-    assert.equal(await modal.getByTestId("phase-start").getAttribute("aria-checked"), "true");
-    assert.equal(await canvas.getAttribute("data-view"), "start");
+    const layout = await sheet.evaluate(node => {
+      const rect = (el) => el.getBoundingClientRect();
+      const tiles = [...node.querySelectorAll("[data-testid='field-tile']")].map(rect);
+      const modal = node.closest("[data-testid='share-modal']");
+      const body = document.querySelector("[data-testid='share-body']");
+      return {
+        columns: getComputedStyle(node.querySelector("[data-testid='field-grid']")).gridTemplateColumns.split(" ").filter(Boolean).length,
+        sameRow: Math.abs(tiles[0].y - tiles[1].y) < 8 && tiles[1].x > tiles[0].x,
+        q2Below: tiles[2].y > tiles[0].y + 20,
+        pageOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+        modalOverflow: modal.scrollWidth - modal.clientWidth,
+        bodyOverflow: body.scrollWidth - body.clientWidth,
+        labels: [...node.querySelectorAll("[data-testid='field-tile-label']")].slice(0, 4).map(el => el.textContent),
+      };
+    });
+    assert.equal(layout.columns, 2);
+    assert.equal(layout.sameRow, true);
+    assert.equal(layout.q2Below, true);
+    assert.deepEqual(layout.labels, ["Q1 · 1st half", "Q1 · 2nd half", "Q2 · 1st half", "Q2 · 2nd half"]);
+    assert.ok(layout.pageOverflow <= 1, `page overflow ${layout.pageOverflow}`);
+    assert.ok(layout.modalOverflow <= 1, `modal overflow ${layout.modalOverflow}`);
+    assert.ok(layout.bodyOverflow <= 1, `body overflow ${layout.bodyOverflow}`);
     assert.equal(errors.length, 0, errors.join("\n"));
   } finally {
     await page.close();
