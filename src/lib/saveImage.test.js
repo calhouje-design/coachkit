@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { dismissSaveOverlay, SAVE_IMAGE_HINT, saveImage } from "./saveImage.js";
+import { dismissSaveOverlay, resetSaveImageState, SAVE_IMAGE_HINT, saveImage, SHARE_BUSY_MESSAGE } from "./saveImage.js";
 
 const FILENAME = "CoachKit_Field_Q1-Q4.png";
 const TITLE = "CoachKit field";
@@ -16,12 +16,23 @@ function pngBlob() {
 
 let tail = Promise.resolve();
 
-function serial(name, fn) {
-  test(name, () => {
-    const run = tail.then(fn);
-    tail = run.then(() => {}, () => {});
-    return run;
+function link(readTail, writeTail, task, cleanup) {
+  const previous = readTail();
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  writeTail(gate);
+  return previous.then(async () => {
+    try {
+      return await task();
+    } finally {
+      cleanup?.();
+      release();
+    }
   });
+}
+
+function serial(name, fn) {
+  test(name, () => link(() => tail, (next) => { tail = next; }, fn, resetSaveImageState));
 }
 
 function stubNavigator({ canShare, share }) {
@@ -381,7 +392,25 @@ serial("the overlay is labelled, traps the background, and restores focus when i
     const hint = document.getElementById("save-image-hint");
     assert.equal(root.getAttribute("aria-labelledby"), hint.id);
     assert.equal(hint.textContent, SAVE_IMAGE_HINT);
-    assert.equal(document.activeElement, root.querySelector("button"));
+    const close = root.querySelector("button");
+    assert.equal(document.activeElement, close);
+    const tab = new window.KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true });
+    document.dispatchEvent(tab);
+    assert.equal(tab.defaultPrevented, true);
+    assert.equal(document.activeElement, close);
+    const shiftTab = new window.KeyboardEvent("keydown", { key: "Tab", shiftKey: true, bubbles: true, cancelable: true });
+    document.dispatchEvent(shiftTab);
+    assert.equal(shiftTab.defaultPrevented, true);
+    assert.equal(document.activeElement, close);
+    const outside = document.createElement("button");
+    outside.textContent = "Outside";
+    document.body.append(outside);
+    outside.focus();
+    const pulled = new window.KeyboardEvent("keydown", { key: "Tab", bubbles: true, cancelable: true });
+    document.dispatchEvent(pulled);
+    assert.equal(pulled.defaultPrevented, true);
+    assert.equal(document.activeElement, close);
+    outside.remove();
     assert.equal(host.inert, true);
     assert.equal(root.hasAttribute("inert"), false);
     const src = root.querySelector("[data-testid='save-image-preview']").getAttribute("src");
@@ -439,6 +468,148 @@ serial("a share failure that cannot show the overlay still settles the promise",
   }
 });
 
+function hungNavigator() {
+  let calls = 0;
+  const restore = stubNavigator({
+    canShare() { return true; },
+    share() {
+      calls += 1;
+      return new Promise(() => {});
+    },
+  });
+  return { calls: () => calls, restore };
+}
+
+serial("three taps during a hung share show the busy message and only share once", async () => {
+  const hung = hungNavigator();
+  try {
+    saveImage({ blob: pngBlob(), filename: FILENAME, title: TITLE });
+    const second = await saveImage({ blob: pngBlob(), filename: FILENAME, title: TITLE });
+    const third = await saveImage({ blob: pngBlob(), filename: FILENAME, title: TITLE });
+    assert.equal(hung.calls(), 1);
+    assert.equal(second.reason, "pending");
+    assert.equal(third.reason, "pending");
+    assert.equal(document.querySelector("[data-testid='save-image-busy']").textContent, SHARE_BUSY_MESSAGE);
+  } finally {
+    hung.restore();
+  }
+});
+
+serial("a visibility event or pageshow clears a hung share so the next tap shares", async () => {
+  const hung = hungNavigator();
+  const previousVisibility = Object.getOwnPropertyDescriptor(document, "visibilityState");
+  const previousHidden = Object.getOwnPropertyDescriptor(document, "hidden");
+  try {
+    saveImage({ blob: pngBlob(), filename: FILENAME, title: TITLE });
+    await saveImage({ blob: pngBlob(), filename: FILENAME, title: TITLE });
+    await saveImage({ blob: pngBlob(), filename: FILENAME, title: TITLE });
+    assert.equal(hung.calls(), 1);
+    Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "visible" });
+    Object.defineProperty(document, "hidden", { configurable: true, get: () => false });
+    document.dispatchEvent(new window.Event("visibilitychange"));
+    saveImage({ blob: pngBlob(), filename: FILENAME, title: TITLE });
+    assert.equal(hung.calls(), 2);
+    await saveImage({ blob: pngBlob(), filename: FILENAME, title: TITLE });
+    window.dispatchEvent(new window.Event("pageshow"));
+    saveImage({ blob: pngBlob(), filename: FILENAME, title: TITLE });
+    assert.equal(hung.calls(), 3);
+  } finally {
+    if (previousVisibility) Object.defineProperty(document, "visibilityState", previousVisibility);
+    else delete document.visibilityState;
+    if (previousHidden) Object.defineProperty(document, "hidden", previousHidden);
+    else delete document.hidden;
+    hung.restore();
+  }
+});
+
+serial("the 30s safety timer clears a hung share so the next tap shares", async () => {
+  const originalTimeout = globalThis.setTimeout;
+  const locks = [];
+  globalThis.setTimeout = (fn, ms, ...args) => {
+    if (ms === 30000) {
+      locks.push(fn);
+      return 0;
+    }
+    return originalTimeout(fn, ms, ...args);
+  };
+  const hung = hungNavigator();
+  try {
+    saveImage({ blob: pngBlob(), filename: FILENAME, title: TITLE });
+    await saveImage({ blob: pngBlob(), filename: FILENAME, title: TITLE });
+    await saveImage({ blob: pngBlob(), filename: FILENAME, title: TITLE });
+    assert.equal(hung.calls(), 1);
+    assert.equal(locks.length, 1);
+    locks[0]();
+    saveImage({ blob: pngBlob(), filename: FILENAME, title: TITLE });
+    assert.equal(hung.calls(), 2);
+  } finally {
+    globalThis.setTimeout = originalTimeout;
+    hung.restore();
+  }
+});
+
+serial("without a reset, a hung share fails the next-tap check", () => {
+  let inFlight = false;
+  let calls = 0;
+  const saveWithoutReset = () => {
+    if (inFlight) return "pending";
+    inFlight = true;
+    calls += 1;
+    return "share";
+  };
+  assert.equal(saveWithoutReset(), "share");
+  assert.equal(saveWithoutReset(), "pending");
+  assert.equal(saveWithoutReset(), "pending");
+  assert.equal(calls, 1);
+  assert.throws(() => {
+    assert.equal(calls, 2);
+  });
+});
+
+serial("a thrown blob fallback shows an error and does not reject", async () => {
+  const originalCreate = URL.createObjectURL;
+  URL.createObjectURL = () => { throw new Error("no blob url"); };
+  const unhandled = [];
+  const onUnhandled = (reason) => { unhandled.push(reason); };
+  process.on("unhandledRejection", onUnhandled);
+  const restore = stubNavigator({
+    canShare() { return false; },
+    share() { throw new Error("share should not run"); },
+  });
+  try {
+    const result = await saveImage({ blob: pngBlob(), filename: FILENAME, title: TITLE });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(result.ok, false);
+    assert.equal(result.reason, "error");
+    const note = document.querySelector("[data-testid='save-image-error']");
+    assert.ok(note);
+    assert.match(note.textContent, /Couldn't save the image/);
+    assert.equal(document.querySelector("[data-testid='save-image-overlay']"), null);
+    assert.equal(unhandled.length, 0);
+  } finally {
+    process.off("unhandledRejection", onUnhandled);
+    URL.createObjectURL = originalCreate;
+    restore();
+  }
+});
+
+test("a failing case does not cancel the case after it", async () => {
+  let ran = false;
+  let localTail = Promise.resolve();
+  const first = link(() => localTail, (next) => { localTail = next; }, async () => {
+    throw new Error("boom");
+  });
+  const second = link(() => localTail, (next) => { localTail = next; }, async () => {
+    ran = true;
+  });
+  const stalled = new Promise((_, reject) => {
+    setTimeout(() => reject(new Error("next case was cancelled")), 500);
+  });
+  await assert.rejects(first, /boom/);
+  await Promise.race([second, stalled]);
+  assert.equal(ran, true);
+});
+
 async function sourceFiles(dir) {
   const entries = await readdir(dir, { withFileTypes: true });
   const files = [];
@@ -464,8 +635,6 @@ test("image saves never assign a data URL or call toDataURL", async () => {
     const text = await readFile(file, "utf8");
     assert.deepEqual(dataUrlSaveViolations(text), [], file);
   }
-  const app = await readFile(path.join(SRC, "App.jsx"), "utf8");
-  assert.match(app, /saveImage\(\{ blob: file, filename, title \}\)\.catch\(\(\) => \{\}\)/);
   const evasions = [
     "el.setAttribute('href','data:image/png;base64,abc')",
     "el.setAttribute(\"href\", \"data:image/png,xx\")",

@@ -3524,7 +3524,7 @@ function useMaxWidth(max) {
   return matches;
 }
 
-export function SheetCanvases({ field, playTime, league, opponent, homeScore, awayScore, periodAbbrev = "Q", periodCount = 4, focus = null, view = "both", showPrint = false, source = "share" }) {
+function SheetCanvases({ field, playTime, league, opponent, homeScore, awayScore, periodAbbrev = "Q", periodCount = 4, focus = null, view = "both", showPrint = false, source = "share" }) {
   const fieldRef = useRef(null);
   const fileRef = useRef(null);
   const playRef = useRef(null);
