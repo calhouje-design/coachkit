@@ -39,14 +39,6 @@ function fitCanvas(canvas, w, h) {
   return ctx;
 }
 
-export function downloadCanvas(canvas, filename) {
-  if (!canvas) return;
-  const link = document.createElement("a");
-  link.download = filename;
-  link.href = canvas.toDataURL("image/png");
-  link.click();
-}
-
 function paintQuarterPanel(ctx, x, y, w, h, panel) {
   const benchW = 78;
   ctx.save();
