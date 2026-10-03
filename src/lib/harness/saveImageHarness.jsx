@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { TabGame, TabSeason } from "../../App.jsx";
 import { scheduleHalfRotation, shareFieldSheet, sharePlayTimeSheet } from "../gameDay.js";
@@ -67,10 +67,20 @@ const loggedGame = {
   },
 };
 
+function loggedGames() {
+  const count = Math.max(1, Number(new URLSearchParams(window.location.search).get("games")) || 1);
+  return Array.from({ length: count }, (_, index) => ({
+    ...loggedGame,
+    id: index === 0 ? loggedGame.id : `g-log-${index}`,
+    opponent: index === 0 ? loggedGame.opponent : `Comets ${index + 1}`,
+    date: index === 0 ? loggedGame.date : `2026-08-${String((index % 27) + 1).padStart(2, "0")}`,
+  }));
+}
+
 function Harness() {
   const [lineups, setLineups] = useState(planned.lineups);
   const [roster, setRoster] = useState(players);
-  const [games, setGames] = useState([loggedGame]);
+  const [games, setGames] = useState(loggedGames);
   const [playerStats, setPlayerStats] = useState({});
   const [practiceDates, setPracticeDates] = useState([]);
   const [practiceAttendance, setPracticeAttendance] = useState({});
@@ -88,6 +98,18 @@ function Harness() {
     afterSubs: {},
     startSnapshots: {},
   });
+  useEffect(() => {
+    window.__coachkitSameContentRender = () => {
+      setRoster((current) => current.map((player) => ({ ...player })));
+    };
+    window.__coachkitChangeScore = () => {
+      setGameDay((current) => ({ ...current, homeScore: Number(current.homeScore || 0) + 1 }));
+    };
+    return () => {
+      delete window.__coachkitSameContentRender;
+      delete window.__coachkitChangeScore;
+    };
+  }, []);
   return (
     <div style={{ minHeight: "100vh", background: "#0a0d0f", color: "#e8e4dc", fontFamily: "Georgia, serif" }}>
       <TabGame

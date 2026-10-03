@@ -3524,7 +3524,7 @@ function useMaxWidth(max) {
   return matches;
 }
 
-function SheetCanvases({ field, playTime, league, opponent, homeScore, awayScore, periodAbbrev = "Q", periodCount = 4, focus = null, view = "both", showPrint = false, source = "share" }) {
+export function SheetCanvases({ field, playTime, league, opponent, homeScore, awayScore, periodAbbrev = "Q", periodCount = 4, focus = null, view = "both", showPrint = false, source = "share" }) {
   const fieldRef = useRef(null);
   const fileRef = useRef(null);
   const playRef = useRef(null);
@@ -3539,6 +3539,7 @@ function SheetCanvases({ field, playTime, league, opponent, homeScore, awayScore
     if (fieldRef.current) paintFieldSheet(fieldRef.current, { field, league, opponent, homeScore, awayScore, focus: view === "both" ? focus : null, view });
     if (printRef.current) paintFieldSheet(printRef.current, { field, league, opponent, homeScore, awayScore });
   }, [field, playTime, league, opponent, homeScore, awayScore, focus, view, showPrint]);
+  const contentKey = useMemo(() => JSON.stringify([field, playTime, league, opponent, homeScore, awayScore]), [field, playTime, league, opponent, homeScore, awayScore]);
   useEffect(() => {
     let cancelled = false;
     setFieldFile(null);
@@ -3561,12 +3562,13 @@ function SheetCanvases({ field, playTime, league, opponent, homeScore, awayScore
       setPlayFile(playBlob ? new File([playBlob], playName, { type: "image/png" }) : null);
     });
     return () => { cancelled = true; };
-  }, [field, playTime, league, opponent, homeScore, awayScore, fieldName, playName]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [contentKey, fieldName, playName]);
   const fieldTestId = source === "game-log" ? "save-game-log-field" : "save-field-image";
   const playTestId = source === "game-log" ? "save-game-log-play" : "save-play-time-image";
   const saveReady = (file, filename, title) => {
     if (!file) return;
-    saveImage({ blob: file, filename, title });
+    saveImage({ blob: file, filename, title }).catch(() => {});
   };
   return (
     <div data-image-source={source}>
@@ -3593,6 +3595,36 @@ function SheetCanvases({ field, playTime, league, opponent, homeScore, awayScore
         {playFile ? "Save play time image" : "Preparing image…"}
       </button>
     </div>
+  );
+}
+
+function GameLogSheets({ game }) {
+  const [open, setOpen] = useState(false);
+  const sheets = game.strategy?.sheets;
+  if (!sheets?.field || !sheets?.playTime) return null;
+  const strategy = game.strategy;
+  return (
+    <details
+      data-testid="game-log-sheets"
+      onToggle={(event) => setOpen(Boolean((event.currentTarget || event.target)?.open))}
+    >
+      <summary style={{cursor:"pointer",fontSize:12,fontWeight:700,color:C.text}}>Field sheet and play time</summary>
+      {open ? (
+        <div style={{marginTop:10}}>
+          <SheetCanvases
+            source="game-log"
+            field={sheets.field}
+            playTime={sheets.playTime}
+            league={strategy.league || ""}
+            opponent={game.opponent}
+            homeScore={game.homeScore}
+            awayScore={game.oppScore}
+            periodAbbrev={strategy.periodType === "halves" ? "H" : strategy.periodType === "periods" ? "P" : "Q"}
+            periodCount={strategy.periods || sheets.field.quarters?.length || 4}
+          />
+        </div>
+      ) : null}
+    </details>
   );
 }
 
@@ -5103,24 +5135,7 @@ export function TabSeason({ players, playerStats, setPlayerStats, games, setGame
                   fontSize:16,lineHeight:1,padding:"4px 6px",
                 }}></button>
                 </div>
-                {sheets?.field && sheets?.playTime && (
-                  <details data-testid="game-log-sheets">
-                    <summary style={{cursor:"pointer",fontSize:12,fontWeight:700,color:C.text}}>Field sheet and play time</summary>
-                    <div style={{marginTop:10}}>
-                      <SheetCanvases
-                        source="game-log"
-                        field={sheets.field}
-                        playTime={sheets.playTime}
-                        league={g.strategy.league || ""}
-                        opponent={g.opponent}
-                        homeScore={g.homeScore}
-                        awayScore={g.oppScore}
-                        periodAbbrev={g.strategy.periodType === "halves" ? "H" : g.strategy.periodType === "periods" ? "P" : "Q"}
-                        periodCount={g.strategy.periods || sheets.field.quarters?.length || 4}
-                      />
-                    </div>
-                  </details>
-                )}
+                {sheets?.field && sheets?.playTime && <GameLogSheets game={g} />}
               </div>
             );
           })}

@@ -1,8 +1,14 @@
 export const SAVE_IMAGE_HINT = "Press and hold the image, then tap Save to Photos.";
 
-const REVOKE_DELAY_MS = 1000;
+const REVOKE_DELAY_MS = 45000;
 
 let overlay = null;
+let shareInFlight = false;
+
+function isShareCancel(error) {
+  const name = error?.name;
+  return name === "AbortError" || name === "InvalidStateError";
+}
 
 export function canvasToPngBlob(canvas) {
   return new Promise((resolve, reject) => {
@@ -72,18 +78,26 @@ function objectUrlDownload(blob, filename) {
 
 export function dismissSaveOverlay() {
   if (!overlay) return;
-  URL.revokeObjectURL(overlay.url);
-  overlay.root.remove();
+  const { root, url, returnFocus, inerted, onKey } = overlay;
   overlay = null;
+  URL.revokeObjectURL(url);
+  if (onKey) document.removeEventListener("keydown", onKey);
+  for (const node of inerted) {
+    if (node.isConnected) node.inert = false;
+  }
+  root.remove();
+  if (returnFocus?.isConnected) returnFocus.focus();
 }
 
 function showHoldOverlay(blob) {
+  const returnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   dismissSaveOverlay();
   const url = URL.createObjectURL(blob);
   const root = document.createElement("div");
   root.dataset.testid = "save-image-overlay";
   root.setAttribute("role", "dialog");
   root.setAttribute("aria-modal", "true");
+  root.setAttribute("aria-labelledby", "save-image-hint");
   root.style.cssText = [
     "position:fixed",
     "inset:0",
@@ -110,6 +124,7 @@ function showHoldOverlay(blob) {
     "font-family:Georgia,serif",
   ].join(";");
   const hint = document.createElement("p");
+  hint.id = "save-image-hint";
   hint.dataset.testid = "save-image-hint";
   hint.textContent = SAVE_IMAGE_HINT;
   hint.style.cssText = "margin:0 0 12px;font-size:15px;line-height:1.45;font-weight:700;";
@@ -122,11 +137,31 @@ function showHoldOverlay(blob) {
   close.type = "button";
   close.textContent = "Close";
   close.style.cssText = "margin-top:12px;width:100%;min-height:44px;border:none;border-radius:7px;background:#fff;color:#1a1a1a;font-weight:700;font-size:14px;cursor:pointer;";
-  close.addEventListener("click", () => dismissSaveOverlay());
+  close.addEventListener("click", (event) => {
+    event.stopPropagation();
+    dismissSaveOverlay();
+  });
   panel.append(hint, img, close);
   root.append(panel);
+  root.addEventListener("click", (event) => {
+    event.stopPropagation();
+    if (event.target === root) dismissSaveOverlay();
+  });
+  const onKey = (event) => {
+    if (event.key !== "Escape") return;
+    event.preventDefault();
+    dismissSaveOverlay();
+  };
+  const inerted = [];
+  for (const child of document.body.children) {
+    if (child.inert) continue;
+    child.inert = true;
+    inerted.push(child);
+  }
   document.body.appendChild(root);
-  overlay = { root, url };
+  document.addEventListener("keydown", onKey);
+  overlay = { root, url, returnFocus, inerted, onKey };
+  close.focus();
 }
 
 function fallback(file, filename) {
@@ -134,31 +169,38 @@ function fallback(file, filename) {
     objectUrlDownload(file, filename);
     return { ok: true, method: "download" };
   } catch {
+    return settleOverlay(file);
+  }
+}
+
+function settleOverlay(file) {
+  try {
     showHoldOverlay(file);
     return { ok: true, method: "overlay" };
+  } catch {
+    return { ok: false, reason: "error" };
   }
 }
 
 function deliver(blob, filename, title) {
   const file = asPngFile(blob, filename);
   const shareTitle = title || filename || file.name;
-  if (canShareFile(file)) {
-    let pending;
-    try {
-      pending = navigator.share({ files: [file], title: shareTitle });
-    } catch (error) {
-      if (error?.name === "AbortError") return Promise.resolve({ ok: false, reason: "abort" });
-      return Promise.resolve(fallback(file, file.name));
-    }
-    return Promise.resolve(pending).then(
-      () => ({ ok: true, method: "share" }),
-      (error) => {
-        if (error?.name === "AbortError") return { ok: false, reason: "abort" };
-        return fallback(file, file.name);
-      },
-    );
+  if (!canShareFile(file)) return Promise.resolve(fallback(file, file.name));
+  let pending;
+  shareInFlight = true;
+  try {
+    pending = navigator.share({ files: [file], title: shareTitle });
+  } catch (error) {
+    shareInFlight = false;
+    if (isShareCancel(error)) return Promise.resolve({ ok: false, reason: "abort" });
+    return Promise.resolve(fallback(file, file.name));
   }
-  return Promise.resolve(fallback(file, file.name));
+  return Promise.resolve(pending).then(
+    () => ({ ok: true, method: "share" }),
+    (error) => (isShareCancel(error) ? { ok: false, reason: "abort" } : settleOverlay(file)),
+  ).finally(() => {
+    shareInFlight = false;
+  });
 }
 
 /**
@@ -166,7 +208,13 @@ function deliver(blob, filename, title) {
  * so a tap can still open the iOS sheet. Pass a canvas only from a prepare step.
  */
 export function saveImage({ blob, canvas, filename = "CoachKit.png", title } = {}) {
-  if (blob) return deliver(blob, filename, title);
-  if (canvas) return canvasToPngBlob(canvas).then((next) => deliver(next, filename, title));
-  return Promise.resolve({ ok: false, reason: "missing" });
+  if (shareInFlight) return Promise.resolve({ ok: false, reason: "pending" });
+  try {
+    if (blob) return Promise.resolve(deliver(blob, filename, title)).catch(() => ({ ok: false, reason: "error" }));
+    if (canvas) return canvasToPngBlob(canvas).then((next) => deliver(next, filename, title)).catch(() => ({ ok: false, reason: "error" }));
+    return Promise.resolve({ ok: false, reason: "missing" });
+  } catch {
+    shareInFlight = false;
+    return Promise.resolve({ ok: false, reason: "error" });
+  }
 }
