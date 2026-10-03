@@ -349,7 +349,15 @@ export function paintFieldTile(canvas, { panel, caption, league, opponent, homeS
   ctx.font = "bold 12px Arial, sans-serif";
   ctx.fillText(`US  ${homeScore ?? 0}  :  ${awayScore ?? 0}  ${(opponent || "THEM").toUpperCase()}`, W / 2, 63);
 
-  paintQuarterPanel(ctx, pad, header + pad, cellW, cellH, panel);
+  // Paint at the old combined sheet's cell origin. The sub-line router snaps
+  // to a fixed 18/9 px lattice, so a different origin bends the same pairs.
+  const slot = Math.max(0, (panel.quarter || 1) - 1);
+  const px = 10 + (slot % 2) * 370;
+  const py = 96 + Math.floor(slot / 2) * 440;
+  ctx.save();
+  ctx.translate(pad - px, header + pad - py);
+  paintQuarterPanel(ctx, px, py, cellW, cellH, panel);
+  ctx.restore();
   canvas.dataset.view = "tile";
   canvas.dataset.caption = caption || panel.label || "";
   canvas.dataset.focused = "false";

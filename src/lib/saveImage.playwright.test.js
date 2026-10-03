@@ -287,6 +287,128 @@ test("press and hold opens the cached PNG for every save button", async () => {
   }
 });
 
+async function pngHashInPage(page, expression) {
+  return page.evaluate(expression);
+}
+
+test("each saved field PNG is that tile's image", async () => {
+  const context = await browser.newContext({ ...devices["iPhone 13"] });
+  await context.addInitScript(shareStub);
+  const page = await context.newPage();
+  page.setDefaultTimeout(20000);
+  try {
+    await page.goto(`${base}/src/lib/harness/save-image.html`, { waitUntil: "networkidle" });
+    await page.getByRole("button", { name: "Share lineup" }).click();
+    await page.waitForFunction(() => [...document.querySelectorAll("[data-save-kind='field']")].every(node => !node.disabled));
+    assert.equal(await page.getByTestId("share-helper").innerText(), "Each quarter has a 1st-half and a 2nd-half lineup. Tap Save under any image to send it or add it to Photos.");
+    assert.equal(await page.getByTestId("field-tile-canvas").first().getAttribute("aria-label"), "Q1 · 1st half lineup");
+    assert.equal(await page.getByTestId("field-tile-canvas").first().getAttribute("role"), "img");
+    const previewHashes = await pngHashInPage(page, async () => {
+      const hash = async (blob) => {
+        const bytes = new Uint8Array(await blob.arrayBuffer());
+        let value = 2166136261;
+        for (let i = 0; i < bytes.length; i += 1) value = Math.imul(value ^ bytes[i], 16777619);
+        return value >>> 0;
+      };
+      const nodes = [...document.querySelectorAll("[data-testid='field-tile-canvas']")];
+      const hashes = [];
+      for (const node of nodes) {
+        const blob = await new Promise(resolve => node.toBlob(resolve));
+        hashes.push(await hash(blob));
+      }
+      return hashes;
+    });
+    const buttons = page.locator("[data-save-kind='field']");
+    const count = await buttons.count();
+    for (let index = 0; index < count; index += 1) await buttons.nth(index).click();
+    const fileHashes = await pngHashInPage(page, async () => {
+      const hash = async (file) => {
+        const bytes = new Uint8Array(await file.arrayBuffer());
+        let value = 2166136261;
+        for (let i = 0; i < bytes.length; i += 1) value = Math.imul(value ^ bytes[i], 16777619);
+        return value >>> 0;
+      };
+      const hashes = [];
+      for (const entry of window.__imageShares) hashes.push(await hash(entry.file));
+      return hashes;
+    });
+    assert.equal(new Set(previewHashes).size, previewHashes.length, "preview tiles must differ");
+    assert.deepEqual(fileHashes, previewHashes);
+  } finally {
+    await page.close();
+    await context.close();
+  }
+});
+
+test("a game log with a 2nd-half split saves each half", async () => {
+  const context = await browser.newContext({ ...devices["iPhone 13"] });
+  const page = await context.newPage();
+  page.setDefaultTimeout(20000);
+  try {
+    await page.goto(`${base}/src/lib/harness/save-image.html?log=split`, { waitUntil: "networkidle" });
+    await page.getByRole("button", { name: "Game Log" }).click();
+    await page.getByTestId("game-log-sheets").locator("summary").click();
+    await page.waitForFunction(() => [...document.querySelectorAll("[data-save-kind='game-log-field']")].every(node => !node.disabled));
+    assert.equal(await page.getByTestId("game-log-sheet").getAttribute("data-dual"), "true");
+    assert.deepEqual(
+      await page.getByTestId("game-log-field-tile").evaluateAll(nodes => nodes.map(node => node.getAttribute("data-filename"))),
+      ["CoachKit_Field_Q1_H1.png", "CoachKit_Field_Q1_H2.png", "CoachKit_Field_Q2.png"],
+    );
+    assert.deepEqual(
+      await page.getByTestId("game-log-field-label").allInnerTexts(),
+      ["Q1 · 1st half", "Q1 · 2nd half", "Q2"],
+    );
+    const hashes = await page.evaluate(async () => {
+      const hash = async (canvas) => {
+        const blob = await new Promise(resolve => canvas.toBlob(resolve));
+        const bytes = new Uint8Array(await blob.arrayBuffer());
+        let value = 2166136261;
+        for (let i = 0; i < bytes.length; i += 1) value = Math.imul(value ^ bytes[i], 16777619);
+        return value >>> 0;
+      };
+      const nodes = [...document.querySelectorAll("[data-testid='game-log-field-canvas']")];
+      return [await hash(nodes[0]), await hash(nodes[1])];
+    });
+    assert.notEqual(hashes[0], hashes[1]);
+  } finally {
+    await page.close();
+    await context.close();
+  }
+});
+
+test("halves games label start and after subs", async () => {
+  const context = await browser.newContext({ ...devices["iPhone 13"] });
+  const page = await context.newPage();
+  page.setDefaultTimeout(20000);
+  try {
+    await page.goto(`${base}/src/lib/harness/save-image.html?periods=halves`, { waitUntil: "networkidle" });
+    await page.getByRole("button", { name: "Share lineup" }).click();
+    const sheet = page.getByTestId("share-sheet");
+    await sheet.waitFor();
+    assert.equal(await page.getByTestId("share-helper").innerText(), "Each half has a start lineup and an after-subs lineup. Tap Save under any image to send it or add it to Photos.");
+    assert.deepEqual(await sheet.getByTestId("field-tile-label").allInnerTexts(), [
+      "1st half · start",
+      "1st half · after subs",
+      "2nd half · start",
+      "2nd half · after subs",
+    ]);
+    assert.deepEqual(
+      await sheet.getByTestId("field-tile").evaluateAll(nodes => nodes.map(node => node.getAttribute("data-filename"))),
+      [
+        "CoachKit_Field_H1_Start.png",
+        "CoachKit_Field_H1_After.png",
+        "CoachKit_Field_H2_Start.png",
+        "CoachKit_Field_H2_After.png",
+      ],
+    );
+    const overflow = await page.getByTestId("share-modal").evaluate(node => node.scrollWidth - node.clientWidth);
+    assert.ok(overflow <= 1, `overflow ${overflow}`);
+  } finally {
+    await page.close();
+    await context.close();
+  }
+});
+
 test("full mode lays the quarters out two per row above play time", async () => {
   const context = await browser.newContext({ ...devices["iPhone 13"] });
   const page = await context.newPage();
@@ -297,6 +419,7 @@ test("full mode lays the quarters out two per row above play time", async () => 
     const sheet = page.getByTestId("share-sheet");
     await sheet.waitFor();
     assert.equal(await sheet.getAttribute("data-dual"), "false");
+    assert.equal(await page.getByTestId("share-helper").innerText(), "Tap Save under any image to send it or add it to Photos.");
     assert.deepEqual(await sheet.getByTestId("field-tile-label").allInnerTexts(), ["Q1", "Q2", "Q3", "Q4"]);
     assert.deepEqual(
       await sheet.getByTestId("field-tile").evaluateAll(nodes => nodes.map(node => node.getAttribute("data-filename"))),

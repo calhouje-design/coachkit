@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { scheduleHalfRotation, shareFieldSheet } from "./gameDay.js";
 import { decorateShareSheet } from "./afterSubs.js";
-import { fieldImageTiles } from "./fieldGrid.js";
+import { fieldImageTiles, shareHelperText } from "./fieldGrid.js";
 
 const slots = ["GK", "LD", "RD", "LM", "RM", "CF"];
 const players = ["Ann", "Bea", "Cal", "Dee", "Eve", "Fay", "Gia", "Hal"].map((name, index) => ({
@@ -50,6 +50,7 @@ test("full mode is one tile per quarter, two files per row of names", () => {
     "CoachKit_Field_Q4.png",
   ]);
   assert.equal(tiles.length % 2, 0);
+  assert.deepEqual(tiles.map(tile => tile.half), [null, null, null, null]);
 });
 
 test("sub mode with a 2nd-half lineup pairs halves and keeps quarter order", () => {
@@ -79,4 +80,72 @@ test("sub mode with a 2nd-half lineup pairs halves and keeps quarter order", () 
   assert.notDeepEqual(secondHalf, firstHalf);
   assert.equal(tiles[0].panel.label, "Q1");
   assert.equal(tiles[1].panel.quarter, 1);
+  assert.deepEqual(tiles.map(tile => tile.half), [
+    "start", "after", "start", "after", "start", "after", "start", "after",
+  ]);
+});
+
+test("a halves game names start and after subs instead of H1_H1", () => {
+  const halves = scheduleHalfRotation(players, slots, {
+    minHalves: 2,
+    totalQuarters: 2,
+    rate: () => 1,
+  });
+  const tiles = fieldImageTiles(decorateShareSheet(
+    shareFieldSheet({
+      lineups: halves.lineups,
+      pairPlan: {},
+      subMode: true,
+      quarters: [1, 2],
+      periodAbbrev: "H",
+    }),
+    {
+      lineups: halves.lineups,
+      afterSubs: {},
+      snapshots: {},
+      subMode: true,
+      periodAbbrev: "H",
+      roster: players,
+    },
+  ));
+  assert.deepEqual(tiles.map(tile => tile.caption), [
+    "1st half · start",
+    "1st half · after subs",
+    "2nd half · start",
+    "2nd half · after subs",
+  ]);
+  assert.deepEqual(tiles.map(tile => tile.filename), [
+    "CoachKit_Field_H1_Start.png",
+    "CoachKit_Field_H1_After.png",
+    "CoachKit_Field_H2_Start.png",
+    "CoachKit_Field_H2_After.png",
+  ]);
+  assert.deepEqual(tiles.map(tile => tile.half), ["start", "after", "start", "after"]);
+});
+
+test("a full-mode H2 file is one lineup, not a 2nd-half split", () => {
+  const tiles = fieldImageTiles({
+    quarters: [
+      { quarter: 1, label: "H1", starters: [{ id: "a" }], bench: [], pairs: [] },
+      { quarter: 2, label: "H2", starters: [{ id: "b" }], bench: [], pairs: [] },
+    ],
+  });
+  assert.deepEqual(tiles.map(tile => tile.filename), ["CoachKit_Field_H1.png", "CoachKit_Field_H2.png"]);
+  assert.equal(tiles[1].filename.endsWith("_H2.png"), true);
+  assert.equal(tiles.some(tile => tile.half), false);
+});
+
+test("share helper text follows quarters, halves, and full games", () => {
+  assert.equal(
+    shareHelperText({ split: true, periodAbbrev: "Q" }),
+    "Each quarter has a 1st-half and a 2nd-half lineup. Tap Save under any image to send it or add it to Photos.",
+  );
+  assert.equal(
+    shareHelperText({ split: true, periodAbbrev: "H" }),
+    "Each half has a start lineup and an after-subs lineup. Tap Save under any image to send it or add it to Photos.",
+  );
+  assert.equal(
+    shareHelperText({ split: false, periodAbbrev: "Q" }),
+    "Tap Save under any image to send it or add it to Photos.",
+  );
 });

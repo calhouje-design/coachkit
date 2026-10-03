@@ -76,7 +76,7 @@ import { AvailabilityMark, RosterAvailabilityButtons } from "./components/Availa
 import { PITCH_LAYER, usePitchSubLines, useReportFieldLayout } from "./lib/pitchSubLines.js";
 import { SAY_PLAY_TIME, sayDivision, sayDivisionKey } from "./lib/sayEastGuide.js";
 import { paintFieldSheet, paintFieldTile, paintPlayTimeSheet } from "./lib/sharePaint.js";
-import { fieldImageTiles } from "./lib/fieldGrid.js";
+import { fieldImageTiles, shareHelperText } from "./lib/fieldGrid.js";
 import { canvasToPngBlob, saveImage, showHoldToSave } from "./lib/saveImage.js";
 import BuildStamp from "./components/BuildStamp.jsx";
 import { useTeamCloud } from "./lib/teamCloud.js";
@@ -3639,7 +3639,7 @@ function SheetCanvases({ field, playTime, league, opponent, homeScore, awayScore
   const [fieldFiles, setFieldFiles] = useState([]);
   const [playFile, setPlayFile] = useState(null);
   const playName = "CoachKit_PlayTime.png";
-  const dual = tiles.some(tile => tile.filename.endsWith("_H1.png") || tile.filename.endsWith("_H2.png"));
+  const dual = tiles.some(tile => tile.half);
   const tileKey = tiles.map(tile => tile.filename).join("|");
   const paintMeta = { league, opponent, homeScore, awayScore };
   useEffect(() => {
@@ -3687,7 +3687,7 @@ function SheetCanvases({ field, playTime, league, opponent, homeScore, awayScore
   };
   const saveRow = (file, filename, testId, holdId, readyLabel, kind, stacked) => (
     <div style={{display:"flex", flexDirection: stacked ? "column" : "row", flexWrap: stacked ? "nowrap" : "wrap", gap: stacked ? 4 : 8, alignItems: stacked ? "stretch" : "center"}}>
-      <button type="button" data-testid={testId} data-save-kind={kind || undefined} data-filename={filename} disabled={!file} onClick={() => saveReady(file, filename)} style={{...sheetSaveBtn, width: stacked ? "100%" : undefined, flex: stacked ? "none" : 1, minWidth: 0, fontSize: stacked ? 11 : 13, padding: stacked ? "8px 6px" : "10px 12px", opacity: file ? 1 : 0.6}}>
+      <button type="button" data-testid={testId} data-save-kind={kind || undefined} data-filename={filename} disabled={!file} onClick={() => saveReady(file, filename)} style={{...sheetSaveBtn, width: stacked ? "100%" : undefined, flex: stacked ? "none" : 1, minWidth: 0, whiteSpace: "normal", fontSize: stacked ? 11 : 13, padding: stacked ? "8px 6px" : "10px 12px", opacity: file ? 1 : 0.6}}>
         {file ? readyLabel : "Preparing image…"}
       </button>
       <button type="button" data-testid={holdId} data-hold-kind={kind || "play"} data-filename={filename} disabled={!file} onClick={() => file && showHoldToSave(file)} style={{...sheetHoldBtn, flex: stacked ? "none" : "1 1 108px", width: stacked ? "100%" : undefined, minWidth: 0, whiteSpace: "normal", opacity: file ? 1 : 0.45}}>
@@ -3698,11 +3698,15 @@ function SheetCanvases({ field, playTime, league, opponent, homeScore, awayScore
   return (
     <div data-image-source={source} data-testid={source === "share" ? "share-sheet" : "game-log-sheet"} data-dual={dual ? "true" : "false"} data-preview="grid">
       <div style={{fontSize:12,fontWeight:800,color:"#e8a020",marginBottom:6}}>
-        {dual ? "Field images · 1st half and 2nd half" : "Field images"}
+        {dual
+          ? (tiles.some(tile => /^H\d+$/.test(tile.panel?.label || ""))
+            ? "Field images · start and after subs"
+            : "Field images · 1st half and 2nd half")
+          : "Field images"}
       </div>
       <div data-testid={source === "share" ? "field-grid" : "game-log-field-grid"} style={{display:"grid", gridTemplateColumns:"minmax(0, 1fr) minmax(0, 1fr)", gap:8, marginBottom:12}}>
         {tiles.map((tile, index) => (
-          <div key={tile.filename} data-testid={source === "share" ? "field-tile" : "game-log-field-tile"} data-filename={tile.filename} data-caption={tile.caption} style={{minWidth:0}}>
+          <div key={tile.filename} data-testid={source === "share" ? "field-tile" : "game-log-field-tile"} data-filename={tile.filename} data-caption={tile.caption} data-half={tile.half || ""} style={{minWidth:0}}>
             <div data-testid={source === "share" ? "field-tile-label" : "game-log-field-label"} style={{fontSize:11, fontWeight:800, color:"#e8e4dc", lineHeight:1.3, marginBottom:4}}>
               {tile.caption}
             </div>
@@ -3710,6 +3714,8 @@ function SheetCanvases({ field, playTime, league, opponent, homeScore, awayScore
               <canvas
                 ref={node => { previewRefs.current[index] = node; }}
                 data-testid={source === "share" ? "field-tile-canvas" : "game-log-field-canvas"}
+                role="img"
+                aria-label={`${tile.caption} lineup`}
                 style={{width:"100%", height:"auto", display:"block"}}
               />
             </div>
@@ -3773,8 +3779,6 @@ function GameLogSheets({ game }) {
             opponent={game.opponent}
             homeScore={game.homeScore}
             awayScore={game.oppScore}
-            periodAbbrev={strategy.periodType === "halves" ? "H" : strategy.periodType === "periods" ? "P" : "Q"}
-            periodCount={strategy.periods || sheets.field.quarters?.length || 4}
           />
         </div>
       ) : null}
@@ -3812,10 +3816,8 @@ function ShareLineupModal({ players, lineupsByQuarter, pairPlan, afterSubs, star
           }}>Close</button>
         </div>
         <div data-testid="share-body" style={{padding:"14px 16px",overflow:"auto",touchAction:"pan-y"}}>
-          <div style={{fontSize:11,color:"#7a7570",marginBottom:12,lineHeight:1.5}}>
-            {dual
-              ? "Two images per row: Q1 1st half beside Q1 2nd half, then Q2’s halves on the next row. Play time is the full-width image under the grid. Each image saves on its own."
-              : "Two images per row, in period order. Play time is the full-width image under the grid. Each image saves on its own."}
+          <div data-testid="share-helper" style={{fontSize:11,color:"#7a7570",marginBottom:12,lineHeight:1.5}}>
+            {shareHelperText({ split: dual, periodAbbrev })}
           </div>
           <SheetCanvases
             field={field}
