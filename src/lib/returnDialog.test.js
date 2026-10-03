@@ -2139,12 +2139,13 @@ test("marking an out donor clears his future-quarter half", () => {
 test("every replan trigger keeps a back-half constraint or posts a notice", () => {
   const totals = {};
   [true, false].forEach(subMode => {
-    [9, 10].forEach(count => {
-      [1, 2, 3].forEach(seed => {
+    [8, 9, 10, 11, 12].forEach(count => {
+      for (let seed = 1; seed <= 10; seed += 1) {
         [1, 2].forEach(marks => {
           const players = namedRoster([
             "John Smith", "Wes Johnson", "Jaxon Williams", "Remi Brown", "Sean Jones",
             "Henry Davis", "Jude Garcia", "Trey Miller", "Maddox Anderson", "Leo Martinez",
+            "Nico Thomas", "Owen Clark",
           ].slice(0, count));
           const opened = openSheet(players, subMode, seed);
           let state = { players, lineups: opened.lineups, segments: opened.segments, subMode };
@@ -2204,23 +2205,23 @@ test("every replan trigger keeps a back-half constraint or posts a notice", () =
             }
           }
         });
-      });
+      }
     });
   });
   assert.deepEqual(totals, {
-    "sub Out": { kept: 12, stripped: 0 },
-    "sub Injured": { kept: 12, stripped: 0 },
-    "sub earlier back-half return": { kept: 12, stripped: 0 },
-    "sub whole-quarter return": { kept: 12, stripped: 0 },
-    "sub Replan": { kept: 12, stripped: 0 },
-    "sub auto replan off plus Out": { kept: 12, stripped: 0 },
-    "sub second injury": { kept: 7, stripped: 5 },
-    "full Out": { kept: 12, stripped: 0 },
-    "full Injured": { kept: 12, stripped: 0 },
-    "full earlier back-half return": { kept: 12, stripped: 0 },
-    "full whole-quarter return": { kept: 12, stripped: 0 },
-    "full Replan": { kept: 12, stripped: 0 },
-    "full auto replan off plus Out": { kept: 12, stripped: 0 },
-    "full second injury": { kept: 12, stripped: 0 },
+    "sub Out": { kept: 80, stripped: 0 },
+    "sub Injured": { kept: 80, stripped: 0 },
+    "sub earlier back-half return": { kept: 60, stripped: 20 },
+    "sub whole-quarter return": { kept: 60, stripped: 20 },
+    "sub Replan": { kept: 80, stripped: 0 },
+    "sub auto replan off plus Out": { kept: 70, stripped: 10 },
+    "sub second injury": { kept: 61, stripped: 19 },
+    "full Out": { kept: 100, stripped: 0 },
+    "full Injured": { kept: 100, stripped: 0 },
+    "full earlier back-half return": { kept: 100, stripped: 0 },
+    "full whole-quarter return": { kept: 100, stripped: 0 },
+    "full Replan": { kept: 100, stripped: 0 },
+    "full auto replan off plus Out": { kept: 90, stripped: 10 },
+    "full second injury": { kept: 90, stripped: 10 },
   });
 });
