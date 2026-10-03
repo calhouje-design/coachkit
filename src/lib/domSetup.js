@@ -33,6 +33,11 @@ globalThis.ResizeObserver = class ResizeObserver {
 };
 globalThis.__resizeObservers = observers;
 
+if (typeof globalThis.requestAnimationFrame !== "function") {
+  globalThis.requestAnimationFrame = (callback) => setTimeout(() => callback(Date.now()), 16);
+  globalThis.cancelAnimationFrame = (id) => clearTimeout(id);
+}
+
 window.HTMLElement.prototype.getBoundingClientRect = function getBoundingClientRect() {
   let x = 0;
   let y = 0;

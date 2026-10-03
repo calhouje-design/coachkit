@@ -8,7 +8,7 @@
     "build": "vite build",
     "build:check": "VITE_CLERK_PUBLISHABLE_KEY=pk_test_dummy npm run build",
     "preview": "vite preview",
-    "test": "node --test src/lib/fairPlay.test.js src/lib/gameDay.test.js src/lib/afterSubs.test.js src/lib/teamSnapshot.test.js src/lib/leagueRules.test.js src/lib/formations.test.js src/lib/fieldLayout.test.js src/lib/pitchSubLines.test.js src/lib/playerStatus.test.js src/lib/returnDialog.test.js src/lib/fieldLabelDom.test.js src/lib/saveImage.test.js src/lib/buildStamp.test.js src/lib/returnDialog.playwright.test.js src/lib/afterSubs.playwright.test.js src/lib/saveImage.playwright.test.js"
+    "test": "node --test src/lib/fairPlay.test.js src/lib/gameDay.test.js src/lib/afterSubs.test.js src/lib/teamSnapshot.test.js src/lib/leagueRules.test.js src/lib/formations.test.js src/lib/fieldLayout.test.js src/lib/pitchSubLines.test.js src/lib/playerStatus.test.js src/lib/returnDialog.test.js src/lib/fieldLabelDom.test.js src/lib/saveImage.test.js src/lib/buildStamp.test.js src/lib/returnDialog.playwright.test.js src/lib/afterSubs.playwright.test.js src/lib/coverage.playwright.test.js src/lib/saveImage.playwright.test.js"
   },
   "dependencies": {
     "@clerk/clerk-react": "^5.0.0",
