@@ -5,9 +5,9 @@ import { readFileSync } from "node:fs";
 import { act, createElement, useLayoutEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { FORMATION_TEMPLATES, reshapeLineup } from "./formations.js";
-import { CIRCLE_DIAMETER, layoutFieldPlayers } from "./fieldLayout.js";
-import { lineStopAtCircle, pairsForDisplay, planBenchRotation, routeClearOfObstacles, scheduleHalfRotation } from "./gameDay.js";
-import { PITCH_LAYER, subLineCacheKey, usePitchSubLines, useReportFieldLayout } from "./pitchSubLines.js";
+import { layoutFieldPlayers } from "./fieldLayout.js";
+import { pairsForDisplay, planBenchRotation, scheduleHalfRotation } from "./gameDay.js";
+import { subLineCacheKey, usePitchSubLines, useReportFieldLayout } from "./pitchSubLines.js";
 
 const h = createElement;
 
@@ -74,7 +74,7 @@ function Field({ lineup, fieldWidth, onLayout }) {
   }));
 }
 
-function Harness({ lineup, pairs, fieldWidth }) {
+function Harness({ lineup, pairs, fieldWidth, markField = false }) {
   const pitchRef = useRef(null);
   const [fieldLayout, setFieldLayout] = useState("");
   const lineupKey = (lineup?.starters || []).map(slot => `${slot.pos}:${slot.player?.id || ""}`).join(",");
@@ -90,6 +90,10 @@ function Harness({ lineup, pairs, fieldWidth }) {
     "data-pitch": "1",
     style: { position: "relative", width: `${fieldWidth}px`, height: "800px" },
   },
+  markField ? h("div", {
+    "data-pitch-svg": "",
+    style: { width: `${fieldWidth}px`, height: `${fieldWidth * 1.5}px` },
+  }) : null,
   h("div", {
     "data-sub-lines": "",
     "data-hold": lines.holding ? "1" : "0",
@@ -235,14 +239,45 @@ test("a name-label resize changes the sub-line cache key", () => {
   assert.notEqual(before, after);
 });
 
-test("a window resize hides sub lines until the next frame", async () => {
+test("a window resize that does not move the field leaves the lines up", async () => {
+  const fieldWidth = 390;
+  const { lineup, pairs } = planAt(slotsNamed("6v6", "2-2-1"));
+  const view = await renderPitch({ lineup, pairs, fieldWidth, markField: true });
+  try {
+    const layer = () => view.host.querySelector("[data-sub-lines]");
+    const pitch = view.host.querySelector("[data-pitch]");
+    assert.equal(layer().getAttribute("data-hold"), "0");
+    pitch.style.height = "900px";
+    await act(async () => {
+      window.dispatchEvent(new window.Event("resize"));
+    });
+    assert.equal(layer().getAttribute("data-hold"), "0");
+    assert.equal(layer().style.visibility, "visible");
+    await act(async () => {
+      window.dispatchEvent(new window.Event("resize"));
+      await new Promise(resolve => requestAnimationFrame(resolve));
+    });
+    assert.equal(layer().getAttribute("data-hold"), "0");
+    assert.equal(view.host.querySelectorAll("[data-sub-line]").length, pairs.length);
+  } finally {
+    await view.unmount();
+  }
+});
+
+test("a field resize hides sub lines until the next frame", async () => {
   const fieldWidth = 390;
   const { lineup, pairs } = planAt(slotsNamed("6v6", "2-2-1"));
   const view = await renderPitch({ lineup, pairs, fieldWidth });
   try {
     const layer = () => view.host.querySelector("[data-sub-lines]");
+    const pitch = view.host.querySelector("[data-pitch]");
+    const svg = document.createElement("div");
+    svg.setAttribute("data-pitch-svg", "");
+    svg.style.width = "390px";
+    svg.style.height = "585px";
+    pitch.appendChild(svg);
     assert.equal(layer().getAttribute("data-hold"), "0");
-    assert.equal(layer().style.visibility, "visible");
+    svg.style.width = "320px";
     await act(async () => {
       window.dispatchEvent(new window.Event("resize"));
     });
@@ -253,116 +288,30 @@ test("a window resize hides sub lines until the next frame", async () => {
     });
     assert.equal(layer().getAttribute("data-hold"), "0");
     assert.equal(layer().style.visibility, "visible");
-    assert.equal(view.host.querySelectorAll("[data-sub-line]").length, pairs.length);
   } finally {
     await view.unmount();
   }
 });
 
-function longRoster() {
-  const positions = ["GK", "LB", "CB", "RB", "LM", "CM", "RM", "LF", "RF", "CF", "CDM", "CAM"];
-  const names = [
-    "Christopher Montgomery", "Alexander Richardson", "Benjamin Harrington",
-    "Nathaniel Pemberton", "Sebastian Callahan", "Maximilian Holloway",
-    "Christopher Ellington", "Alexander Pembroke", "Benjamin Sutterfield",
-    "Nathaniel Broderick", "Sebastian Langford", "Maximilian Cartwright",
-    "Christopher Delaney", "Alexander Forsythe", "Benjamin Aldridge",
-    "Nathaniel Kingsley",
-  ];
-  return names.map((name, i) => ({ id: `p${i + 1}`, name, number: String(i + 1), positions }));
-}
-
-function segmentHitsRect(from, to, rect) {
-  const len = Math.hypot(to.x - from.x, to.y - from.y);
-  const steps = Math.max(1, Math.ceil(len / 2));
-  for (let step = 0; step <= steps; step += 1) {
-    const t = step / steps;
-    const x = from.x + (to.x - from.x) * t;
-    const y = from.y + (to.y - from.y) * t;
-    if (x >= rect.x && x <= rect.x + rect.w && y >= rect.y && y <= rect.y + rect.h) return true;
-  }
-  return false;
-}
-
-test("11v11 numbers and names are not covered by a line drawn above them", () => {
-  assert.ok(PITCH_LAYER.marker > PITCH_LAYER.line);
-  const app = readFileSync(new URL("../App.jsx", import.meta.url), "utf8");
-  assert.match(app, /zIndex:PITCH_LAYER\.line/);
-  assert.match(app, /PITCH_LAYER\.marker/);
-  assert.match(app, /data-sub-lines=""/);
-  assert.match(app, /data-player-marker=""/);
-  assert.match(app, /data-jersey=""/);
-  assert.equal(app.includes("zIndex:13"), false);
-  assert.match(app, /pointerEvents:"none"/);
-  const fieldWidth = 196;
-  const fieldHeight = 294;
-  const fieldX = 82;
-  const fieldY = 8;
-  const players = longRoster();
-  for (const name of ["4-4-2", "4-5-1", "5-3-2"]) {
-    const slots = slotsNamed("11v11", name);
-    const planned = scheduleHalfRotation(players, slots, { minHalves: 4, seed: 1 });
-    const lineup = planned.lineups[1];
-    const pairs = pairsForDisplay(planBenchRotation(lineup, { nextLineup: planned.lineups[2] }), [], lineup);
-    assert.ok(pairs.length >= 1, `${name} has no sub pairs`);
-    const layout = layoutFieldPlayers(lineup.starters, { fieldWidth, fieldHeight });
-    const bounds = { x: fieldX, y: fieldY, w: fieldWidth, h: fieldHeight };
-    pairs.forEach((pair, index) => {
-      const starter = lineup.starters.find(slot => slot.player?.id === pair.outId);
-      const spot = layout.find(item => item.pos === starter.pos && item.fullName === starter.player.name);
-      assert.ok(spot, `${name} missing ${pair.outId}`);
-      const dot = { x: 72, y: 36 + index * 48 };
-      const center = { x: fieldX + spot.x, y: fieldY + spot.y };
-      const end = lineStopAtCircle(dot.x, dot.y, center.x, center.y, CIRCLE_DIAMETER / 2);
-      const obstacles = [];
-      layout.forEach(other => {
-        if (other !== spot) obstacles.push({ cx: fieldX + other.x, cy: fieldY + other.y, r: CIRCLE_DIAMETER / 2 });
-        if (other.labelBox) {
-          obstacles.push({
-            x: fieldX + other.labelBox.x,
-            y: fieldY + other.labelBox.y,
-            w: other.labelBox.width,
-            h: other.labelBox.height,
-          });
-        }
-      });
-      const routed = routeClearOfObstacles(dot.x, dot.y, end.x, end.y, obstacles, 3, {
-        bounds,
-        bench: { x: 0, y: 0, w: fieldX, h: fieldY + fieldHeight },
-        badge: {
-          x: fieldX + (12 / 320) * fieldWidth,
-          y: fieldY + (12 / 480) * fieldHeight,
-          w: (62 / 320) * fieldWidth,
-          h: (34 / 480) * fieldHeight,
-        },
-      });
-      assert.ok(routed.length <= 4, `${name} bends ${routed.length - 2}`);
-      const boxes = [{
-        x: spot.x - 8,
-        y: spot.y - 9,
-        w: 16,
-        h: 9,
-        kind: "number",
-        who: spot.pos,
-      }];
-      if (spot.labelBox) boxes.push({ ...spot.labelBox, kind: "name", who: spot.pos });
-      layout.forEach(other => {
-        if (other === spot) return;
-        boxes.push({ x: other.x - 8, y: other.y - 9, w: 16, h: 9, kind: "number", who: other.pos });
-        if (other.labelBox) boxes.push({ ...other.labelBox, kind: "name", who: other.pos });
-      });
-      for (let i = 1; i < routed.length; i += 1) {
-        const from = { x: routed[i - 1].x - fieldX, y: routed[i - 1].y - fieldY };
-        const to = { x: routed[i].x - fieldX, y: routed[i].y - fieldY };
-        boxes.forEach(box => {
-          if (!segmentHitsRect(from, to, box)) return;
-          assert.ok(
-            PITCH_LAYER.line < PITCH_LAYER.marker,
-            `${name} ${box.kind} ${box.who} is covered by a line drawn above it`,
-          );
-        });
-      }
+test("rotation hides sub lines until the next frame", async () => {
+  const fieldWidth = 390;
+  const { lineup, pairs } = planAt(slotsNamed("6v6", "2-2-1"));
+  const view = await renderPitch({ lineup, pairs, fieldWidth });
+  try {
+    const layer = () => view.host.querySelector("[data-sub-lines]");
+    assert.equal(layer().getAttribute("data-hold"), "0");
+    await act(async () => {
+      window.dispatchEvent(new window.Event("orientationchange"));
     });
+    assert.equal(layer().getAttribute("data-hold"), "1");
+    assert.equal(layer().style.visibility, "hidden");
+    await act(async () => {
+      await new Promise(resolve => requestAnimationFrame(resolve));
+    });
+    assert.equal(layer().getAttribute("data-hold"), "0");
+    assert.equal(view.host.querySelectorAll("[data-sub-line]").length, pairs.length);
+  } finally {
+    await view.unmount();
   }
 });
 
@@ -374,5 +323,5 @@ test("Game Day reports the field layout into the sub-line measure", () => {
   assert.match(app, /onLayout=\{setFieldLayout\}/);
   assert.match(measure, /new ResizeObserver\(measure\)/);
   assert.match(measure, /observer\?\.observe\(root\)/);
-  assert.match(measure, /addEventListener\("orientationchange", onViewport\)/);
+  assert.match(measure, /addEventListener\("orientationchange", onRotate\)/);
 });

@@ -185,6 +185,17 @@ export function useReportFieldLayout(rootRef, placed, onLayout) {
   }, [placed]);
 }
 
+function fieldRectKey(live) {
+  const node = live.querySelector("[data-pitch-svg]") || live;
+  const box = node.getBoundingClientRect();
+  return [
+    Math.round(box.left),
+    Math.round(box.top),
+    Math.round(box.width),
+    Math.round(box.height),
+  ].join(",");
+}
+
 /** Measure sub lines after the field layout signature changes, and when the pitch box itself resizes. */
 export function usePitchSubLines(pitchWrapRef, { shownPairs, lineupKey, quarter, swapSel, fieldLayout }) {
   const [subLines, setSubLines] = useState([]);
@@ -197,7 +208,7 @@ export function usePitchSubLines(pitchWrapRef, { shownPairs, lineupKey, quarter,
     }
     let frame = 0;
     let queued = false;
-    let lastSize = `${root.clientWidth}x${root.clientHeight}`;
+    let lastRect = fieldRectKey(root);
     const concealNow = (live) => {
       live.querySelectorAll("[data-sub-lines]").forEach(node => {
         node.style.visibility = "hidden";
@@ -220,19 +231,19 @@ export function usePitchSubLines(pitchWrapRef, { shownPairs, lineupKey, quarter,
         return next;
       });
     };
-    // Resize bursts (including the iOS toolbar) share one frame. The first
-    // measure stays synchronous so the lines are present on the commit.
-    // A real viewport change hides the previous frame immediately; the
-    // observer still waits for the animation frame before drawing the new one.
+    // Resize bursts share one frame. The first measure stays synchronous.
+    // Hide the previous frame only when the field itself moves or changes
+    // size. A height-only window resize (the iOS toolbar) leaves the field
+    // rect alone, so the lines stay put. Rotation still hides immediately.
+    const concealIfFieldMoved = (live) => {
+      const next = fieldRectKey(live);
+      if (next === lastRect) return;
+      lastRect = next;
+      concealNow(live);
+    };
     const measure = () => {
       const live = pitchWrapRef.current;
-      if (live) {
-        const size = `${live.clientWidth}x${live.clientHeight}`;
-        if (size !== lastSize) {
-          lastSize = size;
-          concealNow(live);
-        }
-      }
+      if (live) concealIfFieldMoved(live);
       if (queued) return;
       queued = true;
       frame = requestAnimationFrame(() => {
@@ -242,19 +253,22 @@ export function usePitchSubLines(pitchWrapRef, { shownPairs, lineupKey, quarter,
       });
     };
     const onViewport = () => {
+      measure();
+    };
+    const onRotate = () => {
       const live = pitchWrapRef.current;
       if (live) concealNow(live);
       measure();
     };
     apply();
     window.addEventListener("resize", onViewport);
-    window.addEventListener("orientationchange", onViewport);
+    window.addEventListener("orientationchange", onRotate);
     const observer = typeof ResizeObserver === "function" ? new ResizeObserver(measure) : null;
     observer?.observe(root);
     return () => {
       if (frame) cancelAnimationFrame(frame);
       window.removeEventListener("resize", onViewport);
-      window.removeEventListener("orientationchange", onViewport);
+      window.removeEventListener("orientationchange", onRotate);
       observer?.disconnect();
     };
   }, [pairKey, lineupKey, quarter, swapSel, fieldLayout]);

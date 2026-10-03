@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useEffect, useLayoutEffect, useMemo } from "react";
+import { useState, useRef, useCallback, useEffect, useLayoutEffect, useMemo, useId } from "react";
 import { useUser, useSession } from "@clerk/clerk-react";
 import AuthGate from "./components/AuthGate.jsx";
 import UserMenu from "./components/UserMenu.jsx";
@@ -708,6 +708,7 @@ function usePitchDrag(onResolve) {
 function SoccerField({ lineup, onTap, selectedIdx, quarter, periodAbbrev = "Q", drag, hoverToken, activeSource, onLayout, lockGk = false, readOnly = false, phaseLabel = "", subLines = [], linesHold = false }) {
   const rootRef = useRef(null);
   const [lineOrigin, setLineOrigin] = useState(null);
+  const lineMaskId = `sub-line-cut${useId().replace(/:/g, "")}`;
   const slots = lineup?.starters || [];
   const slotKey = slots.map(slot => `${slot.pos}:${slot.player?.id || ""}:${slot.player?.name || ""}`).join("|");
   const [placed, setPlaced] = useState([]);
@@ -842,12 +843,28 @@ function SoccerField({ lineup, onTap, selectedIdx, quarter, periodAbbrev = "Q", 
           }}
         >
           <defs>
-            <mask id="sub-line-cut" maskUnits="userSpaceOnUse" x="-800" y="-800" width="2400" height="2400">
-              <rect x="-800" y="-800" width="2400" height="2400" fill="#fff"/>
-              {placed.map((spot, idx) => spot && (
-                <circle key={idx} cx={spot.x} cy={spot.y} r={CIRCLE_DIAMETER / 2} fill="#000"/>
-              ))}
-            </mask>
+            {subLines.filter(line => line.elevated).map(line => {
+              const endX = line.x2 - lineOrigin.x;
+              const endY = line.y2 - lineOrigin.y;
+              let target = -1;
+              let nearest = Infinity;
+              placed.forEach((spot, idx) => {
+                if (!spot) return;
+                const dist = Math.hypot(spot.x - endX, spot.y - endY);
+                if (dist < nearest) {
+                  nearest = dist;
+                  target = idx;
+                }
+              });
+              return (
+                <mask key={line.key} id={`${lineMaskId}-${line.key}`} maskUnits="userSpaceOnUse" x="-800" y="-800" width="2400" height="2400">
+                  <rect x="-800" y="-800" width="2400" height="2400" fill="#fff"/>
+                  {placed.map((spot, idx) => spot && idx !== target && (
+                    <circle key={idx} cx={spot.x} cy={spot.y} r={CIRCLE_DIAMETER / 2} fill="#000"/>
+                  ))}
+                </mask>
+              );
+            })}
           </defs>
           {subLines.filter(line => !line.elevated).map(line => (
             <polyline key={line.key}
@@ -859,9 +876,11 @@ function SoccerField({ lineup, onTap, selectedIdx, quarter, periodAbbrev = "Q", 
           {subLines.filter(line => line.elevated).map(line => {
             const points = (line.points || [{ x: line.x1, y: line.y1 }, { x: line.x2, y: line.y2 }]).map(point => `${point.x - lineOrigin.x},${point.y - lineOrigin.y}`).join(" ");
             return (
-              <g key={line.key} mask="url(#sub-line-cut)">
-                <polyline points={points} fill="none" stroke="#0a0d0f" strokeWidth="5" strokeLinecap="round" strokeLinejoin="round" />
-                <polyline points={points} fill="none" stroke="#2ecc71" strokeWidth="2" strokeDasharray="5 4" strokeLinecap="round" strokeLinejoin="round" />
+              <g key={line.key}>
+                <g mask={`url(#${lineMaskId}-${line.key})`}>
+                  <polyline points={points} fill="none" stroke="#0a0d0f" strokeWidth="5" strokeLinecap="round" strokeLinejoin="round" />
+                  <polyline points={points} fill="none" stroke="#2ecc71" strokeWidth="2" strokeDasharray="5 4" strokeLinecap="round" strokeLinejoin="round" />
+                </g>
               </g>
             );
           })}
@@ -903,19 +922,18 @@ function SoccerField({ lineup, onTap, selectedIdx, quarter, periodAbbrev = "Q", 
             onPointerCancel={e => { drag?.pointerUp(e); }}
             style={{
               position:"absolute",
-              left: spot.x,
+              left: spot.x - CIRCLE_DIAMETER / 2,
               top: spot.y - CIRCLE_DIAMETER / 2,
-              transform: "translateX(-50%)",
               textAlign:"center", width: CIRCLE_DIAMETER,
               cursor: slot.player && !frozen ? "grab" : "default",
-              zIndex: isSelected || isHovered || isSource ? 12 : PITCH_LAYER.marker,
+              zIndex: isSelected || isHovered || isSource ? 12 : undefined,
               touchAction: "none",
               opacity: isSource ? 0.55 : 1,
             }}>
             <div
               data-sub-to={slot.player?.id || undefined}
               style={{
-              width: CIRCLE_DIAMETER, height: CIRCLE_DIAMETER, borderRadius:"50%", margin:"0 auto", position:"relative", zIndex:2,
+              width: CIRCLE_DIAMETER, height: CIRCLE_DIAMETER, borderRadius:"50%", margin:"0 auto", position:"relative", zIndex: PITCH_LAYER.marker,
               boxSizing:"border-box",
               background: slot.player
                 ? `linear-gradient(135deg,${C.gold},${C.goldDark})`
@@ -929,13 +947,18 @@ function SoccerField({ lineup, onTap, selectedIdx, quarter, periodAbbrev = "Q", 
                   ? "0 0 0 4px rgba(46,204,113,0.4)"
                   : isSelected ? `0 0 0 3px ${C.gold}` : slot.player ? "0 2px 10px rgba(0,0,0,0.6)" : "none",
             }}>
-              {slot.player ? (
-                <>
-                  <div data-jersey="" style={{fontSize:9,color:"#1a1a1a",lineHeight:1,fontWeight:800}}>{slot.player.number}</div>
-                  <div style={{fontSize:8,color:"#2a1a0a",lineHeight:1.1,fontWeight:800,letterSpacing:"0.03em",marginTop:1}}>{pos}</div>
-                </>
-              ) : <span style={{color:"rgba(255,255,255,0.4)",fontSize:10}}></span>}
+              {!slot.player && <span style={{color:"rgba(255,255,255,0.4)",fontSize:10}}></span>}
             </div>
+            {slot.player && (
+              <div style={{
+                position:"absolute", left:0, top:0, width:CIRCLE_DIAMETER, height:CIRCLE_DIAMETER,
+                zIndex:8, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center",
+                pointerEvents:"none",
+              }}>
+                <div data-jersey="" style={{fontSize:9,color:"#1a1a1a",lineHeight:1,fontWeight:800}}>{slot.player.number}</div>
+                <div style={{fontSize:8,color:"#2a1a0a",lineHeight:1.1,fontWeight:800,letterSpacing:"0.03em",marginTop:1}}>{pos}</div>
+              </div>
+            )}
             {slot.player && spot.labelBox && (
               <div
                 title={fullName}
@@ -944,7 +967,7 @@ function SoccerField({ lineup, onTap, selectedIdx, quarter, periodAbbrev = "Q", 
                   position:"absolute",
                   left: spot.labelBox.x - (spot.x - CIRCLE_DIAMETER / 2),
                   top: CIRCLE_DIAMETER + LABEL_GAP,
-                  zIndex:3,
+                  zIndex:8,
                   width: spot.labelBox.width,
                   maxWidth: spot.labelBox.width,
                   overflow:"hidden",
@@ -965,6 +988,28 @@ function SoccerField({ lineup, onTap, selectedIdx, quarter, periodAbbrev = "Q", 
           </div>
         );
       })}
+      {subLines.some(line => line.elevated) && lineOrigin && (
+        <svg
+          data-sub-ends=""
+          style={{
+            position:"absolute", inset:0, width:"100%", height:"100%",
+            overflow:"visible", pointerEvents:"none", zIndex:PITCH_LAYER.marker + 1,
+          }}
+        >
+          {subLines.filter(line => line.elevated).map(line => (
+            <circle
+              key={line.key}
+              data-sub-end=""
+              cx={line.x2 - lineOrigin.x}
+              cy={line.y2 - lineOrigin.y}
+              r="3.5"
+              fill="#2ecc71"
+              stroke="#0a0d0f"
+              strokeWidth="1"
+            />
+          ))}
+        </svg>
+      )}
     </div>
   );
 }

@@ -828,11 +828,14 @@ export function routeClearOfObstacles(x1, y1, x2, y2, obstacles = [], gap = 3, o
   const end = { x: x2, y: y2 };
   const straight = Math.hypot(end.x - start.x, end.y - start.y) || 1;
   const lengthLimit = straight * 1.6;
+  // The outlined fallback is a 5px stroke. A circle counts as crossed when that
+  // stroke would paint over it, not only when the centerline enters the circle.
   const straightCircleHits = (obstacles || []).filter(obstacle => (
     isCircleObstacle(obstacle) && obstacle.r > 0
-    && circleBlocks(start.x, start.y, end.x, end.y, obstacle.cx, obstacle.cy, obstacle.r)
+    && circleBlocks(start.x, start.y, end.x, end.y, obstacle.cx, obstacle.cy, obstacle.r + 2.5)
   )).length;
-  const hugeLimit = straight * (straightCircleHits >= 2 ? 3.5 : 2.8);
+  const normalLimit = straight * 2.8;
+  const wideLimit = straight * 3.5;
   const corridor = straightCircleHits >= 2 ? 168 : 112;
   const blocks = (obstacles || []).filter(obstacle => (
     isCircleObstacle(obstacle) ? obstacle.r > 0 : obstacle.w > 0 && obstacle.h > 0
@@ -907,8 +910,12 @@ export function routeClearOfObstacles(x1, y1, x2, y2, obstacles = [], gap = 3, o
       isCircleObstacle(obstacle) ? circleSamples(obstacle, keepOut) : rectSamples(obstacle, keepOut)
     )).concat(frameSamples(bounds)).filter(point => pointFree(point) && inSegmentBox(point, start, end, corridor)));
     const latticePoints = () => {
-      const margin = 48;
-      const step = 18;
+      // The coarse grid misses open-field bends on a crowded 11v11 row.
+      // Use it only after the straight line would outline across two circles,
+      // so routes that already clear within 2.8× stay on the same samples.
+      const wide = lattice === "wide";
+      const margin = wide ? 96 : 48;
+      const step = wide ? 9 : 18;
       const minX = Math.min(start.x, end.x) - margin;
       const maxX = Math.max(start.x, end.x) + margin;
       const minY = Math.min(start.y, end.y) - margin;
@@ -1006,15 +1013,29 @@ export function routeClearOfObstacles(x1, y1, x2, y2, obstacles = [], gap = 3, o
   addGap(keep);
   addGap(1);
   addGap(0);
+  const within = (route, limit) => route && route.length <= limit + 0.5;
   for (let i = 0; i < gaps.length; i += 1) {
     const found = attempt(gaps[i], false);
     if (usable(found.short)) return pack(found.short.points, false);
     const clear = found.short || found.long;
-    if (!clear || clear.length > hugeLimit) continue;
-    const seeded = attempt(gaps[i], true);
-    if (usable(seeded.short)) return pack(seeded.short.points, false);
-    const kept = betterRoute(seeded.short, clear) && seeded.short.length <= hugeLimit ? seeded.short : clear;
-    return pack(kept.points, false);
+    if (within(clear, normalLimit)) {
+      const seeded = attempt(gaps[i], true);
+      if (usable(seeded.short)) return pack(seeded.short.points, false);
+      const kept = betterRoute(seeded.short, clear) && within(seeded.short, normalLimit) ? seeded.short : clear;
+      return pack(kept.points, false);
+    }
+    // Circle samples can only offer a loop past 2.8×. When the straight
+    // fallback would cut two or more circles, search a finer open-field
+    // grid and keep a clear route up to 3.5× before outlining.
+    if (straightCircleHits >= 2) {
+      const seeded = attempt(gaps[i], "wide");
+      if (usable(seeded.short)) return pack(seeded.short.points, false);
+      let best = within(clear, wideLimit) ? clear : null;
+      [seeded.short, seeded.long].forEach(route => {
+        if (within(route, wideLimit) && betterRoute(route, best)) best = route;
+      });
+      if (best) return pack(best.points, false);
+    }
   }
   return pack([start, end], true);
 }
