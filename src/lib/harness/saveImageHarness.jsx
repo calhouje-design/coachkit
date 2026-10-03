@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { TabGame, TabSeason } from "../../App.jsx";
+import { GameSettings, TabGame, TabSeason } from "../../App.jsx";
 import BuildStamp from "../../components/BuildStamp.jsx";
 import { scheduleHalfRotation, shareFieldSheet, sharePlayTimeSheet } from "../gameDay.js";
 import { resolveSetup } from "../leagueRules.js";
@@ -79,6 +79,7 @@ function loggedGames() {
 }
 
 function Harness() {
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [lineups, setLineups] = useState(planned.lineups);
   const [roster, setRoster] = useState(players);
   const [games, setGames] = useState(loggedGames);
@@ -113,6 +114,27 @@ function Harness() {
   }, []);
   return (
     <div style={{ minHeight: "100vh", background: "#0a0d0f", color: "#e8e4dc", fontFamily: "Georgia, serif" }}>
+      <button type="button" aria-label="Settings" onClick={() => setSettingsOpen(true)} style={{ position: "absolute", top: 8, right: 8, zIndex: 5 }}>
+        Settings
+      </button>
+      <GameSettings
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        subMode
+        onSubMode={() => {}}
+        setup={setup}
+        onOrgChange={() => {}}
+        onAgeChange={() => {}}
+        onFormatChange={() => {}}
+        onGkChange={() => {}}
+        onPeriodsChange={() => {}}
+        onSeasonChange={() => {}}
+        autoRegen
+        onAutoRegen={() => {}}
+        quarterMinutes={null}
+        onQuarterMinutes={() => {}}
+        fairPlayLabel="Fair-play target"
+      />
       <TabGame
         format="6v6"
         league="U10"

@@ -248,7 +248,10 @@ async function expectOverlay(install) {
     assert.equal(result.method, "overlay");
     const root = document.querySelector("[data-testid='save-image-overlay']");
     assert.ok(root);
-    assert.equal(root.querySelector("[data-testid='save-image-hint']").textContent, SAVE_IMAGE_HINT);
+    assert.equal(
+      root.querySelector("[data-testid='save-image-hint']").textContent,
+      "Press and hold the image, then tap Save to Photos (or Add to Photos).",
+    );
     const img = root.querySelector("[data-testid='save-image-preview']");
     const src = img.getAttribute("src") || "";
     assert.equal(src.startsWith("blob:"), true, src);
@@ -411,6 +414,35 @@ serial("the download blob URL is revoked after 30 to 60 seconds", async () => {
     URL.createObjectURL = originalCreate;
     URL.revokeObjectURL = originalRevoke;
     proto.click = originalClick;
+    restore();
+    dismissSaveOverlay();
+  }
+});
+
+serial("the overlay hint says to save or add the photo", async () => {
+  dismissSaveOverlay();
+  const proto = anchorProto();
+  const desc = Object.getOwnPropertyDescriptor(proto, "download");
+  Object.defineProperty(proto, "download", {
+    configurable: true,
+    enumerable: true,
+    get() { return undefined; },
+    set() {},
+  });
+  const restore = stubNavigator({
+    canShare: undefined,
+    share() { throw new Error("share should not run"); },
+  });
+  try {
+    const result = await saveImage({ blob: pngBlob(), filename: FILENAME });
+    assert.equal(result.method, "overlay");
+    assert.equal(
+      document.querySelector("[data-testid='save-image-hint']").textContent,
+      "Press and hold the image, then tap Save to Photos (or Add to Photos).",
+    );
+  } finally {
+    if (desc) Object.defineProperty(proto, "download", desc);
+    else delete proto.download;
     restore();
     dismissSaveOverlay();
   }

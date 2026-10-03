@@ -1214,7 +1214,7 @@ function PlayerEditPanel({ player, onUpdate, onDelete, onClose }) {
 //
 // SETTINGS  set-and-forget for Game Day. League and format stay here.
 //
-function GameSettings({
+export function GameSettings({
   open, onClose, subMode, onSubMode, setup, onOrgChange, onAgeChange, onFormatChange, onGkChange,
   onPeriodsChange, onSeasonChange, autoRegen, onAutoRegen, quarterMinutes, onQuarterMinutes, fairPlayLabel,
 }) {

@@ -3,7 +3,6 @@ import assert from "node:assert/strict";
 import { execSync } from "node:child_process";
 import { createServer } from "vite";
 import { devices, webkit } from "playwright";
-import { SAVE_IMAGE_HINT } from "./saveImage.js";
 
 let server;
 let browser;
@@ -220,7 +219,7 @@ async function cachedHoldImage(page, testId) {
       encodes: window.__encodes,
     };
   });
-  assert.equal(info.hint, SAVE_IMAGE_HINT, testId);
+  assert.equal(info.hint, "Press and hold the image, then tap Save to Photos (or Add to Photos).", testId);
   assert.equal(info.src.startsWith("blob:"), true, info.src);
   assert.equal(info.src.includes("data:"), false, info.src);
   assert.equal(info.png, true, testId);
@@ -257,6 +256,25 @@ test("press and hold opens the cached PNG for every save button", async () => {
     await page.waitForFunction(() => !document.querySelector("[data-testid='hold-game-log-field']")?.disabled);
     await cachedHoldImage(page, "hold-game-log-field");
     await cachedHoldImage(page, "hold-game-log-play");
+  } finally {
+    await page.close();
+    await context.close();
+  }
+});
+
+test("the build stamp renders inside Settings", async () => {
+  const context = await browser.newContext({ ...devices["iPhone 13"] });
+  const page = await context.newPage();
+  page.setDefaultTimeout(20000);
+  const sha = execSync("git rev-parse --short HEAD", { encoding: "utf8" }).trim();
+  try {
+    await page.goto(`${base}/src/lib/harness/save-image.html`, { waitUntil: "networkidle" });
+    await page.getByRole("button", { name: "Settings" }).click();
+    const dialog = page.getByRole("dialog", { name: "Settings" });
+    await dialog.waitFor();
+    const stamp = dialog.getByTestId("build-stamp");
+    assert.equal(await stamp.innerText(), `Build ${sha}`);
+    assert.equal(await stamp.evaluate((el) => el.closest("[role='dialog']")?.getAttribute("aria-label")), "Settings");
   } finally {
     await page.close();
     await context.close();
