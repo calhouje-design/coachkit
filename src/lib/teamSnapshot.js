@@ -26,6 +26,7 @@ export function defaultGameDay() {
     realPeriodEvents: {},
     afterSubs: {},
     startSnapshots: {},
+    backHalfNotice: null,
   };
 }
 
@@ -98,6 +99,9 @@ export function normalizeGameDay(value) {
     realPeriodEvents: normalizeRealPeriodEvents(base.realPeriodEvents),
     afterSubs: normalizeAfterSubs(base.afterSubs),
     startSnapshots: normalizeStartSnapshots(base.startSnapshots),
+    backHalfNotice: typeof base.backHalfNotice === "string" && base.backHalfNotice.trim()
+      ? base.backHalfNotice
+      : null,
   };
 }
 

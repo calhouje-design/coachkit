@@ -223,6 +223,8 @@ test("non-live Replan clears the override and live Replan reconciles it", () => 
 
 test("the phase control is hidden in full mode and when a period has no pairs", () => {
   assert.equal(phaseControlVisible({ subMode: false, pairs, bench: lineup().bench }), false);
+  assert.equal(phaseControlVisible({ subMode: false, backHalf: true, pairs, bench: lineup().bench }), true);
+  assert.equal(phaseControlVisible({ subMode: false, backHalf: true, pairs: [], bench: lineup().bench }), false);
   assert.equal(phaseControlVisible({ subMode: true, pairs: [], bench: [] }), false);
   assert.equal(phaseControlVisible({ subMode: true, pairs: [], bench: lineup().bench }), false);
   assert.equal(phaseControlVisible({ subMode: true, pairs, bench: lineup().bench }), true);

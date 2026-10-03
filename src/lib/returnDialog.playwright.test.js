@@ -1,6 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { access } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { createServer } from "vite";
 import { chromium, devices, webkit } from "playwright";
 
@@ -214,6 +216,243 @@ test("tab and shift-tab stay inside the return sheet on Pixel 7 and iPhone 13", 
       await context.close();
       await launched.close();
     }
+  }
+});
+
+test("both quarter choices fit at 320 and 390 and the focus trap stays shut", async () => {
+  for (const width of [320, 390]) {
+    const page = await browser.newPage({ viewport: { width, height: 700 } });
+    try {
+      await page.goto(`${base}/return-dialog.html`, { waitUntil: "networkidle" });
+      const sheet = page.getByTestId("return-sheet");
+      await sheet.waitFor();
+      const whole = page.getByTestId("return-whole-2");
+      const back = page.getByTestId("return-back-2");
+      await whole.waitFor();
+      await back.waitFor();
+      assert.match(await whole.innerText(), /Q2/);
+      assert.match(await back.innerText(), /Q2 · 2nd half/);
+      const wholeBox = await whole.boundingBox();
+      const backBox = await back.boundingBox();
+      assert.ok(wholeBox.height >= 44, `whole height ${wholeBox.height} at ${width}`);
+      assert.ok(backBox.height >= 44, `back height ${backBox.height} at ${width}`);
+      assert.ok(wholeBox.width >= 44, `whole width ${wholeBox.width} at ${width}`);
+      assert.ok(backBox.width >= 44, `back width ${backBox.width} at ${width}`);
+      const overflow = await page.evaluate(() => {
+        const root = document.documentElement;
+        const dialog = document.querySelector("[data-testid='return-sheet']");
+        const row = document.querySelector("[data-testid='return-quarter-row-2']");
+        return {
+          doc: root.scrollWidth > root.clientWidth + 1,
+          sheet: dialog.scrollWidth > dialog.clientWidth + 1,
+          row: row.scrollWidth > row.clientWidth + 1,
+        };
+      });
+      assert.deepEqual(overflow, { doc: false, sheet: false, row: false });
+      assert.equal(await page.locator("input[name='return-quarter'][value='1']").isDisabled(), true);
+      assert.equal(await page.locator("input[name='return-quarter'][value='1-back']").isDisabled(), true);
+      assert.equal(await page.locator("input[name='return-quarter'][value='2']").isChecked(), true);
+      await page.locator("input[name='return-quarter'][value='2-back']").check();
+      assert.match(await page.locator("body").innerText(), /2nd half of Q2/);
+      assert.equal(await page.getByTestId("return-mismatch").count(), 0);
+      const inside = await page.evaluate(() => {
+        const root = document.querySelector("[data-testid='return-sheet']");
+        const list = [...root.querySelectorAll("button:not([disabled]), input:not([disabled])")];
+        list[0].focus();
+        return root.contains(document.activeElement);
+      });
+      assert.equal(inside, true);
+      for (let i = 0; i < 12; i++) await page.keyboard.press("Tab");
+      const still = await page.evaluate(() => {
+        const root = document.querySelector("[data-testid='return-sheet']");
+        return !!root && root.contains(document.activeElement);
+      });
+      assert.equal(still, true, `focus left the sheet at ${width}`);
+    } finally {
+      await page.close();
+    }
+  }
+});
+
+test("the After view shows a back-half returner who is off at the start", async () => {
+  const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
+  const errors = [];
+  page.on("pageerror", error => errors.push(String(error)));
+  try {
+    await page.goto(`${base}/src/lib/harness/back-half.html`, { waitUntil: "networkidle" });
+    const returner = await page.getByTestId("returner-id").getAttribute("data-player-id");
+    const toggle = page.getByTestId("phase-toggle");
+    await toggle.scrollIntoViewIfNeeded();
+    await toggle.waitFor();
+    const ids = () => page.locator("[data-testid^='field-player-']").evaluateAll(nodes => (
+      nodes.map(node => node.getAttribute("data-player-id"))
+    ));
+    const startIds = await ids();
+    assert.equal(startIds.includes(returner), false);
+    await page.getByTestId("phase-after").click();
+    await page.getByTestId("phase-caption").waitFor();
+    const afterIds = await ids();
+    assert.equal(afterIds.includes(returner), true);
+    assert.notDeepEqual(afterIds, startIds);
+    await page.getByRole("button", { name: "Share lineup" }).click();
+    const sheet = page.getByTestId("share-sheet");
+    await sheet.waitFor();
+    assert.equal(await sheet.getAttribute("data-dual"), "true");
+    assert.equal(errors.length, 0, errors.join("\n"));
+  } finally {
+    await page.close();
+  }
+});
+
+test("full mode shows Start and After only for a back-half quarter", async () => {
+  const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
+  const errors = [];
+  page.on("pageerror", error => errors.push(String(error)));
+  try {
+    await page.goto(`${base}/src/lib/harness/back-half.html?mode=full`, { waitUntil: "networkidle" });
+    const returner = await page.getByTestId("returner-id").getAttribute("data-player-id");
+    const toggle = page.getByTestId("phase-toggle");
+    await toggle.scrollIntoViewIfNeeded();
+    await toggle.waitFor();
+    const ids = () => page.locator("[data-testid^='field-player-']").evaluateAll(nodes => (
+      nodes.map(node => node.getAttribute("data-player-id"))
+    ));
+    const startIds = await ids();
+    assert.equal(startIds.includes(returner), false);
+    await page.getByTestId("phase-after").click();
+    await page.getByTestId("phase-caption").waitFor();
+    const afterIds = await ids();
+    assert.equal(afterIds.includes(returner), true);
+    assert.notDeepEqual(afterIds, startIds);
+    await page.getByRole("button", { name: "Share lineup" }).click();
+    const sheet = page.getByTestId("share-sheet");
+    await sheet.waitFor();
+    assert.equal(await sheet.getAttribute("data-dual"), "true");
+    assert.equal(errors.length, 0, errors.join("\n"));
+  } finally {
+    await page.close();
+  }
+});
+
+async function fieldIds(page) {
+  return page.locator("[data-testid^='field-player-']").evaluateAll(nodes => (
+    nodes.map(node => node.getAttribute("data-player-id")).filter(Boolean)
+  ));
+}
+
+async function benchIds(page) {
+  return page.locator("[data-testid='bench-player']").evaluateAll(nodes => (
+    nodes.map(node => node.getAttribute("data-player-id")).filter(Boolean)
+  ));
+}
+
+test("sub-mode share and print After match the live After for a 2nd-half return", async () => {
+  const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
+  const errors = [];
+  page.on("pageerror", error => errors.push(String(error)));
+  try {
+    await page.goto(`${base}/src/lib/harness/qa-return.html`, { waitUntil: "networkidle" });
+    await page.getByRole("button", { name: "Q2" }).click();
+    await page.getByTestId("phase-toggle").waitFor();
+    await page.getByTestId("phase-after").click();
+    await page.getByTestId("phase-caption").waitFor();
+    const afterIds = await fieldIds(page);
+    const afterBench = await benchIds(page);
+    assert.equal(afterIds.includes("p1"), true, "John is on");
+    assert.equal(afterIds.includes("p3"), true, "Jaxon is on");
+    assert.equal(afterIds.includes("p4"), false, "Remi is off");
+    assert.equal(afterIds.includes("p5"), false, "Sean is off");
+    assert.deepEqual(afterBench.slice().sort(), ["p4", "p5", "p7"]);
+    await page.screenshot({ path: path.join(os.tmpdir(), "m1-app-after.png"), fullPage: true });
+    await page.getByRole("button", { name: "Share lineup" }).click();
+    const sheet = page.getByTestId("share-sheet");
+    await sheet.waitFor();
+    const share = page.getByTestId("share-after-2");
+    await share.waitFor({ state: "attached" });
+    assert.equal(await share.getAttribute("data-ids"), afterIds.join(","));
+    assert.equal(await share.getAttribute("data-bench"), afterBench.join(","));
+    await page.getByTestId("share-modal").getByTestId("phase-after").click();
+    await page.waitForFunction(() => document.querySelector("[data-testid='share-sheet']")?.getAttribute("data-preview") === "after");
+    await page.getByTestId("share-sheet").screenshot({ path: path.join(os.tmpdir(), "m1-share.png") });
+    await page.getByTestId("open-print-preview").click();
+    const print = page.getByTestId("print-after-2");
+    await print.waitFor({ state: "attached" });
+    assert.equal(await print.getAttribute("data-ids"), afterIds.join(","));
+    assert.equal(await print.getAttribute("data-bench"), afterBench.join(","));
+    await page.getByTestId("print-preview").screenshot({ path: path.join(os.tmpdir(), "m1-print.png") });
+    assert.equal(errors.length, 0, errors.join("\n"));
+  } finally {
+    await page.close();
+  }
+});
+
+test("full mode shows Start and After when an injured player returns for the same quarter", async () => {
+  const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
+  const errors = [];
+  page.on("pageerror", error => errors.push(String(error)));
+  try {
+    await page.goto(`${base}/src/lib/harness/qa-return.html?case=m2`, { waitUntil: "networkidle" });
+    await page.getByRole("button", { name: "Q2" }).click();
+    const toggle = page.getByTestId("phase-toggle");
+    await toggle.scrollIntoViewIfNeeded();
+    await toggle.waitFor();
+    const startIds = await fieldIds(page);
+    assert.equal(startIds.includes("p1"), true, "John starts");
+    assert.equal(startIds.includes("p2"), false, "Wes is still off");
+    assert.equal(startIds[0], "p6", "Henry stays in goal");
+    await page.screenshot({ path: path.join(os.tmpdir(), "m2-start.png"), fullPage: true });
+    await page.getByTestId("phase-after").click();
+    await page.getByTestId("phase-caption").waitFor();
+    const afterIds = await fieldIds(page);
+    assert.equal(afterIds.includes("p2"), true, "Wes is back");
+    assert.equal(afterIds.includes("p1"), false, "John sits the second half");
+    assert.equal(afterIds[0], "p6", "the goalkeeper stays");
+    await page.screenshot({ path: path.join(os.tmpdir(), "m2-after.png"), fullPage: true });
+    assert.equal(errors.length, 0, errors.join("\n"));
+  } finally {
+    await page.close();
+  }
+});
+
+test("redraw who plays a quarter clears the back-half return", async () => {
+  const page = await browser.newPage({ viewport: { width: 390, height: 900 } });
+  const errors = [];
+  page.on("pageerror", error => errors.push(String(error)));
+  try {
+    await page.goto(`${base}/src/lib/harness/back-half.html?mode=full`, { waitUntil: "networkidle" });
+    const toggle = page.getByTestId("phase-toggle");
+    await toggle.scrollIntoViewIfNeeded();
+    await toggle.waitFor();
+    const redraw = page.getByRole("button", { name: "Redraw who plays Q1" });
+    await redraw.scrollIntoViewIfNeeded();
+    await redraw.click();
+    await page.getByText("Q1 redrawn.").waitFor();
+    assert.equal(await page.getByTestId("phase-toggle").count(), 0);
+    assert.equal(errors.length, 0, errors.join("\n"));
+  } finally {
+    await page.close();
+  }
+});
+
+test("a stripped back-half mark shows a visible notice", async () => {
+  const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
+  const errors = [];
+  page.on("pageerror", error => errors.push(String(error)));
+  try {
+    await page.goto(`${base}/src/lib/harness/qa-return.html?case=notice`, { waitUntil: "networkidle" });
+    const notice = page.getByTestId("back-half-notice");
+    await notice.waitFor();
+    const text = await notice.locator("span").innerText();
+    assert.equal(text, "Couldn't keep Wes as 2nd-half only in Q3; he's available for the whole quarter. Adjust if needed.");
+    const dismiss = page.getByTestId("back-half-notice-dismiss");
+    assert.equal(await dismiss.innerText(), "Dismiss");
+    await notice.evaluate(node => node.scrollIntoView({ block: "center" }));
+    await notice.screenshot({ path: path.join(os.tmpdir(), "back-half-notice.png") });
+    await dismiss.click();
+    assert.equal(await page.getByTestId("back-half-notice").count(), 0);
+    assert.equal(errors.length, 0, errors.join("\n"));
+  } finally {
+    await page.close();
   }
 });
 
