@@ -844,18 +844,7 @@ function SoccerField({ lineup, onTap, selectedIdx, quarter, periodAbbrev = "Q", 
         >
           <defs>
             {subLines.filter(line => line.elevated).map(line => {
-              const endX = line.x2 - lineOrigin.x;
-              const endY = line.y2 - lineOrigin.y;
-              let target = -1;
-              let nearest = Infinity;
-              placed.forEach((spot, idx) => {
-                if (!spot) return;
-                const dist = Math.hypot(spot.x - endX, spot.y - endY);
-                if (dist < nearest) {
-                  nearest = dist;
-                  target = idx;
-                }
-              });
+              const target = slots.findIndex(slot => slot.player?.id === line.targetId);
               return (
                 <mask key={line.key} id={`${lineMaskId}-${line.key}`} maskUnits="userSpaceOnUse" x="-800" y="-800" width="2400" height="2400">
                   <rect x="-800" y="-800" width="2400" height="2400" fill="#fff"/>
@@ -997,16 +986,29 @@ function SoccerField({ lineup, onTap, selectedIdx, quarter, periodAbbrev = "Q", 
           }}
         >
           {subLines.filter(line => line.elevated).map(line => (
-            <circle
-              key={line.key}
-              data-sub-end=""
-              cx={line.x2 - lineOrigin.x}
-              cy={line.y2 - lineOrigin.y}
-              r="3.5"
-              fill="#2ecc71"
-              stroke="#0a0d0f"
-              strokeWidth="1"
-            />
+            <g key={line.key}>
+              {line.endClear === false && (
+                <circle
+                  data-sub-target=""
+                  cx={line.targetX - lineOrigin.x}
+                  cy={line.targetY - lineOrigin.y}
+                  r={line.targetR + 3}
+                  fill="none"
+                  stroke="#2ecc71"
+                  strokeWidth="2"
+                />
+              )}
+              <circle
+                data-sub-end=""
+                data-sub-for={line.targetId}
+                cx={line.x2 - lineOrigin.x}
+                cy={line.y2 - lineOrigin.y}
+                r="3.5"
+                fill="#2ecc71"
+                stroke="#0a0d0f"
+                strokeWidth="1"
+              />
+            </g>
           ))}
         </svg>
       )}

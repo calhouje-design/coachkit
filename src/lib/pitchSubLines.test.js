@@ -5,9 +5,9 @@ import { readFileSync } from "node:fs";
 import { act, createElement, useLayoutEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { FORMATION_TEMPLATES, reshapeLineup } from "./formations.js";
-import { layoutFieldPlayers } from "./fieldLayout.js";
+import { CIRCLE_DIAMETER, layoutFieldPlayers } from "./fieldLayout.js";
 import { pairsForDisplay, planBenchRotation, scheduleHalfRotation } from "./gameDay.js";
-import { subLineCacheKey, usePitchSubLines, useReportFieldLayout } from "./pitchSubLines.js";
+import { endDotOnTarget, subLineCacheKey, usePitchSubLines, useReportFieldLayout } from "./pitchSubLines.js";
 
 const h = createElement;
 
@@ -106,6 +106,9 @@ function Harness({ lineup, pairs, fieldWidth, markField = false }) {
     "data-sub-line": line.key,
     "data-x2": String(line.x2),
     "data-y2": String(line.y2),
+    "data-elevated": line.elevated ? "1" : "0",
+    "data-end-clear": line.endClear === false ? "0" : "1",
+    "data-target": line.targetId || "",
   })));
 }
 
@@ -314,6 +317,118 @@ test("rotation hides sub lines until the next frame", async () => {
     await view.unmount();
   }
 });
+
+const LONG_NAMES = [
+  "Christopher Montgomery", "Alexander Richardson", "Benjamin Harrington",
+  "Nathaniel Pemberton", "Sebastian Callahan", "Maximilian Holloway",
+  "Christopher Ellington", "Alexander Pembroke", "Benjamin Sutterfield",
+  "Nathaniel Broderick", "Sebastian Langford", "Maximilian Cartwright",
+  "Christopher Delaney", "Alexander Forsythe", "Benjamin Aldridge",
+  "Nathaniel Kingsley",
+];
+
+function longRoster() {
+  const positions = ["GK", "LB", "CB", "RB", "LM", "CM", "RM", "LF", "RF", "CF"];
+  return LONG_NAMES.map((name, index) => ({
+    id: `p${index + 1}`,
+    name,
+    number: String(index + 1),
+    positions,
+  }));
+}
+
+function planLong(shape) {
+  const slots = slotsNamed("11v11", shape);
+  const planned = scheduleHalfRotation(longRoster(), slots, {
+    minHalves: 4,
+    totalQuarters: 4,
+    seed: 1,
+    rate: () => 1,
+  });
+  const lineup = planned.lineups[1];
+  const pairs = pairsForDisplay(planBenchRotation(lineup, { nextLineup: planned.lineups[2] }), [], lineup);
+  return { lineup, pairs };
+}
+
+test("a seam end dot leaves the neighbour and stays on the target rim", () => {
+  const radius = 23;
+  const cx = 60.5;
+  const cy = 120;
+  const others = [{ cx: 23, cy: 120, r: radius }, { cx: 98, cy: 120, r: radius }];
+  const facingX = cx - radius;
+  const insideLeft = Math.hypot(facingX - 23, 0) < radius;
+  assert.equal(insideLeft, true);
+  const dot = endDotOnTarget(cx, cy, radius, facingX - 30, cy, others);
+  assert.equal(dot.clear, true);
+  assert.ok(Math.abs(Math.hypot(dot.x - cx, dot.y - cy) - radius) < 0.05);
+  others.forEach(other => {
+    assert.ok(Math.hypot(dot.x - other.cx, dot.y - other.cy) >= other.r - 0.05);
+  });
+  const buried = endDotOnTarget(0, 0, radius, -40, 0, [{ cx: 0, cy: 0, r: 80 }]);
+  assert.equal(buried.clear, false);
+  assert.ok(Math.abs(Math.hypot(buried.x, buried.y) - radius) < 0.05);
+});
+
+for (const fieldWidth of [196, 266]) {
+  for (const shape of FORMATION_TEMPLATES["11v11"]) {
+    test(`end dots at field ${fieldWidth} stay outside neighbouring circles in ${shape.name}`, () => {
+      const { lineup } = planLong(shape.name);
+      const placed = layoutFieldPlayers(lineup.starters, {
+        fieldWidth,
+        fieldHeight: Math.round(fieldWidth * 1.5),
+      });
+      const radius = CIRCLE_DIAMETER / 2;
+      placed.forEach((spot, idx) => {
+        if (!spot) return;
+        const others = placed.flatMap((other, j) => (
+          other && j !== idx ? [{ cx: other.x, cy: other.y, r: radius }] : []
+        ));
+        const dot = endDotOnTarget(spot.x, spot.y, radius, 4, spot.y, others);
+        const rim = Math.abs(Math.hypot(dot.x - spot.x, dot.y - spot.y) - radius);
+        assert.ok(rim < 0.2, `${shape.name} ${lineup.starters[idx].pos} left the rim by ${rim.toFixed(2)}`);
+        if (!dot.clear) return;
+        others.forEach(other => {
+          const gap = Math.hypot(dot.x - other.cx, dot.y - other.cy) - other.r;
+          assert.ok(gap >= -0.05, `${shape.name} ${lineup.starters[idx].pos} sits ${(-gap).toFixed(1)}px inside a neighbour`);
+        });
+      });
+    });
+
+    test(`routed end dots at field ${fieldWidth} miss neighbouring circles in ${shape.name}`, async () => {
+      const { lineup, pairs } = planLong(shape.name);
+      const view = await renderPitch({ lineup, pairs, fieldWidth });
+      try {
+        const pitch = view.host.querySelector("[data-pitch]");
+        const box = pitch.getBoundingClientRect();
+        const circles = [...view.host.querySelectorAll("[data-sub-to]")].map(node => {
+          const bounds = node.getBoundingClientRect();
+          return {
+            id: node.getAttribute("data-sub-to"),
+            cx: bounds.left + bounds.width / 2 - box.left,
+            cy: bounds.top + bounds.height / 2 - box.top,
+            r: Math.min(bounds.width, bounds.height) / 2,
+          };
+        });
+        const dots = [...view.host.querySelectorAll("[data-sub-line][data-elevated='1']")];
+        dots.forEach(line => {
+          const x2 = Number(line.getAttribute("data-x2"));
+          const y2 = Number(line.getAttribute("data-y2"));
+          const target = circles.find(circle => circle.id === line.getAttribute("data-target"));
+          assert.ok(target, "elevated line names its target");
+          const rim = Math.abs(Math.hypot(x2 - target.cx, y2 - target.cy) - target.r);
+          assert.ok(rim <= 1.5, `${shape.name} end is ${rim.toFixed(1)}px off the target rim`);
+          const inside = circles.filter(circle => (
+            circle.id !== target.id && Math.hypot(x2 - circle.cx, y2 - circle.cy) < circle.r - 0.4
+          ));
+          if (line.getAttribute("data-end-clear") === "0") return;
+          assert.equal(inside.length, 0, `${shape.name} dot for ${target.id} is inside ${inside.length} neighbour(s)`);
+        });
+      } finally {
+        await view.unmount();
+      }
+    });
+  }
+}
 
 test("Game Day reports the field layout into the sub-line measure", () => {
   const app = readFileSync(new URL("../App.jsx", import.meta.url), "utf8");

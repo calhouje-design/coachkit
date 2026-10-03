@@ -102,10 +102,12 @@ export function readSubLines(root, pairs) {
     const y1 = Math.round(a.top + a.height / 2 - box.top);
     const cx = b.left + b.width / 2 - box.left;
     const cy = b.top + b.height / 2 - box.top;
-    const end = lineStopAtCircle(x1, y1, cx, cy, Math.min(b.width, b.height) / 2);
+    const radius = Math.min(b.width, b.height) / 2;
+    const end = lineStopAtCircle(x1, y1, cx, cy, radius);
     const x2 = Math.round(end.x);
     const y2 = Math.round(end.y);
-    const routed = routeClearOfObstacles(x1, y1, x2, y2, subLineObstacles(root, box, pair.outId), 3, {
+    const obstacles = subLineObstacles(root, box, pair.outId);
+    const routed = routeClearOfObstacles(x1, y1, x2, y2, obstacles, 3, {
       bounds: guides.bounds,
       badge: guides.badge,
       bench: guides.bench,
@@ -115,13 +117,29 @@ export function readSubLines(root, pairs) {
     const points = routed.map(point => ({ x: roundTenth(point.x), y: roundTenth(point.y) }));
     points[0] = { x: x1, y: y1 };
     points[points.length - 1] = { x: x2, y: y2 };
+    let endX = x2;
+    let endY = y2;
+    let endClear = true;
+    if (routed.elevated) {
+      const prev = points.length > 1 ? points[points.length - 2] : { x: x1, y: y1 };
+      const dot = endDotOnTarget(cx, cy, radius, prev.x, prev.y, obstacles);
+      endX = roundTenth(dot.x);
+      endY = roundTenth(dot.y);
+      points[points.length - 1] = { x: endX, y: endY };
+      endClear = dot.clear;
+    }
     drawn.push(points);
     return {
       key: `${pair.inId}-${pair.outId}`,
+      targetId: pair.outId,
       x1,
       y1,
-      x2,
-      y2,
+      x2: endX,
+      y2: endY,
+      targetX: roundTenth(cx),
+      targetY: roundTenth(cy),
+      targetR: roundTenth(radius),
+      endClear,
       points,
       elevated: !!routed.elevated,
     };
@@ -163,7 +181,7 @@ function samePoints(prev, next) {
 function sameLines(prev, next) {
   return prev.length === next.length && prev.every((line, i) =>
     line.key === next[i].key && line.x1 === next[i].x1 && line.y1 === next[i].y1 && line.x2 === next[i].x2 && line.y2 === next[i].y2
-    && !!line.elevated === !!next[i].elevated
+    && !!line.elevated === !!next[i].elevated && line.endClear !== false === (next[i].endClear !== false)
     && samePoints(line.points, next[i].points)
   );
 }
@@ -188,12 +206,44 @@ export function useReportFieldLayout(rootRef, placed, onLayout) {
 function fieldRectKey(live) {
   const node = live.querySelector("[data-pitch-svg]") || live;
   const box = node.getBoundingClientRect();
+  const scrollX = window.scrollX || window.pageXOffset || 0;
+  const scrollY = window.scrollY || window.pageYOffset || 0;
   return [
-    Math.round(box.left),
-    Math.round(box.top),
+    Math.round(box.left + scrollX),
+    Math.round(box.top + scrollY),
     Math.round(box.width),
     Math.round(box.height),
   ].join(",");
+}
+
+/**
+ * End dot on the target circle, outside every other circle.
+ * Search the perimeter from the incoming direction. `clear` is false when
+ * every sample sits inside a neighbour; the caller then highlights the target.
+ */
+export function endDotOnTarget(cx, cy, radius, fromX, fromY, others, dotRadius = 3.5) {
+  const dx = fromX - cx;
+  const dy = fromY - cy;
+  const len = Math.hypot(dx, dy) || 1;
+  const face = Math.atan2(dy, dx);
+  const r = Math.max(0, Number(radius) || 0);
+  const circles = (others || []).filter(other => Number.isFinite(other?.r) && other.r > 0);
+  const outside = (x, y, pad) => circles.every(other => (
+    Math.hypot(x - other.cx, y - other.cy) >= other.r + pad - 0.05
+  ));
+  const at = (angle) => ({ x: cx + Math.cos(angle) * r, y: cy + Math.sin(angle) * r });
+  const steps = 72;
+  for (const pad of [dotRadius, 0]) {
+    for (let i = 0; i <= steps; i += 1) {
+      const delta = (i / steps) * Math.PI;
+      const signs = i === 0 ? [0] : [1, -1];
+      for (let s = 0; s < signs.length; s += 1) {
+        const point = at(face + signs[s] * delta);
+        if (outside(point.x, point.y, pad)) return { x: point.x, y: point.y, clear: true };
+      }
+    }
+  }
+  return { x: cx + (dx / len) * r, y: cy + (dy / len) * r, clear: false };
 }
 
 /** Measure sub lines after the field layout signature changes, and when the pitch box itself resizes. */
@@ -232,9 +282,10 @@ export function usePitchSubLines(pitchWrapRef, { shownPairs, lineupKey, quarter,
       });
     };
     // Resize bursts share one frame. The first measure stays synchronous.
-    // Hide the previous frame only when the field itself moves or changes
-    // size. A height-only window resize (the iOS toolbar) leaves the field
-    // rect alone, so the lines stay put. Rotation still hides immediately.
+    // Hide the previous frame only when the field's page position or size
+    // changes. Scroll updates the viewport rect without moving the field on
+    // the page, so a toolbar resize during scroll does not hide the lines.
+    // Rotation still hides immediately.
     const concealIfFieldMoved = (live) => {
       const next = fieldRectKey(live);
       if (next === lastRect) return;
@@ -253,6 +304,8 @@ export function usePitchSubLines(pitchWrapRef, { shownPairs, lineupKey, quarter,
       });
     };
     const onViewport = () => {
+      const live = pitchWrapRef.current;
+      if (live && fieldRectKey(live) === lastRect) return;
       measure();
     };
     const onRotate = () => {
