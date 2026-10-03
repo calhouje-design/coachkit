@@ -47,6 +47,18 @@ function subLineObstacles(root, box, targetId) {
   });
 }
 
+function benchDots(root, box, exceptId) {
+  return [...root.querySelectorAll("[data-sub-from]")].flatMap(node => {
+    if (node.getAttribute("data-sub-from") === exceptId) return [];
+    const bounds = node.getBoundingClientRect();
+    if (!(bounds.width > 0) || !(bounds.height > 0)) return [];
+    return [{
+      x: bounds.left + bounds.width / 2 - box.left,
+      y: bounds.top + bounds.height / 2 - box.top,
+    }];
+  });
+}
+
 function guideRect(node, box) {
   if (!node) return null;
   const bounds = node.getBoundingClientRect();
@@ -95,6 +107,7 @@ export function readSubLines(root, pairs) {
       badge: guides.badge,
       bench: guides.bench,
       lines: drawn,
+      dots: benchDots(root, box, pair.inId),
     });
     const points = routed.map(point => ({ x: roundTenth(point.x), y: roundTenth(point.y) }));
     points[0] = { x: x1, y: y1 };
@@ -123,7 +136,11 @@ export function subLineCacheKey(root, pairs) {
     return `${id}:${Math.round(bounds.left - box.left)},${Math.round(bounds.top - box.top)},${Math.round(bounds.width)}`;
   }).sort().join(";");
   const pairKey = (pairs || []).map(pair => `${pair.inId}>${pair.outId}`).join("|");
-  return `${size}|${pairKey}|${spots}`;
+  const labels = [...root.querySelectorAll("[title]")].map(node => {
+    const bounds = node.getBoundingClientRect();
+    return `${Math.round(bounds.left - box.left)},${Math.round(bounds.top - box.top)},${Math.round(bounds.width)},${Math.round(bounds.height)}`;
+  }).sort().join(";");
+  return `${size}|${pairKey}|${spots}|${labels}`;
 }
 
 function readSubLinesCached(root, pairs) {

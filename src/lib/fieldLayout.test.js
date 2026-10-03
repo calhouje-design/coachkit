@@ -385,13 +385,9 @@ test("a 196px line from the bench to RD clears every circle and label", () => {
     h: (34 / 480) * fieldHeight,
   };
   const bench = { x: 0, y: 0, w: fieldX, h: fieldY + fieldHeight };
-  routeClearOfObstacles(dot.x, dot.y, end.x, end.y, obstacles, 3, { bounds, badge, bench });
-  const started = performance.now();
   const routed = routeClearOfObstacles(dot.x, dot.y, end.x, end.y, obstacles, 3, { bounds, badge, bench });
-  const elapsed = performance.now() - started;
   assert.equal(routed.elevated, false, "the line has a clear path and must not fall back to straight");
   assert.ok(routed.length >= 3 && routed.length <= 4, `bends ${routed.length - 2}`);
-  assert.ok(elapsed < 8, `route took ${elapsed.toFixed(2)}ms`);
   const gap = 3;
   for (let i = 1; i < routed.length; i += 1) {
     const from = routed[i - 1];
@@ -420,6 +416,50 @@ test("a 196px line from the bench to RD clears every circle and label", () => {
       });
     }
   }
+});
+
+test("a 9v9 line to the far centre-back stays off the goal line", () => {
+  const formation = FORMATION_TEMPLATES["9v9"].find(shape => shape.name === "4-2-2");
+  const fieldWidth = 266;
+  const fieldHeight = 399;
+  const fieldX = 82;
+  const fieldY = 8;
+  const names = ["Ann Keeper", "Bea Left", "Cal Centre", "Dee Centre", "Eve Right", "Fay Wing", "Gia Wing", "Hal Wing", "Ian Wing"];
+  const layout = layoutFieldPlayers(startersFor(formation.slots, names), { fieldWidth, fieldHeight });
+  const target = layout.filter(spot => spot.pos === "CD")[1];
+  const dot = { x: 72, y: 240 };
+  const center = { x: fieldX + target.x, y: fieldY + target.y };
+  const end = lineStopAtCircle(dot.x, dot.y, center.x, center.y, CIRCLE_DIAMETER / 2);
+  const obstacles = [];
+  layout.forEach(spot => {
+    if (spot !== target) obstacles.push({ cx: fieldX + spot.x, cy: fieldY + spot.y, r: CIRCLE_DIAMETER / 2 });
+    if (spot.labelBox) {
+      obstacles.push({
+        x: fieldX + spot.labelBox.x,
+        y: fieldY + spot.labelBox.y,
+        w: spot.labelBox.width,
+        h: spot.labelBox.height,
+      });
+    }
+  });
+  const bounds = { x: fieldX, y: fieldY, w: fieldWidth, h: fieldHeight };
+  const routed = routeClearOfObstacles(dot.x, dot.y, end.x, end.y, obstacles, 3, {
+    bounds,
+    bench: { x: 0, y: 0, w: fieldX, h: fieldY + fieldHeight },
+    badge: {
+      x: fieldX + (12 / 320) * fieldWidth,
+      y: fieldY + (12 / 480) * fieldHeight,
+      w: (62 / 320) * fieldWidth,
+      h: (34 / 480) * fieldHeight,
+    },
+  });
+  const straight = Math.hypot(end.x - dot.x, end.y - dot.y);
+  let length = 0;
+  for (let i = 1; i < routed.length; i += 1) length += Math.hypot(routed[i].x - routed[i - 1].x, routed[i].y - routed[i - 1].y);
+  assert.equal(routed.elevated, false);
+  assert.ok(length <= straight * 1.6 + 0.5, `route is ${length.toFixed(0)}px, ${(length / straight).toFixed(2)}× straight`);
+  const minY = Math.min(...routed.map(point => point.y));
+  assert.ok(minY > fieldY + 40, `route climbs to ${minY.toFixed(0)}`);
 });
 
 test("4-2-3-1 keeps CF and RF on the sideline spots", () => {

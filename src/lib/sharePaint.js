@@ -203,6 +203,7 @@ function paintQuarterPanel(ctx, x, y, w, h, panel) {
       bench: benchRect,
       badge,
       lines: routedLines,
+      dots: cards.filter(card => card.cardY !== cardY).map(card => dotAt(card.cardY)),
     });
     routedLines.push(points);
     if (points.elevated) elevatedLines.push(points);

@@ -655,6 +655,77 @@ function crossingCount(points, lines) {
   return count;
 }
 
+/** How far two roughly parallel segments run within 8px of each other. */
+function parallelOverlap(ax, ay, bx, by, cx, cy, dx, dy) {
+  const abx = bx - ax;
+  const aby = by - ay;
+  const cdx = dx - cx;
+  const cdy = dy - cy;
+  const ab = Math.hypot(abx, aby);
+  const cd = Math.hypot(cdx, cdy);
+  if (ab < 1 || cd < 1) return 0;
+  const align = Math.abs(abx * cdx + aby * cdy) / (ab * cd);
+  if (align < 0.85) return 0;
+  if (segmentDistance(ax, ay, bx, by, cx, cy, dx, dy) > 8) return 0;
+  const ux = abx / ab;
+  const uy = aby / ab;
+  const proj = (x, y) => (x - ax) * ux + (y - ay) * uy;
+  let b0 = proj(cx, cy);
+  let b1 = proj(dx, dy);
+  if (b0 > b1) {
+    const swap = b0;
+    b0 = b1;
+    b1 = swap;
+  }
+  return Math.max(0, Math.min(ab, b1) - Math.max(0, b0));
+}
+
+function routeParallelCost(points, lines) {
+  if (!lines || !lines.length) return 0;
+  let cost = 0;
+  for (let i = 1; i < points.length; i += 1) {
+    const a = points[i - 1];
+    const b = points[i];
+    lines.forEach(line => {
+      for (let j = 1; j < line.length; j += 1) {
+        const c = line[j - 1];
+        const d = line[j];
+        cost += parallelOverlap(a.x, a.y, b.x, b.y, c.x, c.y, d.x, d.y);
+      }
+    });
+  }
+  return cost;
+}
+
+function firstDotHits(points, dots) {
+  if (!dots || !dots.length || points.length < 2) return 0;
+  const a = points[0];
+  const b = points[1];
+  let hits = 0;
+  dots.forEach(dot => {
+    if (!dot || !Number.isFinite(dot.x) || !Number.isFinite(dot.y)) return;
+    if (pointOnSegment(dot.x, dot.y, a.x, a.y, b.x, b.y).d < 10) hits += 1;
+  });
+  return hits;
+}
+
+function betterRoute(next, prev) {
+  if (!next) return false;
+  if (!prev) return true;
+  if (next.dotHits !== prev.dotHits) return next.dotHits < prev.dotHits;
+  if (next.bends !== prev.bends) return next.bends < prev.bends;
+  if (next.crossings !== prev.crossings) return next.crossings < prev.crossings;
+  return next.length + next.parallel < prev.length + prev.parallel;
+}
+
+function inSegmentBox(point, start, end, margin) {
+  const minX = Math.min(start.x, end.x) - margin;
+  const maxX = Math.max(start.x, end.x) + margin;
+  const minY = Math.min(start.y, end.y) - margin;
+  const maxY = Math.max(start.y, end.y) + margin;
+  return point.x >= minX && point.x <= maxX && point.y >= minY && point.y <= maxY;
+}
+
 function circleSamples(obstacle, gap) {
   const rad = obstacle.r + gap + 1;
   const points = [];
@@ -680,11 +751,13 @@ function rectSamples(obstacle, gap) {
 
 function frameSamples(bounds) {
   if (!bounds || !(bounds.w > 0) || !(bounds.h > 0)) return [];
-  const inset = 4;
-  const left = bounds.x + inset;
-  const right = bounds.x + bounds.w - inset;
-  const top = bounds.y + inset;
-  const bottom = bounds.y + bounds.h - inset;
+  const inset = 10;
+  // Half a pixel inside the inset keeps an entering segment off the bench edge
+  // in the 32-step clearance samples.
+  const left = bounds.x + inset + 0.5;
+  const right = bounds.x + bounds.w - inset - 0.5;
+  const top = bounds.y + inset + 0.5;
+  const bottom = bounds.y + bounds.h - inset - 0.5;
   if (right <= left || bottom <= top) return [];
   const points = [];
   const steps = 4;
@@ -742,30 +815,35 @@ function rectBlocks(x1, y1, x2, y2, rx, ry, rw, rh) {
 }
 
 /**
- * Shortest clear sub line. Fewest bends, then fewest crossings, then shortest
- * length, and never more than two bends. When nothing clears, the straight
- * line is returned with `elevated` set so the caller can draw it above the
- * circles instead of through them.
+ * Clear sub line, at most two bends. Prefer a route within 1.6× the straight
+ * distance that stays off other lines and other bench dots. A longer clear
+ * route is kept only when nothing shorter gets through; a detour past 2.8×
+ * falls back to the straight line drawn above the circles.
  */
 export function routeClearOfObstacles(x1, y1, x2, y2, obstacles = [], gap = 3, options = {}) {
   const keep = Number.isFinite(gap) ? gap : 3;
   const opts = options || {};
   const start = { x: x1, y: y1 };
   const end = { x: x2, y: y2 };
+  const straight = Math.hypot(end.x - start.x, end.y - start.y) || 1;
+  const lengthLimit = straight * 1.6;
+  const hugeLimit = straight * 2.8;
   const blocks = (obstacles || []).filter(obstacle => (
     isCircleObstacle(obstacle) ? obstacle.r > 0 : obstacle.w > 0 && obstacle.h > 0
   ));
   if (opts.badge && opts.badge.w > 0 && opts.badge.h > 0) blocks.push(opts.badge);
   const bounds = opts.bounds && opts.bounds.w > 0 && opts.bounds.h > 0 ? opts.bounds : null;
   const bench = opts.bench && opts.bench.w > 0 && opts.bench.h > 0 ? opts.bench : null;
+  const dots = Array.isArray(opts.dots) ? opts.dots : [];
 
   const pack = (points, elevated) => {
     const route = points.map(point => ({ x: point.x, y: point.y }));
     route.elevated = elevated;
     return route;
   };
+  const usable = (route) => route && route.dotHits === 0 && route.parallel < 40;
 
-  const attempt = (keepOut) => {
+  const attempt = (keepOut, lattice) => {
     const endInside = blocks.map(obstacle => pointInKeepOut(end.x, end.y, obstacle, keepOut));
     const hitsObstacle = (ax, ay, bx, by) => {
       const arrives = (Math.abs(bx - end.x) < 0.05 && Math.abs(by - end.y) < 0.05)
@@ -812,7 +890,6 @@ export function routeClearOfObstacles(x1, y1, x2, y2, obstacles = [], gap = 3, o
       return rectBlocks(ax, ay, bx, by, bench.x, bench.y, bench.w, bench.h);
     };
     const segmentOpen = (a, b) => !hitsObstacle(a.x, a.y, b.x, b.y) && !leavesField(a.x, a.y, b.x, b.y) && !throughBench(a.x, a.y, b.x, b.y);
-    if (segmentOpen(start, end)) return [start, end];
     const pointFree = (point) => {
       if (bounds && !insideRect(point.x, point.y, bounds, 0.4)) return false;
       if (bench && insideRect(point.x, point.y, bench, 0)) return false;
@@ -822,7 +899,27 @@ export function routeClearOfObstacles(x1, y1, x2, y2, obstacles = [], gap = 3, o
     };
     const samplesFor = (list) => dedupePoints(list.flatMap(obstacle => (
       isCircleObstacle(obstacle) ? circleSamples(obstacle, keepOut) : rectSamples(obstacle, keepOut)
-    )).concat(frameSamples(bounds)).filter(pointFree));
+    )).concat(frameSamples(bounds)).filter(point => pointFree(point) && inSegmentBox(point, start, end, 112)));
+    const latticePoints = () => {
+      const margin = 48;
+      const step = 18;
+      const minX = Math.min(start.x, end.x) - margin;
+      const maxX = Math.max(start.x, end.x) + margin;
+      const minY = Math.min(start.y, end.y) - margin;
+      const maxY = Math.max(start.y, end.y) + margin;
+      const points = [];
+      const x0 = Math.ceil(minX / step) * step;
+      const y0 = Math.ceil(minY / step) * step;
+      for (let x = x0; x <= maxX; x += step) {
+        for (let y = y0; y <= maxY; y += step) {
+          if (bounds && !insideRect(x, y, bounds, -10)) continue;
+          const point = { x, y };
+          if (!pointFree(point)) continue;
+          points.push(point);
+        }
+      }
+      return points;
+    };
     const search = (waypoints) => {
       const nodes = [start, ...waypoints, end];
       const last = nodes.length - 1;
@@ -835,36 +932,39 @@ export function routeClearOfObstacles(x1, y1, x2, y2, obstacles = [], gap = 3, o
         open[j][i] = open[i][j];
         return clear;
       };
-      let best = null;
+      let short = null;
+      let long = null;
       const consider = (indexes) => {
         const points = indexes.map(index => nodes[index]);
-        const bends = points.length - 2;
-        const crossings = crossingCount(points, opts.lines);
-        const length = pathLength(points);
-        if (
-          !best
-          || bends < best.bends
-          || (bends === best.bends && (crossings < best.crossings || (crossings === best.crossings && length < best.length)))
-        ) {
-          best = { bends, crossings, length, points };
-        }
+        const score = {
+          bends: points.length - 2,
+          crossings: crossingCount(points, opts.lines),
+          parallel: routeParallelCost(points, opts.lines),
+          dotHits: firstDotHits(points, dots),
+          length: pathLength(points),
+          points,
+        };
+        if (score.length <= lengthLimit + 0.5) {
+          if (betterRoute(score, short)) short = score;
+        } else if (betterRoute(score, long)) long = score;
       };
+      if (segmentOpen(start, end)) consider([0, last]);
       const fromStart = [];
       const toEnd = [];
       for (let i = 1; i < last; i += 1) {
         if (sees(0, i)) fromStart.push(i);
         if (sees(i, last)) toEnd.push(i);
       }
+      const toEndSet = new Set(toEnd);
       fromStart.forEach(i => {
-        if (toEnd.includes(i)) consider([0, i, last]);
+        if (toEndSet.has(i)) consider([0, i, last]);
       });
-      if (best) return best.points;
       fromStart.forEach(i => {
         toEnd.forEach(j => {
           if (i !== j && sees(i, j)) consider([0, i, j, last]);
         });
       });
-      return best ? best.points : null;
+      return { short, long };
     };
     const blocking = [];
     blocks.forEach(obstacle => {
@@ -874,10 +974,22 @@ export function routeClearOfObstacles(x1, y1, x2, y2, obstacles = [], gap = 3, o
         blocking.push(obstacle);
       }
     });
-    const first = search(samplesFor(blocking.length ? blocking : blocks));
-    if (first) return first;
-    if (blocking.length && blocking.length < blocks.length) return search(samplesFor(blocks));
-    return null;
+    const narrow = search(samplesFor(blocking.length ? blocking : blocks));
+    let long = narrow.long;
+    if (narrow.short && !lattice) return narrow;
+    if (blocking.length && blocking.length < blocks.length) {
+      const wider = search(samplesFor(blocks));
+      if (wider.short && !lattice) return wider;
+      if (!narrow.short) narrow.short = wider.short;
+      else if (betterRoute(wider.short, narrow.short)) narrow.short = wider.short;
+      if (betterRoute(wider.long, long)) long = wider.long;
+    }
+    if (lattice) {
+      const seeded = search(dedupePoints(samplesFor(blocks).concat(latticePoints())));
+      if (betterRoute(seeded.short, narrow.short)) narrow.short = seeded.short;
+      if (betterRoute(seeded.long, long)) long = seeded.long;
+    }
+    return { short: narrow.short, long };
   };
 
   const gaps = [];
@@ -889,8 +1001,14 @@ export function routeClearOfObstacles(x1, y1, x2, y2, obstacles = [], gap = 3, o
   addGap(1);
   addGap(0);
   for (let i = 0; i < gaps.length; i += 1) {
-    const found = attempt(gaps[i]);
-    if (found) return pack(found, false);
+    const found = attempt(gaps[i], false);
+    if (usable(found.short)) return pack(found.short.points, false);
+    const clear = found.short || found.long;
+    if (!clear || clear.length > hugeLimit) continue;
+    const seeded = attempt(gaps[i], true);
+    if (usable(seeded.short)) return pack(seeded.short.points, false);
+    const kept = betterRoute(seeded.short, clear) && seeded.short.length <= hugeLimit ? seeded.short : clear;
+    return pack(kept.points, false);
   }
   return pack([start, end], true);
 }

@@ -356,6 +356,19 @@ test("a sub line bends around another circle and the name under it", () => {
   }
 });
 
+test("the first segment stays 10px off the next bench dot", () => {
+  const routed = routeClearOfObstacles(0, 0, 80, 0, [], 3, { dots: [{ x: 30, y: 4 }] });
+  assert.equal(routed.elevated, false);
+  const a = routed[0];
+  const b = routed[1];
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const len2 = dx * dx + dy * dy;
+  const t = len2 === 0 ? 0 : Math.max(0, Math.min(1, ((30 - a.x) * dx + (4 - a.y) * dy) / len2));
+  const dist = Math.hypot(30 - (a.x + t * dx), 4 - (a.y + t * dy));
+  assert.ok(dist >= 10, `first segment passes ${dist.toFixed(1)}px from the next dot`);
+});
+
 test("a blocked line is drawn elevated instead of cutting through", () => {
   const wall = { cx: 50, cy: 10, r: 30 };
   const bounds = { x: 0, y: 0, w: 100, h: 20 };

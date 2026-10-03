@@ -7,7 +7,7 @@ import { createRoot } from "react-dom/client";
 import { FORMATION_TEMPLATES, reshapeLineup } from "./formations.js";
 import { layoutFieldPlayers } from "./fieldLayout.js";
 import { pairsForDisplay, planBenchRotation, scheduleHalfRotation } from "./gameDay.js";
-import { usePitchSubLines, useReportFieldLayout } from "./pitchSubLines.js";
+import { subLineCacheKey, usePitchSubLines, useReportFieldLayout } from "./pitchSubLines.js";
 
 const h = createElement;
 
@@ -196,6 +196,38 @@ test("a pitch resize remeasures sub lines without a window resize", async () => 
   } finally {
     await view.unmount();
   }
+});
+
+test("a name-label resize changes the sub-line cache key", () => {
+  const host = document.createElement("div");
+  host.style.width = "320px";
+  host.style.height = "480px";
+  const dot = document.createElement("span");
+  dot.setAttribute("data-sub-from", "in");
+  dot.style.left = "4px";
+  dot.style.top = "20px";
+  dot.style.width = "8px";
+  dot.style.height = "8px";
+  const circle = document.createElement("span");
+  circle.setAttribute("data-sub-to", "out");
+  circle.style.left = "140px";
+  circle.style.top = "180px";
+  circle.style.width = "46px";
+  circle.style.height = "46px";
+  const label = document.createElement("span");
+  label.setAttribute("title", "Dee");
+  label.style.left = "120px";
+  label.style.top = "228px";
+  label.style.width = "48px";
+  label.style.height = "13px";
+  host.append(dot, circle, label);
+  document.body.appendChild(host);
+  const pairs = [{ inId: "in", outId: "out" }];
+  const before = subLineCacheKey(host, pairs);
+  label.style.width = "72px";
+  const after = subLineCacheKey(host, pairs);
+  host.remove();
+  assert.notEqual(before, after);
 });
 
 test("Game Day reports the field layout into the sub-line measure", () => {
