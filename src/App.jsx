@@ -39,9 +39,9 @@ import {
   backHalfShownPairs,
   backHalfEarnedMinutes,
   backHalfDonorAvailable,
-  stripReturnAtFrom,
   stripReturnAtForQuarter,
   vacatedSpotHolder,
+  revalidateBackHalfMarks,
   realEventPlayerIds,
   scheduleHalfRotation,
   scheduleWholeGame,
@@ -1512,6 +1512,15 @@ export function TabGame({ format, league, players, setPlayers, addPlayer, remove
     recentPlanKeys.current = [key, ...recentPlanKeys.current.filter(item => item !== key)].slice(0, 5);
   };
 
+  const applyBackHalfMarks = (roster, nextLineups, nextSegments, fromQuarter) => revalidateBackHalfMarks({
+    players: roster,
+    lineups: nextLineups,
+    segments: nextSegments,
+    fromQuarter,
+    totalQuarters,
+    rate: getOverallRating,
+  });
+
   const notePlanResult = (nextLineups, roster = players, credit = appearanceCredit, segments = subSegments) => {
     setLineupsByQuarter(nextLineups);
     setFairWarn(null);
@@ -1580,7 +1589,6 @@ export function TabGame({ format, league, players, setPlayers, addPlayer, remove
       setScrambleNote(null);
       return;
     }
-    setPlayers(prev => stripReturnAtFrom(prev, fromQ));
     const clockStarted = running || (clockRef.current || 0) > 0;
     const realEvent = periodHasRealEvent(realPeriodEvents, fromQ);
     const decision = liveReplanClockDecision({
@@ -1687,13 +1695,15 @@ export function TabGame({ format, league, players, setPlayers, addPlayer, remove
       const planned = chosen.plan;
       rememberSheet(planned.lineups);
       const storedHalfSegments = savedSubSegments(planned);
+      const checked = applyBackHalfMarks(players, planned.lineups, storedHalfSegments, fromQ);
       setRealPeriodEvents(keptRealEvents);
-      setSubSegments(storedHalfSegments);
-      applyReplanPhase(planned.lineups);
-      notePlanResult(planned.lineups, players, creditForPlan, storedHalfSegments);
+      setPlayers(checked.players);
+      setSubSegments(checked.segments);
+      applyReplanPhase(checked.lineups);
+      notePlanResult(checked.lineups, checked.players, creditForPlan, checked.segments);
       if (!decision.resetClock && fromQ === quarter && running) {
         const next = {};
-        (planned.lineups[quarter]?.starters || []).forEach(slot => {
+        (checked.lineups[quarter]?.starters || []).forEach(slot => {
           if (slot.player?.id) next[slot.player.id] = clockRef.current || 0;
         });
         stintRef.current = next;
@@ -1731,13 +1741,15 @@ export function TabGame({ format, league, players, setPlayers, addPlayer, remove
     const result = chosen.plan;
     rememberSheet(result);
     const storedSegments = savedFullSegments(result);
+    const checked = applyBackHalfMarks(players, result, storedSegments, fromQ);
     setRealPeriodEvents(keptRealEvents);
-    setSubSegments(storedSegments);
-    applyReplanPhase(result);
-    notePlanResult(result, players, creditForPlan, storedSegments);
+    setPlayers(checked.players);
+    setSubSegments(checked.segments);
+    applyReplanPhase(checked.lineups);
+    notePlanResult(checked.lineups, checked.players, creditForPlan, checked.segments);
     if (!decision.resetClock && fromQ === quarter && running) {
       const next = {};
-      (result[quarter]?.starters || []).forEach(slot => {
+      (checked.lineups[quarter]?.starters || []).forEach(slot => {
         if (slot.player?.id) next[slot.player.id] = clockRef.current || 0;
       });
       stintRef.current = next;
@@ -1830,32 +1842,39 @@ export function TabGame({ format, league, players, setPlayers, addPlayer, remove
       }
       let segments = planned.segments;
       if (wasOn && live) segments = noteSubSegment(segments, playerId, quarter, "left");
+      const checked = applyBackHalfMarks(roster, planned.lineups, segments, quarter);
       setAppearanceCredit(credit);
-      setSubSegments(segments);
-      notePlanResult(planned.lineups, roster, credit, segments);
-      syncStints(planned.lineups[quarter]);
+      setPlayers(checked.players);
+      setSubSegments(checked.segments);
+      notePlanResult(checked.lineups, checked.players, credit, checked.segments);
+      syncStints(checked.lineups[quarter]);
       return;
     }
     if (!currentL) return;
+    let segments = subSegments;
     if (wasOn) {
       setAppearanceCredit(credit);
-      if (live) setSubSegments(prev => noteSubSegment(prev, playerId, quarter, "left"));
+      if (live) segments = noteSubSegment(segments, playerId, quarter, "left");
     }
     const before = new Set((currentL.starters || []).map(slot => slot.player?.id).filter(Boolean));
     const next = pullFromPlan(lineupsByQuarter, playerId, quarter, totalQuarters);
     const incoming = (next[quarter]?.starters || []).map(slot => slot.player?.id).find(id => id && !before.has(id));
+    let roster = updatedPlayers;
     if (incoming) {
       beginStint(incoming);
       if (live) {
         credit = setAppearanceCreditFor(credit, incoming, quarter, false);
         setAppearanceCredit(credit);
-        setSubSegments(prev => noteSubSegment(prev, incoming, quarter, "entered"));
+        segments = noteSubSegment(segments, incoming, quarter, "entered");
       }
       if (wasOn && live) {
-        setPlayers(prev => prev.map(p => (p.id === playerId ? { ...p, replacedBy: incoming } : p)));
+        roster = roster.map(p => (p.id === playerId ? { ...p, replacedBy: incoming } : p));
       }
     }
-    setLineupsByQuarter(next);
+    const checked = applyBackHalfMarks(roster, next, segments, quarter);
+    setPlayers(checked.players);
+    setSubSegments(checked.segments);
+    setLineupsByQuarter(checked.lineups);
     setSwapSel(null);
     setFairWarn(null);
   };
@@ -1896,23 +1915,32 @@ export function TabGame({ format, league, players, setPlayers, addPlayer, remove
     }, choice);
     if (!result.changed) return;
     const backHalfYes = choice.available !== false && choice.half === "back";
-    const roster = result.regenerated && !backHalfYes
-      ? stripReturnAtFrom(result.players, choice.available ? Number(choice.quarter) : Number(choice.quarter) + 1)
-      : result.players;
+    let roster = result.players;
+    let lineups = result.lineups;
+    let segments = result.segments;
+    if (result.regenerated) {
+      const from = backHalfYes
+        ? Number(choice.quarter) + 1
+        : (choice.available ? Number(choice.quarter) : Number(choice.quarter) + 1);
+      const checked = applyBackHalfMarks(roster, lineups, segments, from);
+      roster = checked.players;
+      lineups = checked.lineups;
+      segments = checked.segments;
+    }
     setPlayers(roster);
     setFairInfo(result.fairInfo);
     setReturnToast(result.toast);
-    if (!result.regenerated && result.lineups === lineupsByQuarter) return;
+    if (!result.regenerated && lineups === lineupsByQuarter) return;
     if (result.regenerated) {
       setRealPeriodEvents(result.realEvents);
-      setSubSegments(result.segments);
-      notePlanResult(result.lineups, roster, appearanceCredit, result.segments);
-      syncStints(result.lineups[quarter]);
+      setSubSegments(segments);
+      notePlanResult(lineups, roster, appearanceCredit, segments);
+      syncStints(lineups[quarter]);
       return;
     }
-    setLineupsByQuarter(result.lineups);
-    setSubSegments(result.segments);
-    syncStints(result.lineups[quarter]);
+    setLineupsByQuarter(lineups);
+    setSubSegments(segments);
+    syncStints(lineups[quarter]);
   };
 
   const gkLocked = () => subMode || running || (clockRef.current || 0) > 0;
