@@ -3,6 +3,7 @@ export const SAVE_IMAGE_HINT = "Press and hold the image, then tap Save to Photo
 const REVOKE_DELAY_MS = 45000;
 const SHARE_LOCK_MS = 30000;
 export const SHARE_BUSY_MESSAGE = "Still sharing… try again in a moment";
+export const SAVE_ERROR_DISMISS_MS = 4000;
 const SAVE_ERROR_MESSAGE = "Couldn't save the image. Try again.";
 
 let overlay = null;
@@ -13,6 +14,7 @@ let shareWatchers = false;
 let busyNote = null;
 let busyTimer = null;
 let errorNote = null;
+let errorTimer = null;
 
 function isShareCancel(error) {
   const name = error?.name;
@@ -54,8 +56,7 @@ function armShareWatch() {
   if (shareTimer) clearTimeout(shareTimer);
   shareTimer = setTimeout(() => {
     if (generation !== shareGeneration) return;
-    shareInFlight = false;
-    shareTimer = null;
+    resetShareFlight();
   }, SHARE_LOCK_MS);
   shareTimer.unref?.();
   ensureShareWatchers();
@@ -94,28 +95,50 @@ function showShareBusy() {
   busyTimer.unref?.();
 }
 
-function showSaveError() {
+function dismissSaveError() {
+  if (errorTimer) clearTimeout(errorTimer);
+  errorTimer = null;
   errorNote?.remove();
+  errorNote = null;
+}
+
+function showSaveError() {
+  dismissSaveError();
   const note = document.createElement("div");
   note.dataset.testid = "save-image-error";
   note.setAttribute("role", "alert");
   note.textContent = SAVE_ERROR_MESSAGE;
   note.style.cssText = [
     "position:fixed",
-    "left:16px",
-    "right:16px",
+    "left:calc(50% - 130px)",
     "bottom:24px",
+    "width:260px",
+    "height:64px",
+    "box-sizing:border-box",
     "z-index:10060",
+    "pointer-events:auto",
     "background:#141a12",
     "color:#e8e4dc",
     "border:1px solid rgba(255,255,255,0.12)",
     "border-radius:10px",
-    "padding:12px 14px",
+    "padding:10px 12px",
     "font:700 14px Georgia,serif",
+    "line-height:1.3",
     "text-align:center",
+    "cursor:pointer",
   ].join(";");
+  note.addEventListener("click", (event) => {
+    event.stopPropagation();
+    dismissSaveError();
+  });
   document.body.appendChild(note);
   errorNote = note;
+  const shown = note;
+  errorTimer = setTimeout(() => {
+    if (errorNote !== shown) return;
+    dismissSaveError();
+  }, SAVE_ERROR_DISMISS_MS);
+  errorTimer.unref?.();
 }
 
 export function resetSaveImageState() {
@@ -125,8 +148,7 @@ export function resetSaveImageState() {
   busyTimer = null;
   busyNote?.remove();
   busyNote = null;
-  errorNote?.remove();
-  errorNote = null;
+  dismissSaveError();
 }
 
 export function canvasToPngBlob(canvas) {
@@ -337,8 +359,14 @@ function deliver(blob, filename, title) {
     return Promise.resolve(fallback(file, file.name));
   }
   return Promise.resolve(pending).then(
-    () => ({ ok: true, method: "share" }),
-    (error) => (isShareCancel(error) ? { ok: false, reason: "abort" } : settleOverlay(file)),
+    () => {
+      if (generation !== shareGeneration) return { ok: false, reason: "stale" };
+      return { ok: true, method: "share" };
+    },
+    (error) => {
+      if (generation !== shareGeneration) return { ok: false, reason: "stale" };
+      return isShareCancel(error) ? { ok: false, reason: "abort" } : settleOverlay(file);
+    },
   ).finally(() => {
     releaseShare(generation);
   });

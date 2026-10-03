@@ -1,10 +1,16 @@
 import "./domSetup.js";
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readdir, readFile } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
-import { dismissSaveOverlay, resetSaveImageState, SAVE_IMAGE_HINT, saveImage, SHARE_BUSY_MESSAGE } from "./saveImage.js";
+import { promisify } from "node:util";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { dismissSaveOverlay, resetSaveImageState, SAVE_ERROR_DISMISS_MS, SAVE_IMAGE_HINT, saveImage, SHARE_BUSY_MESSAGE } from "./saveImage.js";
+import { defineSerial, link, SERIAL_TEST_TIMEOUT_MS } from "./testSerial.js";
+
+const execFileAsync = promisify(execFile);
 
 const FILENAME = "CoachKit_Field_Q1-Q4.png";
 const TITLE = "CoachKit field";
@@ -14,25 +20,71 @@ function pngBlob() {
   return new Blob([Uint8Array.from([137, 80, 78, 71, 13, 10, 26, 10, 1, 2, 3])], { type: "image/png" });
 }
 
-let tail = Promise.resolve();
+const serial = defineSerial(test, { cleanup: resetSaveImageState });
 
-function link(readTail, writeTail, task, cleanup) {
-  const previous = readTail();
-  let release;
-  const gate = new Promise((resolve) => { release = resolve; });
-  writeTail(gate);
-  return previous.then(async () => {
-    try {
-      return await task();
-    } finally {
-      cleanup?.();
-      release();
-    }
-  });
+const VIEWPORT = { width: 390, height: 844 };
+
+function parseOffset(value, size) {
+  if (value == null) return null;
+  const trimmed = String(value).trim();
+  if (trimmed === "" || trimmed === "auto") return null;
+  const px = /^(-?\d+(?:\.\d+)?)px$/.exec(trimmed);
+  if (px) return Number(px[1]);
+  const calc = /^calc\(50% - (-?\d+(?:\.\d+)?)px\)$/.exec(trimmed);
+  if (calc) return size / 2 - Number(calc[1]);
+  return null;
 }
 
-function serial(name, fn) {
-  test(name, () => link(() => tail, (next) => { tail = next; }, fn, resetSaveImageState));
+function hitBox(el, viewport = VIEWPORT) {
+  if (!(el instanceof HTMLElement)) return null;
+  if (el.style.pointerEvents === "none") return null;
+  const left = parseOffset(el.style.left, viewport.width);
+  const right = parseOffset(el.style.right, viewport.width);
+  const top = parseOffset(el.style.top, viewport.height);
+  const bottom = parseOffset(el.style.bottom, viewport.height);
+  const width = parseOffset(el.style.width, viewport.width);
+  const height = parseOffset(el.style.height, viewport.height);
+  if (el.style.position === "fixed" && left != null && right != null && width == null) {
+    const boxHeight = height ?? 44;
+    const y = top != null ? top : viewport.height - (bottom ?? 0) - boxHeight;
+    return { left, top: y, width: viewport.width - left - right, height: boxHeight };
+  }
+  if (width == null || height == null) return null;
+  const x = left != null ? left : (right != null ? viewport.width - right - width : 0);
+  const y = top != null ? top : (bottom != null ? viewport.height - bottom - height : 0);
+  return { left: x, top: y, width, height };
+}
+
+function elementAt(x, y, viewport = VIEWPORT) {
+  let found = null;
+  let z = -Infinity;
+  for (const el of document.body.querySelectorAll("*")) {
+    const box = hitBox(el, viewport);
+    if (!box) continue;
+    if (x < box.left || x >= box.left + box.width || y < box.top || y >= box.top + box.height) continue;
+    const rank = Number.parseInt(el.style.zIndex, 10);
+    const next = Number.isFinite(rank) ? rank : 0;
+    if (next >= z) {
+      z = next;
+      found = el;
+    }
+  }
+  return found;
+}
+
+async function showErrorNote() {
+  const originalCreate = URL.createObjectURL;
+  URL.createObjectURL = () => { throw new Error("no blob url"); };
+  const restore = stubNavigator({
+    canShare() { return false; },
+    share() { throw new Error("share should not run"); },
+  });
+  try {
+    return await saveImage({ blob: pngBlob(), filename: FILENAME, title: TITLE });
+  } finally {
+    URL.createObjectURL = originalCreate;
+    restore();
+  }
 }
 
 function stubNavigator({ canShare, share }) {
@@ -548,22 +600,131 @@ serial("the 30s safety timer clears a hung share so the next tap shares", async 
   }
 });
 
-serial("without a reset, a hung share fails the next-tap check", () => {
-  let inFlight = false;
-  let calls = 0;
-  const saveWithoutReset = () => {
-    if (inFlight) return "pending";
-    inFlight = true;
-    calls += 1;
-    return "share";
+serial("the save error note clears after about 4 seconds", async () => {
+  assert.ok(SAVE_ERROR_DISMISS_MS >= 3500 && SAVE_ERROR_DISMISS_MS <= 4500);
+  const originalTimeout = globalThis.setTimeout;
+  const dismissals = [];
+  globalThis.setTimeout = (fn, ms, ...args) => {
+    if (ms === SAVE_ERROR_DISMISS_MS) {
+      dismissals.push(fn);
+      return 0;
+    }
+    return originalTimeout(fn, ms, ...args);
   };
-  assert.equal(saveWithoutReset(), "share");
-  assert.equal(saveWithoutReset(), "pending");
-  assert.equal(saveWithoutReset(), "pending");
-  assert.equal(calls, 1);
-  assert.throws(() => {
-    assert.equal(calls, 2);
+  try {
+    const result = await showErrorNote();
+    assert.equal(result.reason, "error");
+    const note = document.querySelector("[data-testid='save-image-error']");
+    assert.ok(note);
+    assert.match(note.textContent, /Couldn't save the image/);
+    assert.equal(dismissals.length, 1);
+    dismissals[0]();
+    assert.equal(document.querySelector("[data-testid='save-image-error']"), null);
+  } finally {
+    globalThis.setTimeout = originalTimeout;
+  }
+});
+
+serial("a tap on the save error note dismisses it", async () => {
+  await showErrorNote();
+  const note = document.querySelector("[data-testid='save-image-error']");
+  const box = hitBox(note);
+  assert.ok(box);
+  const hit = elementAt(box.left + box.width / 2, box.top + box.height / 2);
+  assert.equal(hit, note);
+  hit.dispatchEvent(new window.MouseEvent("click", { bubbles: true, cancelable: true }));
+  assert.equal(document.querySelector("[data-testid='save-image-error']"), null);
+});
+
+serial("a Game Day control under the old error strip still receives taps", async () => {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.dataset.testid = "game-day-bench";
+  button.textContent = "Bench";
+  button.style.cssText = "position:fixed;left:16px;bottom:24px;width:36px;height:44px;z-index:1;";
+  let taps = 0;
+  button.addEventListener("click", () => { taps += 1; });
+  document.body.appendChild(button);
+  const point = { x: 28, y: VIEWPORT.height - 24 - 12 };
+  const stretched = document.createElement("div");
+  stretched.style.cssText = "position:fixed;left:16px;right:16px;bottom:24px;z-index:10060;pointer-events:auto;";
+  document.body.appendChild(stretched);
+  try {
+    assert.equal(elementAt(point.x, point.y), stretched);
+    stretched.remove();
+    await showErrorNote();
+    const note = document.querySelector("[data-testid='save-image-error']");
+    assert.ok(note?.isConnected);
+    const hit = elementAt(point.x, point.y);
+    assert.equal(hit, button);
+    hit.dispatchEvent(new window.MouseEvent("click", { bubbles: true, cancelable: true }));
+    assert.equal(taps, 1);
+    assert.ok(note.isConnected);
+  } finally {
+    stretched.remove();
+    button.remove();
+  }
+});
+
+serial("a share that finishes after the lock resets does not show an overlay or change the lock", async () => {
+  const pendingShares = [];
+  let calls = 0;
+  const restore = stubNavigator({
+    canShare() { return true; },
+    share() {
+      calls += 1;
+      return new Promise((resolve, reject) => {
+        pendingShares.push({ resolve, reject });
+      });
+    },
   });
+  const originalTimeout = globalThis.setTimeout;
+  const locks = [];
+  globalThis.setTimeout = (fn, ms, ...args) => {
+    if (ms === 30000) {
+      locks.push(fn);
+      return 0;
+    }
+    return originalTimeout(fn, ms, ...args);
+  };
+  const unhandled = [];
+  const onUnhandled = (reason) => { unhandled.push(reason); };
+  process.on("unhandledRejection", onUnhandled);
+  try {
+    const first = saveImage({ blob: pngBlob(), filename: FILENAME, title: TITLE });
+    assert.equal(calls, 1);
+    assert.equal(locks.length, 1);
+    locks[0]();
+    const second = saveImage({ blob: pngBlob(), filename: FILENAME, title: TITLE });
+    assert.equal(calls, 2);
+    const blocked = new Error("blocked");
+    blocked.name = "NotAllowedError";
+    pendingShares[0].reject(blocked);
+    const staleReject = await first;
+    assert.equal(staleReject.reason, "stale");
+    assert.equal(document.querySelector("[data-testid='save-image-overlay']"), null);
+    assert.equal(document.querySelector("[data-testid='save-image-error']"), null);
+    assert.equal(document.querySelector("[data-testid='save-image-busy']"), null);
+    const third = await saveImage({ blob: pngBlob(), filename: FILENAME, title: TITLE });
+    assert.equal(third.reason, "pending");
+    assert.equal(calls, 2);
+    assert.equal(locks.length, 2);
+    locks[1]();
+    pendingShares[1].resolve();
+    const staleResolve = await second;
+    assert.equal(staleResolve.reason, "stale");
+    assert.equal(document.querySelector("[data-testid='save-image-overlay']"), null);
+    assert.equal(document.querySelector("[data-testid='save-image-error']"), null);
+    saveImage({ blob: pngBlob(), filename: FILENAME, title: TITLE });
+    assert.equal(calls, 3);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(unhandled.length, 0);
+  } finally {
+    process.off("unhandledRejection", onUnhandled);
+    globalThis.setTimeout = originalTimeout;
+    restore();
+    dismissSaveOverlay();
+  }
 });
 
 serial("a thrown blob fallback shows an error and does not reject", async () => {
@@ -591,6 +752,38 @@ serial("a thrown blob fallback shows an error and does not reject", async () => 
     URL.createObjectURL = originalCreate;
     restore();
   }
+});
+
+test("a hanging serial test fails on its own and the rest still run", async () => {
+  assert.ok(SERIAL_TEST_TIMEOUT_MS >= 9000 && SERIAL_TEST_TIMEOUT_MS <= 11000);
+  const dir = await mkdtemp(path.join(tmpdir(), "save-image-serial-"));
+  const file = path.join(dir, "hang.test.js");
+  const helper = pathToFileURL(path.join(path.dirname(fileURLToPath(import.meta.url)), "testSerial.js")).href;
+  await writeFile(file, [
+    'import test from "node:test";',
+    `import { defineSerial } from ${JSON.stringify(helper)};`,
+    "const serial = defineSerial(test, { timeoutMs: 5000, taskTimeoutMs: 200, cleanup() {} });",
+    'serial("hangs", () => new Promise(() => {}));',
+    'serial("after the hang", () => {});',
+    "",
+  ].join("\n"));
+  let output = "";
+  const env = { ...process.env };
+  delete env.NODE_TEST_CONTEXT;
+  try {
+    const result = await execFileAsync(process.execPath, ["--test", "--test-reporter", "tap", file], { timeout: 8000, env });
+    output = `${result.stdout}\n${result.stderr}`;
+  } catch (error) {
+    output = `${error.stdout ?? ""}\n${error.stderr ?? ""}`;
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+  assert.match(output, /# tests 2\b/);
+  assert.match(output, /# pass 1\b/);
+  assert.match(output, /# fail 1\b/);
+  assert.match(output, /# cancelled 0\b/);
+  assert.match(output, /not ok \d+ - hangs/);
+  assert.match(output, /ok \d+ - after the hang/);
 });
 
 test("a failing case does not cancel the case after it", async () => {
