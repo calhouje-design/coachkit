@@ -8,7 +8,9 @@ import {
   markInjured,
   markOut,
   settleAvailability,
+  withoutReturnAt,
   showDoneForToday,
+  backHalfStatusNotice,
   toggleRosterInjured,
   toggleRosterOut,
 } from "./playerStatus.js";
@@ -52,6 +54,26 @@ test("out and injured writes clear a stale done-for-today mark", () => {
   const cleared = settleAvailability(done, { ...done, out: false, injured: false, doneForToday: true });
   assert.equal(cleared.doneForToday, false);
   assert.equal(cleared.out, false);
+
+  const returning = {
+    ...done,
+    out: false,
+    injured: false,
+    doneForToday: false,
+    returnQuarter: 2,
+    returnAt: { quarter: 2, half: "back" },
+  };
+  const injuredAgain = markInjured(returning, { midGameInjury: true, injuredInQuarter: 2, returnQuarter: null });
+  assert.equal(injuredAgain.returnQuarter, null);
+  assert.equal(injuredAgain.returnAt, undefined);
+  const toggled = toggleRosterOut(returning);
+  assert.equal(toggled.out, true);
+  assert.equal(toggled.returnAt, undefined);
+  assert.equal(toggled.returnQuarter, 2);
+  const whole = markOut({ ...returning, returnAt: undefined }, { returnQuarter: 3 });
+  assert.equal(whole.returnQuarter, 3);
+  assert.equal(whole.returnAt, undefined);
+  assert.equal(withoutReturnAt(returning).returnAt, undefined);
 });
 
 test("the done-for-today badge renders only while the player is out or injured", async () => {
@@ -112,4 +134,22 @@ test("the done-for-today badge renders only while the player is out or injured",
     root.unmount();
   });
   host.remove();
+});
+
+test("an out or injured returner gets a status notice before the mark is cleared", () => {
+  const wes = {
+    id: "p2",
+    name: "Wes Johnson",
+    returnAt: { quarter: 3, half: "back" },
+  };
+  assert.equal(
+    backHalfStatusNotice({ ...wes, out: true, injured: false }),
+    "Wes is marked Out, so his 2nd-half return in Q3 was cleared.",
+  );
+  assert.equal(
+    backHalfStatusNotice({ ...wes, out: false, injured: true }),
+    "Wes is marked Injured, so his 2nd-half return in Q3 was cleared.",
+  );
+  assert.equal(backHalfStatusNotice({ ...wes, out: false, injured: false }), null);
+  assert.equal(backHalfStatusNotice(markOut({ ...wes, out: true }, { returnQuarter: null })), null);
 });
