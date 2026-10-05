@@ -2946,3 +2946,155 @@ test("a silent replan leaves the back-half notice up", () => {
   assert.equal(nextBackHalfNotice(sentence, status), status);
   assert.equal(nextBackHalfNotice(null, ""), null);
 });
+
+function creditMasks(players, lineups, segments, quarter) {
+  const masks = {};
+  players.forEach(player => {
+    const mask = playerHalfMask(player.id, lineups[quarter], segmentAt(segments, player.id, quarter));
+    masks[player.id] = `${mask[0] ? 1 : 0}${mask[1] ? 1 : 0}`;
+  });
+  return masks;
+}
+
+function withoutFirstHalfRecord(players) {
+  return players.map(player => {
+    const next = { ...player };
+    delete next.firstHalfIds;
+    delete next.firstHalfQuarter;
+    return next;
+  });
+}
+
+function liveBackHalfThenBenchOut(players, lineups, segments, id, quarter) {
+  const injured = injureStarter(players, lineups, segments, id, true, quarter);
+  const returned = returnToGame({
+    players: injured.players,
+    playerId: id,
+    quarter,
+    half: "back",
+    lineups: injured.lineups,
+    segments: injured.segments,
+    slots: SLOTS,
+    subMode: true,
+    minHalves: 4,
+    totalQuarters: 4,
+    livePeriod: true,
+  });
+  if (returned.refused) return null;
+  const afterReturn = revalidateBackHalfMarks({
+    players: returned.players,
+    lineups: returned.lineups,
+    segments: returned.segments,
+    fromQuarter: quarter + 1,
+    totalQuarters: 4,
+  });
+  const lineup = afterReturn.lineups[quarter];
+  const victim = (lineup?.bench || []).find(player => (
+    player?.id && player.id !== id && !(lineup.starters || []).some(slot => slot.player?.id === player.id)
+  ));
+  if (!victim) return null;
+  const wasOn = playerHalfMask(victim.id, lineup, segmentAt(afterReturn.segments, victim.id, quarter))[0];
+  const onFieldNow = (lineup.starters || []).some(slot => slot.player?.id === victim.id);
+  let nextSegments = afterReturn.segments;
+  if (wasOn) {
+    nextSegments = clearPlayerSegmentsFrom(nextSegments, victim.id, quarter + 1, afterReturn.lineups);
+    nextSegments = noteSubSegment(nextSegments, victim.id, quarter, "left");
+  } else if (onFieldNow && segmentAt(nextSegments, victim.id, quarter) === "entered") {
+    nextSegments = clearPlayerSegmentsFrom(nextSegments, victim.id, quarter + 1, afterReturn.lineups);
+    nextSegments = clearSegmentQuarter(nextSegments, victim.id, quarter);
+  } else {
+    nextSegments = clearPlayerSegmentsFrom(nextSegments, victim.id, quarter, afterReturn.lineups);
+  }
+  const before = new Set((lineup.starters || []).map(slot => slot.player?.id).filter(Boolean));
+  const nextLineups = pullFromPlan(afterReturn.lineups, victim.id, quarter, 4);
+  const incoming = (nextLineups[quarter]?.starters || []).map(slot => slot.player?.id).find(playerId => playerId && !before.has(playerId));
+  let roster = afterReturn.players.map(player => (
+    player.id === victim.id
+      ? markOut(player, { injuredInQuarter: quarter, returnQuarter: null, midGameInjury: false })
+      : player
+  ));
+  if (incoming) {
+    if (segmentAt(nextSegments, incoming, quarter) === "left") {
+      nextSegments = clearSegmentQuarter(nextSegments, incoming, quarter);
+    } else {
+      nextSegments = noteSubSegment(nextSegments, incoming, quarter, "entered");
+    }
+    roster = roster.map(player => (player.id === id ? { ...player, replacedBy: incoming } : player));
+  }
+  const checked = revalidateBackHalfMarks({
+    players: roster,
+    lineups: nextLineups,
+    segments: nextSegments,
+    fromQuarter: quarter,
+    totalQuarters: 4,
+  });
+  return creditMasks(players, checked.lineups, checked.segments, quarter);
+}
+
+test("a later live injury uses that quarter's kickoff, not the earlier firstHalfIds", () => {
+  const players = namedRoster([
+    "John Smith", "Wes Johnson", "Jaxon Williams", "Remi Brown", "Sean Jones",
+    "Henry Davis", "Jude Garcia", "Trey Miller", "Maddox Anderson", "Leo Martinez",
+  ]);
+  const opened = openSheet(players, true, 1);
+  const id = "p8";
+  const first = injureStarter(players, opened.lineups, opened.segments, id, true, 1);
+  const returned = returnToGame({
+    players: first.players, playerId: id, quarter: 1, half: "back",
+    lineups: first.lineups, segments: first.segments, slots: SLOTS, subMode: true,
+    minHalves: 4, totalQuarters: 4, livePeriod: true,
+  });
+  assert.equal(returned.refused, undefined);
+  const carried = revalidateBackHalfMarks({
+    players: returned.players, lineups: returned.lineups, segments: returned.segments,
+    fromQuarter: 2, totalQuarters: 4,
+  });
+  const recorded = carried.players.find(player => player.id === id);
+  assert.ok(recorded.firstHalfIds?.length);
+  const kept = liveBackHalfThenBenchOut(carried.players, opened.lineups, opened.segments, id, 3);
+  const fresh = liveBackHalfThenBenchOut(withoutFirstHalfRecord(carried.players), opened.lineups, opened.segments, id, 3);
+  assert.ok(kept && fresh);
+  assert.deepEqual(kept, fresh);
+  assert.equal(kept.p2, "01");
+  assert.equal(kept.p4, "10");
+  assert.equal(recorded.firstHalfQuarter, 1);
+  const other = (carried.lineups[1]?.starters || []).find(slot => (
+    slot.player && slot.player.id !== id && !isGkPosition(slot.pos)
+  )).player.id;
+  const second = injureStarter(carried.players, carried.lineups, carried.segments, other, true, 1);
+  assert.deepEqual(second.players.find(player => player.id === other).firstHalfIds, recorded.firstHalfIds);
+  assert.equal(second.players.find(player => player.id === other).firstHalfQuarter, 1);
+});
+
+test("a second game does not reuse the previous game's firstHalfIds", () => {
+  const players = namedRoster([
+    "John Smith", "Wes Johnson", "Jaxon Williams", "Remi Brown", "Sean Jones",
+    "Henry Davis", "Jude Garcia", "Trey Miller",
+  ]);
+  const opened = openSheet(players, true, 1);
+  const id = "p8";
+  const first = injureStarter(players, opened.lineups, opened.segments, id, true, 1);
+  const returned = returnToGame({
+    players: first.players, playerId: id, quarter: 1, half: "back",
+    lineups: first.lineups, segments: first.segments, slots: SLOTS, subMode: true,
+    minHalves: 4, totalQuarters: 4, livePeriod: true,
+  });
+  const carried = revalidateBackHalfMarks({
+    players: returned.players, lineups: returned.lineups, segments: returned.segments,
+    fromQuarter: 2, totalQuarters: 4,
+  });
+  const avail = carried.players.map(player => {
+    const next = { ...player, injured: false, out: false, midGameInjury: false, returnQuarter: null };
+    delete next.returnAt;
+    delete next.replacedBy;
+    return next;
+  });
+  assert.ok(avail.find(player => player.id === id).firstHalfIds?.length);
+  const plan = openSheet(avail, true, 6);
+  const kept = liveBackHalfThenBenchOut(avail, plan.lineups, plan.segments, id, 2);
+  const fresh = liveBackHalfThenBenchOut(withoutFirstHalfRecord(avail), plan.lineups, plan.segments, id, 2);
+  assert.ok(kept && fresh);
+  assert.deepEqual(kept, fresh);
+  assert.equal(kept.p4, "10");
+  assert.equal(kept.p6, "01");
+});

@@ -66,6 +66,7 @@ import {
   upsertGameLog,
   playerQuarterPresence,
   planAvailability,
+  clearFirstHalfRecords,
 } from "./lib/gameDay.js";
 import {
   applyPhaseDrag,
@@ -1738,6 +1739,7 @@ export function TabGame({ format, league, players, setPlayers, addPlayer, remove
       clockStarted: fromQ === quarter && clockStarted,
       realEvent: fromQ === quarter && realEvent,
     });
+    const roster = decision.resetClock ? clearFirstHalfRecords(players) : players;
     const keptRealEvents = decision.resetClock
       ? {}
       : realEventsThrough(realPeriodEvents, decision.pinGoalkeeper ? fromQ : fromQ - 1);
@@ -1778,7 +1780,7 @@ export function TabGame({ format, league, players, setPlayers, addPlayer, remove
       ? liveReplanGoalkeeper(lineupsByQuarter, fromQ, true)
       : null;
     rememberSheet(lineupsByQuarter);
-    const meets = (lineups, segments) => sheetMeetsMinimum(players, lineups, segments, {
+    const meets = (lineups, segments) => sheetMeetsMinimum(roster, lineups, segments, {
       minHalves,
       totalQuarters,
       credit: creditForPlan,
@@ -1816,7 +1818,7 @@ export function TabGame({ format, league, players, setPlayers, addPlayer, remove
         recentKeys: recentPlanKeys.current,
         lockGoalkeeperId: liveGk,
         fairPlay: (result) => meets(result?.lineups, savedSubSegments(result)),
-        plan: (seed) => scheduleHalfRotation(players, planSlots, {
+        plan: (seed) => scheduleHalfRotation(roster, planSlots, {
           minHalves,
           fromQuarter: fromQ,
           lockedLineups: locked,
@@ -1829,13 +1831,14 @@ export function TabGame({ format, league, players, setPlayers, addPlayer, remove
         }),
       });
       if (chosen.unchanged) {
+        if (roster !== players) setPlayers(roster);
         noteOnlyLineup();
         return;
       }
       const planned = chosen.plan;
       rememberSheet(planned.lineups);
       const storedHalfSegments = savedSubSegments(planned);
-      const checked = applyBackHalfMarks(players, planned.lineups, storedHalfSegments, fromQ);
+      const checked = applyBackHalfMarks(roster, planned.lineups, storedHalfSegments, fromQ);
       setRealPeriodEvents(keptRealEvents);
       setPlayers(checked.players);
       setSubSegments(checked.segments);
@@ -1859,7 +1862,7 @@ export function TabGame({ format, league, players, setPlayers, addPlayer, remove
       lockGoalkeeperId: liveGk,
       fairPlay: (result) => meets(result, savedFullSegments(result)),
       plan: (seed) => scheduleWholeGame({
-        players,
+        players: roster,
         format,
         lockedLineups: locked,
         fromQuarter: fromQ,
@@ -1875,13 +1878,14 @@ export function TabGame({ format, league, players, setPlayers, addPlayer, remove
       }),
     });
     if (chosen.unchanged) {
+      if (roster !== players) setPlayers(roster);
       noteOnlyLineup();
       return;
     }
     const result = chosen.plan;
     rememberSheet(result);
     const storedSegments = savedFullSegments(result);
-    const checked = applyBackHalfMarks(players, result, storedSegments, fromQ);
+    const checked = applyBackHalfMarks(roster, result, storedSegments, fromQ);
     setRealPeriodEvents(keptRealEvents);
     setPlayers(checked.players);
     setSubSegments(checked.segments);

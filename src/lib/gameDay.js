@@ -2756,17 +2756,39 @@ function firstHalfOwnerIds(lineup, segments, quarter) {
   return ids;
 }
 
+/** Kickoff ids captured for this quarter. A later quarter, or a record with no quarter, does not count. */
+function firstHalfRecordFor(player, quarter) {
+  if (!player?.firstHalfIds?.length) return null;
+  if (Number(player.firstHalfQuarter) !== Number(quarter)) return null;
+  return player.firstHalfIds;
+}
+
+/** Drop a live-injury kickoff record. Plan full game starts a new game, so the old set must not apply. */
+export function clearFirstHalfRecords(players) {
+  let changed = false;
+  const next = (players || []).map(player => {
+    if (!player || (player.firstHalfIds == null && player.firstHalfQuarter == null)) return player;
+    changed = true;
+    const copy = { ...player };
+    delete copy.firstHalfIds;
+    delete copy.firstHalfQuarter;
+    return copy;
+  });
+  return changed ? next : (players || []);
+}
+
 function kickoffSetForQuarter(players, quarter) {
   const ids = new Set();
   let found = false;
   (players || []).forEach(player => {
-    if (!player?.firstHalfIds?.length) return;
+    const recorded = firstHalfRecordFor(player, quarter);
+    if (!recorded) return;
     const record = readReturn(player);
     const relevant = (record && Number(record.quarter) === Number(quarter))
       || Number(player.injuredInQuarter) === Number(quarter);
     if (!relevant) return;
     found = true;
-    player.firstHalfIds.forEach(id => ids.add(String(id)));
+    recorded.forEach(id => ids.add(String(id)));
   });
   return found ? ids : null;
 }
@@ -3657,10 +3679,12 @@ export function planAvailability({
   if (kind === "absent" && livePeriod && absentId) {
     const person = (players || []).find(player => player?.id === absentId);
     const before = lineups?.[start] || lineups?.[String(start)];
-    if (person && before && !person.firstHalfIds) {
+    if (person && before && !firstHalfRecordFor(person, start)) {
       // A second absence in this period must not re-read the replanned sheet.
       // The first live absence already recorded who owned the first half at kickoff.
+      // A later quarter records its own kickoff. The old set is not reused.
       const recorded = kickoffSetForQuarter(players, start);
+      person.firstHalfQuarter = start;
       person.firstHalfIds = recorded ? [...recorded] : firstHalfOwnerIds(before, segments, start);
     }
   }
