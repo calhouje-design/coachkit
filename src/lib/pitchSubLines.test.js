@@ -109,6 +109,7 @@ function Harness({ lineup, pairs, fieldWidth, markField = false }) {
     "data-elevated": line.elevated ? "1" : "0",
     "data-end-clear": line.endClear === false ? "0" : "1",
     "data-target": line.targetId || "",
+    "data-points": (line.points || []).map(point => `${point.x},${point.y}`).join(" "),
   })));
 }
 
@@ -349,6 +350,43 @@ function planLong(shape) {
   const pairs = pairsForDisplay(planBenchRotation(lineup, { nextLineup: planned.lineups[2] }), [], lineup);
   return { lineup, pairs };
 }
+
+test("a crowded sub line is the straight segment from the bench dot to the target rim", async () => {
+  const { lineup, pairs } = planLong("4-5-1");
+  assert.ok(pairs.length > 1);
+  const view = await renderPitch({ lineup, pairs, fieldWidth: 196 });
+  try {
+    const pitch = view.host.querySelector("[data-pitch]");
+    const box = pitch.getBoundingClientRect();
+    pairs.forEach(pair => {
+      const line = view.host.querySelector(`[data-sub-line="${pair.inId}-${pair.outId}"]`);
+      const from = view.host.querySelector(`[data-sub-from="${pair.inId}"]`);
+      const circle = view.host.querySelector(`[data-sub-to="${pair.outId}"]`);
+      assert.equal(line.getAttribute("data-elevated"), "0");
+      const points = line.getAttribute("data-points").trim().split(/\s+/).map(token => {
+        const [x, y] = token.split(",").map(Number);
+        return { x, y };
+      });
+      assert.equal(points.length, 2, `${pair.outId} bends`);
+      const a = from.getBoundingClientRect();
+      const b = circle.getBoundingClientRect();
+      const x1 = Math.round(a.left + a.width / 2 - box.left);
+      const y1 = Math.round(a.top + a.height / 2 - box.top);
+      const cx = b.left + b.width / 2 - box.left;
+      const cy = b.top + b.height / 2 - box.top;
+      const radius = Math.min(b.width, b.height) / 2;
+      assert.equal(points[0].x, x1);
+      assert.equal(points[0].y, y1);
+      const rim = Math.abs(Math.hypot(points[1].x - cx, points[1].y - cy) - radius);
+      assert.ok(rim <= 1.5, `${pair.outId} ends ${rim.toFixed(1)}px off the rim`);
+      const span = Math.hypot(points[1].x - points[0].x, points[1].y - points[0].y);
+      const direct = Math.hypot(cx - x1, cy - y1) - radius;
+      assert.ok(Math.abs(span - direct) <= 1.5, `${pair.outId} length ${span.toFixed(1)} is not the straight ${direct.toFixed(1)}`);
+    });
+  } finally {
+    await view.unmount();
+  }
+});
 
 test("a seam end dot leaves the neighbour and stays on the target rim", () => {
   const radius = 23;
