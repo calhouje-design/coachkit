@@ -26,6 +26,7 @@ const players = Array.from({ length: shape.slots.length + extra }, (_, index) =>
 }));
 
 const opened = scheduleHalfRotation(players, shape.slots, { minHalves: 4, totalQuarters: 4, seed });
+const bank = Object.fromEntries((params.get("bank") || "").split(",").filter(Boolean).map((value, index) => [`p${index + 1}`, Number(value)]));
 const league = format === "11v11" ? "U13" : "U10";
 const setup = resolveSetup({
   league,
@@ -41,7 +42,7 @@ function Harness() {
     homeScore: 0,
     awayScore: 0,
     opponent: "THEM",
-    minuteBank: {},
+    minuteBank: bank,
     appearanceCredit: {},
     subSegments: opened.segments || {},
     pairPlan: {},

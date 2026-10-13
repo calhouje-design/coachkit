@@ -7,7 +7,9 @@ import {
   goalkeeperId,
   isBackHalfReturn,
   noteRealPeriodEvent,
+  pairsForDisplay,
   planAvailability,
+  planBenchRotation,
   returnToGame,
   scheduleHalfRotation,
   shareFieldSheet,
@@ -388,4 +390,105 @@ test("a back-half Return pairs the live field and the share tiles the same way, 
       assert.equal(tileByIn.get(pair.inId), pair.outId, item.format);
     }
   }
+});
+
+test("share tiles use the live minute bank, and a back-half donor bump does not retarget the other lines", () => {
+  const positions = ["GK", "LD", "CD", "RD", "LB", "CB", "RB", "LM", "CM", "RM", "LF", "CF", "RF"];
+  const shape = FORMATION_TEMPLATES["8v8"].find(item => item.name === "3-3-1");
+  const players = Array.from({ length: shape.slots.length + 4 }, (_, index) => ({
+    id: `p${index + 1}`,
+    name: `${FIRST[index]} ${LAST[index]}`,
+    number: String(index + 1),
+    positions,
+    injured: false,
+    out: false,
+    ratings: {},
+  }));
+  const opened = scheduleHalfRotation(players, shape.slots, { minHalves: 4, totalQuarters: 4, seed: 1 });
+  const bank = [0, 4, 1, 9, 2, 0, 7, 3, 5, 1, 6, 2];
+  const minutesById = Object.fromEntries(bank.map((minutes, index) => [`p${index + 1}`, minutes]));
+  const tiled = shareFieldSheet({ lineups: opened.lineups, subMode: true, minutesById });
+  const ignored = shareFieldSheet({ lineups: opened.lineups, subMode: true });
+  for (let quarter = 1; quarter <= 4; quarter += 1) {
+    const lineup = opened.lineups[quarter];
+    const live = pairsForDisplay(
+      planBenchRotation(lineup, { minutesById, nextLineup: opened.lineups[quarter + 1] || null }),
+      [],
+      lineup,
+    );
+    assert.equal(pairKey(tiled.quarters[quarter - 1].pairs), pairKey(live), `Q${quarter}`);
+    if (quarter > 1) assert.notEqual(pairKey(ignored.quarters[quarter - 1].pairs), pairKey(live), `Q${quarter} empty minutes`);
+  }
+
+  const eleven = FORMATION_TEMPLATES["11v11"].find(item => item.name === "4-5-1");
+  const roster11 = Array.from({ length: eleven.slots.length + 5 }, (_, index) => ({
+    id: `p${index + 1}`,
+    name: `${FIRST[index]} ${LAST[index]}`,
+    number: String(index + 1),
+    positions,
+    injured: false,
+    out: false,
+    ratings: {},
+  }));
+  const sheet = scheduleHalfRotation(roster11, eleven.slots, { minHalves: 4, totalQuarters: 4, seed: 1 });
+  const victim = sheet.lineups[1].starters.find(slot => slot.player && slot.pos !== "GK").player;
+  const absent = roster11.map(player => (
+    player.id === victim.id ? { ...player, injured: true, out: false, injuredInQuarter: 1, returnQuarter: null } : player
+  ));
+  const planned = planAvailability({
+    autoRegen: true,
+    kind: "absent",
+    players: absent,
+    slots: eleven.slots,
+    lineups: sheet.lineups,
+    segments: sheet.segments,
+    absentId: victim.id,
+    quarter: 1,
+    minHalves: 4,
+    subMode: true,
+    totalQuarters: 4,
+    livePeriod: true,
+  });
+  const back = returnToGame({
+    autoRegen: true,
+    players: absent,
+    playerId: victim.id,
+    quarter: 1,
+    half: "back",
+    lineups: planned.lineups,
+    segments: planned.segments,
+    slots: eleven.slots,
+    subMode: true,
+    minHalves: 4,
+    totalQuarters: 4,
+    livePeriod: true,
+  });
+  const plain = backHalfQuarterView({
+    lineup: back.lineups[1],
+    segments: back.segments,
+    players: back.players,
+    quarter: 1,
+    nextLineup: back.lineups[2],
+    minutesById: {},
+    subMode: true,
+  });
+  const donorId = plain.pairs[0].outId;
+  const bumped = {};
+  back.players.forEach(player => { bumped[player.id] = 0; });
+  bumped[donorId] = 2;
+  const adjusted = backHalfQuarterView({
+    lineup: back.lineups[1],
+    segments: back.segments,
+    players: back.players,
+    quarter: 1,
+    nextLineup: back.lineups[2],
+    minutesById: bumped,
+    subMode: true,
+  });
+  assert.equal(pairKey(adjusted.pairs), pairKey(plain.pairs));
+  const shared = withBackHalfShare(
+    shareFieldSheet({ lineups: back.lineups, subMode: true, minutesById: bumped }),
+    { players: back.players, lineups: back.lineups, segments: back.segments, minutesById: bumped, subMode: true },
+  );
+  assert.equal(pairKey(shared.quarters.find(panel => panel.quarter === 1).pairs), pairKey(plain.pairs));
 });

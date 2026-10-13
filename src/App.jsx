@@ -2448,6 +2448,18 @@ export function TabGame({ format, league, players, setPlayers, addPlayer, remove
       });
     }
   });
+  // Pairing ignores the back-half display tweak. That tweak adds minutes only
+  // for the returner and the donor, and auto-pairing then aims the other lines
+  // at different players than the share tiles.
+  const pairingMinutes = {};
+  players.forEach(p => {
+    pairingMinutes[p.id] = earnedMinutes(p.id, {
+      bank: minuteBank,
+      onField: onFieldIds.has(p.id),
+      clockSec,
+      stintStartSec: stintStart,
+    });
+  });
   const anyMinutes = clockSec > 0 || running || Object.values(minuteBank || {}).some(n => n > 0);
   const whosNext = rankWhosNext(currentLineup?.bench || [], minutesById);
   const pendingSwaps = (subQueue || []).filter(row => row.status === "pending");
@@ -2461,7 +2473,7 @@ export function TabGame({ format, league, players, setPlayers, addPlayer, remove
     const lineup = lineups?.[q] || lineups?.[String(q)];
     if (!subMode || !lineup) return [];
     const next = q < totalQuarters ? (lineups?.[q + 1] || lineups?.[String(q + 1)] || null) : null;
-    const auto = planBenchRotation(lineup, { minutesById, nextLineup: next });
+    const auto = planBenchRotation(lineup, { minutesById: pairingMinutes, nextLineup: next });
     return pairsForDisplay(auto, pairPlan?.[q] || pairPlan?.[String(q)], lineup);
   };
   const backHalfViewFor = (q, lineups = lineupsByQuarter) => backHalfQuarterView({
@@ -2470,7 +2482,7 @@ export function TabGame({ format, league, players, setPlayers, addPlayer, remove
     players,
     quarter: q,
     nextLineup: q < totalQuarters ? (lineups?.[q + 1] || lineups?.[String(q + 1)] || null) : null,
-    minutesById,
+    minutesById: pairingMinutes,
     manualPairs: pairPlan?.[q] || pairPlan?.[String(q)] || [],
     subMode,
   });
@@ -2711,7 +2723,7 @@ export function TabGame({ format, league, players, setPlayers, addPlayer, remove
       lineups: lineupsByQuarter,
       savedAt: new Date().toISOString(),
       sheets: {
-        field: withBackHalfShare(decorateShareSheet(shareFieldSheet({ ...sheetInput, quarters: periodList, periodAbbrev: abbr }), {
+        field: withBackHalfShare(decorateShareSheet(shareFieldSheet({ ...sheetInput, quarters: periodList, periodAbbrev: abbr, minutesById: pairingMinutes }), {
           lineups: lineupsByQuarter,
           afterSubs,
           snapshots: startSnapshots,
@@ -2724,7 +2736,7 @@ export function TabGame({ format, league, players, setPlayers, addPlayer, remove
           segments: subSegments,
           periodAbbrev: abbr,
           pairPlan,
-          minutesById,
+          minutesById: pairingMinutes,
           subMode,
           afterSubs,
           snapshots: startSnapshots,
@@ -3803,7 +3815,7 @@ export function TabGame({ format, league, players, setPlayers, addPlayer, remove
           players={players}
           lineupsByQuarter={lineupsByQuarter}
           pairPlan={pairPlan}
-          minutesById={minutesById}
+          minutesById={pairingMinutes}
           afterSubs={afterSubs}
           startSnapshots={startSnapshots}
           subMode={subMode}
@@ -4028,7 +4040,7 @@ function ShareLineupModal({ players, lineupsByQuarter, pairPlan, minutesById = {
   const [showPrint, setShowPrint] = useState(false);
   const field = useMemo(
     () => withBackHalfShare(decorateShareSheet(
-      shareFieldSheet({ lineups: lineupsByQuarter, pairPlan, subMode, quarters, periodAbbrev }),
+      shareFieldSheet({ lineups: lineupsByQuarter, pairPlan, subMode, quarters, periodAbbrev, minutesById }),
       { lineups: lineupsByQuarter, afterSubs, snapshots: startSnapshots, subMode, periodAbbrev, roster: players },
     ), {
       players,
