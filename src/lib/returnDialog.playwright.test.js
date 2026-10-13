@@ -371,8 +371,7 @@ test("sub-mode share and print After match the live After for a 2nd-half return"
     await share.waitFor({ state: "attached" });
     assert.equal(await share.getAttribute("data-ids"), afterIds.join(","));
     assert.equal(await share.getAttribute("data-bench"), afterBench.join(","));
-    await page.getByTestId("share-modal").getByTestId("phase-after").click();
-    await page.waitForFunction(() => document.querySelector("[data-testid='share-sheet']")?.getAttribute("data-preview") === "after");
+    await page.locator("[data-testid='field-tile'][data-filename='CoachKit_Field_Q2_H2.png']").waitFor();
     await page.getByTestId("share-sheet").screenshot({ path: path.join(os.tmpdir(), "m1-share.png") });
     await page.getByTestId("open-print-preview").click();
     const print = page.getByTestId("print-after-2");
