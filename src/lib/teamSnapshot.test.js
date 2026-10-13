@@ -101,3 +101,13 @@ test("a durable row wins even when the live game was cleared", () => {
   assert.equal(resolved.gameDay.opponent, "");
   assert.equal(resolved.schedule.length, 0);
 });
+
+test("a back-half notice survives reload until the coach dismisses it", () => {
+  const sentence = "Couldn't keep Wes as 2nd-half only in Q3; he's available for the whole quarter. Adjust if needed.";
+  const saved = normalizeGameDay({ backHalfNotice: sentence });
+  assert.equal(saved.backHalfNotice, sentence);
+  const reloaded = normalizeGameDay(JSON.parse(JSON.stringify(saved)));
+  assert.equal(reloaded.backHalfNotice, sentence);
+  assert.equal(normalizeGameDay({ backHalfNotice: "  " }).backHalfNotice, null);
+  assert.equal(normalizeGameDay({ ...reloaded, backHalfNotice: null }).backHalfNotice, null);
+});

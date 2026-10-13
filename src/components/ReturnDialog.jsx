@@ -1,10 +1,13 @@
 import { useEffect, useId, useRef, useState } from "react";
 import {
   availabilityCopy,
-  mismatchCopy,
   pregameCopy,
+  initialReturnSelection,
   quarterChoices,
+  quarterClockSec,
   returnHeading,
+  returnMismatch,
+  returnOptionAvailability,
 } from "../lib/returnDialog.js";
 
 const C = {
@@ -113,6 +116,12 @@ export function ReturnDialog({
   outSince = null,
   liveQuarters = {},
   quarterLive = null,
+  clocks = {},
+  viewingClock = 0,
+  running = false,
+  periodSeconds = 0,
+  halfApplied = null,
+  donorAvailable = null,
   onCancel,
   onConfirm,
   onSwitchQuarter,
@@ -125,20 +134,59 @@ export function ReturnDialog({
     outSince: outSince ?? player?.injuredInQuarter,
     finished,
   });
-  const [quarter, setQuarter] = useState(defaultQuarter);
+  const optionFor = (choice) => {
+    if (!choice) return { whole: false, back: false, noDonor: false };
+    const live = typeof quarterLive === "function"
+      ? !!quarterLive(choice.quarter)
+      : !!liveQuarters[choice.quarter];
+    const options = returnOptionAvailability({
+      disabled: choice.disabled,
+      live,
+      clock: quarterClockSec(choice.quarter, {
+        clocks,
+        viewingQuarter: selectedQuarter,
+        viewingClock,
+        running,
+      }),
+      periodSeconds,
+      halfApplied: typeof halfApplied === "function" ? !!halfApplied(choice.quarter) : false,
+      subMode,
+    });
+    const donor = typeof donorAvailable === "function" ? !!donorAvailable(choice.quarter) : true;
+    return {
+      whole: !!options.whole,
+      back: !!options.back && donor,
+      noDonor: !!options.back && !donor,
+    };
+  };
+  const described = choices.map(choice => {
+    const options = optionFor(choice);
+    return {
+      quarter: choice.quarter,
+      disabled: choice.disabled,
+      whole: options.whole,
+      back: options.back,
+      viewed: choice.quarter === defaultQuarter,
+    };
+  });
+  const initialPick = initialReturnSelection(described);
+  const [quarter, setQuarter] = useState(initialPick.quarter);
+  const [half, setHalf] = useState(initialPick.half);
   const [available, setAvailable] = useState(null);
   useDialogKeys(open, onCancel, sheetRef);
 
   if (!open || !player) return null;
   const heading = returnHeading(player, periodAbbrev);
   const chosen = choices.find(choice => choice.quarter === quarter) || null;
-  const quarterOk = !!chosen && !chosen.disabled;
+  const chosenOptions = optionFor(chosen);
+  const halfOpen = half === "back" ? chosenOptions.back : chosenOptions.whole;
+  const quarterOk = !!chosen && halfOpen;
   const live = quarterOk && (typeof quarterLive === "function" ? !!quarterLive(quarter) : !!liveQuarters[quarter]);
   const copy = quarterOk
-    ? availabilityCopy({ quarter, subMode, totalQuarters, periodAbbrev, live, name: player.name })
+    ? availabilityCopy({ quarter, subMode, totalQuarters, periodAbbrev, live, name: player.name, half })
     : null;
-  const mismatch = hasSheet && quarterOk && quarter !== Number(selectedQuarter)
-    ? mismatchCopy({ selectedQuarter, chosenQuarter: quarter, periodAbbrev })
+  const mismatch = hasSheet && quarterOk
+    ? returnMismatch({ selectedQuarter, chosenQuarter: quarter, periodAbbrev })
     : null;
   const canReturn = hasSheet ? quarterOk && available != null : true;
 
@@ -148,7 +196,13 @@ export function ReturnDialog({
       onConfirm?.({ type: "mark-available" });
       return;
     }
-    onConfirm?.({ type: "confirm", quarter, available });
+    onConfirm?.({ type: "confirm", quarter, available, half });
+  };
+
+  const pickHalf = (nextQuarter, nextHalf) => {
+    setQuarter(nextQuarter);
+    setHalf(nextHalf);
+    setAvailable(null);
   };
 
   return (
@@ -204,43 +258,40 @@ export function ReturnDialog({
             <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 8 }}>
               Returning for which quarter?
             </div>
-            <div role="radiogroup" aria-label="Returning for which quarter?" style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <div role="radiogroup" aria-label="Returning for which quarter?" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
               {choices.map(choice => {
-                const checked = quarter === choice.quarter;
+                const options = optionFor(choice);
                 return (
-                  <label
+                  <div
                     key={choice.quarter}
-                    style={{
-                      minWidth: 44,
-                      minHeight: 44,
-                      padding: "0 10px",
-                      display: "inline-flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      gap: 6,
-                      borderRadius: 10,
-                      boxSizing: "border-box",
-                      cursor: choice.disabled ? "default" : "pointer",
-                      opacity: choice.disabled ? 0.4 : 1,
-                      fontWeight: 800,
-                      border: checked ? `2px solid ${C.gold}` : `1px solid ${C.border}`,
-                      background: checked ? "rgba(232,160,32,0.16)" : "transparent",
-                      color: checked ? C.gold : C.text,
-                    }}
+                    data-testid={`return-quarter-row-${choice.quarter}`}
+                    style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, minWidth: 0 }}
                   >
-                    <input
-                      type="radio"
-                      name="return-quarter"
-                      value={choice.quarter}
-                      checked={checked}
-                      disabled={choice.disabled}
-                      onChange={() => {
-                        setQuarter(choice.quarter);
-                        setAvailable(null);
-                      }}
+                    <HalfChoice
+                      quarter={choice.quarter}
+                      half="whole"
+                      label={`${periodAbbrev}${choice.quarter}`}
+                      checked={quarter === choice.quarter && half === "whole"}
+                      disabled={!options.whole}
+                      onPick={pickHalf}
                     />
-                    {periodAbbrev}{choice.quarter}
-                  </label>
+                    <HalfChoice
+                      quarter={choice.quarter}
+                      half="back"
+                      label={`${periodAbbrev}${choice.quarter} · 2nd half`}
+                      checked={quarter === choice.quarter && half === "back"}
+                      disabled={!options.back}
+                      onPick={pickHalf}
+                    />
+                    {options.noDonor && (
+                      <div
+                        data-testid={`return-no-donor-${choice.quarter}`}
+                        style={{ gridColumn: "1 / -1", fontSize: 11, color: C.muted, lineHeight: 1.3 }}
+                      >
+                        No one to swap at the half
+                      </div>
+                    )}
+                  </div>
                 );
               })}
             </div>
@@ -348,6 +399,54 @@ export function ReturnDialog({
         </div>
       </div>
     </div>
+  );
+}
+
+function HalfChoice({ quarter, half, label, checked, disabled, onPick }) {
+  return (
+    <label
+      data-testid={`return-${half}-${quarter}`}
+      style={{
+        position: "relative",
+        minWidth: 0,
+        minHeight: 44,
+        padding: "6px 8px",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        borderRadius: 10,
+        boxSizing: "border-box",
+        cursor: disabled ? "default" : "pointer",
+        opacity: disabled ? 0.4 : 1,
+        fontWeight: 800,
+        fontSize: 13,
+        lineHeight: 1.15,
+        textAlign: "center",
+        overflow: "hidden",
+        border: checked ? `2px solid ${C.gold}` : `1px solid ${C.border}`,
+        background: checked ? "rgba(232,160,32,0.16)" : "transparent",
+        color: checked ? C.gold : C.text,
+      }}
+    >
+      <input
+        type="radio"
+        name="return-quarter"
+        value={half === "whole" ? String(quarter) : `${quarter}-back`}
+        checked={checked}
+        disabled={disabled}
+        onChange={() => onPick(quarter, half)}
+        style={{
+          position: "absolute",
+          inset: 0,
+          width: "100%",
+          height: "100%",
+          margin: 0,
+          opacity: 0,
+          cursor: disabled ? "default" : "pointer",
+        }}
+      />
+      <span style={{ minWidth: 0 }}>{label}</span>
+    </label>
   );
 }
 
