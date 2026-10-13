@@ -1,4 +1,4 @@
-import { lineStopAtCircle, placeTwoWideOnPitch, routeClearOfObstacles } from "./gameDay.js";
+import { lineStopAtCircle, placeTwoWideOnPitch } from "./gameDay.js";
 
 const Q_COLORS = {
   1: ["#f4c442", "#b87818"],
@@ -190,13 +190,7 @@ function paintQuarterPanel(ctx, x, y, w, h, panel) {
     const dot = dotAt(cardY);
     const spot = at(target);
     const stop = lineStopAtCircle(dot.x, dot.y, spot.x, spot.y, rim);
-    const points = routeClearOfObstacles(dot.x, dot.y, stop.x, stop.y, obstaclesFor(target), 3, {
-      bounds,
-      bench: benchRect,
-      badge,
-      lines: routedLines,
-      dots: cards.filter(card => card.cardY !== cardY).map(card => dotAt(card.cardY)),
-    });
+    const points = [{ x: dot.x, y: dot.y }, { x: stop.x, y: stop.y }];
     routedLines.push(points);
     if (points.elevated) elevatedLines.push(points);
     else strokeRoute(points, false);
