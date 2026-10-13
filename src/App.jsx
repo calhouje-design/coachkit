@@ -37,7 +37,7 @@ import {
   sharePlayTimeSheet,
   isBackHalfReturn,
   quarterHalfPresentation,
-  backHalfShownPairs,
+  backHalfQuarterView,
   backHalfEarnedMinutes,
   backHalfDonorAvailable,
   stripReturnAtForQuarter,
@@ -2464,26 +2464,16 @@ export function TabGame({ format, league, players, setPlayers, addPlayer, remove
     const auto = planBenchRotation(lineup, { minutesById, nextLineup: next });
     return pairsForDisplay(auto, pairPlan?.[q] || pairPlan?.[String(q)], lineup);
   };
-  const backHalfViewFor = (q, lineups = lineupsByQuarter) => {
-    const lineup = lineups?.[q] || lineups?.[String(q)];
-    const returner = (players || []).find(player => isBackHalfReturn(player, q));
-    if (!returner || !lineup) return null;
-    const presentation = q === quarter && halfPresentation?.pairs?.length
-      ? halfPresentation
-      : quarterHalfPresentation(lineup, subSegments, q, { returnerId: returner.id });
-    if (!presentation?.pairs?.length) return null;
-    const next = q < totalQuarters ? (lineups?.[q + 1] || lineups?.[String(q + 1)] || null) : null;
-    const pairs = subMode
-      ? backHalfShownPairs({
-        start: presentation.start,
-        returnerPair: presentation.pairs[0],
-        nextLineup: next,
-        minutesById,
-        manualPairs: pairPlan?.[q] || pairPlan?.[String(q)] || [],
-      })
-      : presentation.pairs;
-    return { ...presentation, pairs };
-  };
+  const backHalfViewFor = (q, lineups = lineupsByQuarter) => backHalfQuarterView({
+    lineup: lineups?.[q] || lineups?.[String(q)],
+    segments: subSegments,
+    players,
+    quarter: q,
+    nextLineup: q < totalQuarters ? (lineups?.[q + 1] || lineups?.[String(q + 1)] || null) : null,
+    minutesById,
+    manualPairs: pairPlan?.[q] || pairPlan?.[String(q)] || [],
+    subMode,
+  });
   const halfView = backHalfViewFor(quarter);
   const shownPairs = halfView?.pairs?.length ? halfView.pairs : pairsForQuarter(quarter);
   const snapshot = startSnapshots?.[quarter] || startSnapshots?.[String(quarter)] || null;
@@ -3941,7 +3931,7 @@ function SheetCanvases({ field, playTime, league, opponent, homeScore, awayScore
       <AfterLineupMarks field={field} prefix="share" />
       <div data-testid={source === "share" ? "field-grid" : "game-log-field-grid"} style={{display:"grid", gridTemplateColumns:"minmax(0, 1fr) minmax(0, 1fr)", gap:8, marginBottom:12}}>
         {tiles.map((tile, index) => (
-          <div key={tile.filename} data-testid={source === "share" ? "field-tile" : "game-log-field-tile"} data-filename={tile.filename} data-caption={tile.caption} data-half={tile.half || ""} style={{minWidth:0}}>
+          <div key={tile.filename} data-testid={source === "share" ? "field-tile" : "game-log-field-tile"} data-filename={tile.filename} data-caption={tile.caption} data-half={tile.half || ""} data-pairs={(tile.panel.pairs || []).map(pair => `${pair.inId}>${pair.outId}`).join(",")} style={{minWidth:0}}>
             <div data-testid={source === "share" ? "field-tile-label" : "game-log-field-label"} style={{fontSize:11, fontWeight:800, color:"#e8e4dc", lineHeight:1.3, marginBottom:4}}>
               {tile.caption}
             </div>

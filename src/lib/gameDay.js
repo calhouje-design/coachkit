@@ -1284,6 +1284,37 @@ export function backHalfShownPairs({
   return pairsForDisplay(auto, manual, start);
 }
 
+/**
+ * Start lineup and sub pairs for a back-half return.
+ * The same view the share tiles paint: the returner is still on the bench,
+ * and every line names a player standing on that start field.
+ */
+export function backHalfQuarterView({
+  lineup,
+  segments,
+  players,
+  quarter,
+  nextLineup = null,
+  minutesById = {},
+  manualPairs = [],
+  subMode = true,
+} = {}) {
+  const returner = (players || []).find(player => isBackHalfReturn(player, quarter));
+  if (!returner || !lineup) return null;
+  const presentation = quarterHalfPresentation(lineup, segments, quarter, { returnerId: returner.id });
+  if (!presentation?.pairs?.length) return null;
+  const pairs = subMode
+    ? backHalfShownPairs({
+      start: presentation.start,
+      returnerPair: presentation.pairs[0],
+      nextLineup,
+      minutesById,
+      manualPairs,
+    })
+    : presentation.pairs;
+  return { ...presentation, pairs };
+}
+
 /** Drop a back-half mark for one quarter. Whole-quarter returnQuarter stays. Later quarters stay. */
 export function stripReturnAtForQuarter(players, quarter) {
   const q = Number(quarter);

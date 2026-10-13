@@ -1,6 +1,18 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { applyBenchRotation, noteRealPeriodEvent, equityHalves } from "./gameDay.js";
+import {
+  applyBenchRotation,
+  backHalfQuarterView,
+  equityHalves,
+  goalkeeperId,
+  isBackHalfReturn,
+  noteRealPeriodEvent,
+  planAvailability,
+  returnToGame,
+  scheduleHalfRotation,
+  shareFieldSheet,
+} from "./gameDay.js";
+import { FORMATION_TEMPLATES } from "./formations.js";
 import { normalizeGameDay } from "./teamSnapshot.js";
 import {
   afterSubsBasis,
@@ -18,6 +30,7 @@ import {
   replanPhaseState,
   runAfterSubs,
   viewAfterSubs,
+  withBackHalfShare,
 } from "./afterSubs.js";
 
 function player(id, name = id) {
@@ -270,4 +283,109 @@ test("after subs and the start snapshot persist with the in-progress game", () =
   assert.deepEqual(normalizeAfterSubs(null), {});
   assert.deepEqual(normalizeGameDay({}).afterSubs, {});
   assert.deepEqual(normalizeGameDay({}).startSnapshots, {});
+});
+
+const FIRST = ["Ann", "Bea", "Cal", "Dee", "Eve", "Fay", "Gia", "Hal", "Ivy", "Jon", "Kai", "Lou", "Max", "Noa", "Rex", "Sam"];
+const LAST = ["Stone", "Rivers", "Ng", "Poe", "Ray", "Fields", "Banks", "Wells", "Ford", "Lake", "Cross", "Sun", "Kay", "Lee", "Ortiz", "Park"];
+
+function pairKey(pairs) {
+  return (pairs || []).map(pair => `${pair.inId}>${pair.outId}`).join(",");
+}
+
+/** Q1 injury, then a back-half Return, on a planned rotation. */
+function injuryBackHalf({ format, shapeName, extra, seed, victimName }) {
+  const slots = FORMATION_TEMPLATES[format].find(item => item.name === shapeName).slots;
+  const positions = ["GK", "LD", "CD", "RD", "LB", "CB", "RB", "LM", "CM", "RM", "LF", "CF", "RF"];
+  const players = Array.from({ length: slots.length + extra }, (_, index) => ({
+    id: `p${index + 1}`,
+    name: `${FIRST[index]} ${LAST[index]}`,
+    number: String(index + 1),
+    positions,
+    injured: false,
+    out: false,
+    ratings: {},
+  }));
+  const opened = scheduleHalfRotation(players, slots, { minHalves: 4, totalQuarters: 4, seed });
+  const victim = players.find(player => player.name.startsWith(victimName));
+  assert.ok(victim, `${format} ${victimName}`);
+  const absent = players.map(player => (
+    player.id === victim.id
+      ? { ...player, injured: true, out: false, injuredInQuarter: 1, returnQuarter: null }
+      : player
+  ));
+  const planned = planAvailability({
+    autoRegen: true,
+    kind: "absent",
+    players: absent,
+    slots,
+    lineups: opened.lineups,
+    segments: opened.segments,
+    absentId: victim.id,
+    quarter: 1,
+    minHalves: 4,
+    subMode: true,
+    totalQuarters: 4,
+  });
+  return returnToGame({
+    autoRegen: true,
+    players: absent,
+    playerId: victim.id,
+    quarter: 1,
+    half: "back",
+    lineups: planned.lineups,
+    segments: planned.segments,
+    slots,
+    subMode: true,
+    minHalves: 4,
+    totalQuarters: 4,
+  });
+}
+
+test("a back-half Return pairs the live field and the share tiles the same way, and leaves the goalkeeper", () => {
+  const cases = [
+    { format: "8v8", shapeName: "3-3-1", extra: 4, seed: 3, victimName: "Ivy" },
+    { format: "11v11", shapeName: "4-4-2", extra: 5, seed: 1, victimName: "Ann" },
+  ];
+  for (const item of cases) {
+    const back = injuryBackHalf(item);
+    assert.equal(back.refused, undefined);
+    const returner = back.players.find(player => isBackHalfReturn(player, 1));
+    assert.equal(returner?.name.startsWith(item.victimName), true, item.format);
+    const view = backHalfQuarterView({
+      lineup: back.lineups[1],
+      segments: back.segments,
+      players: back.players,
+      quarter: 1,
+      nextLineup: back.lineups[2] || null,
+      minutesById: {},
+      manualPairs: [],
+      subMode: true,
+    });
+    const shared = withBackHalfShare(
+      shareFieldSheet({ lineups: back.lineups, subMode: true }),
+      {
+        players: back.players,
+        lineups: back.lineups,
+        segments: back.segments,
+        subMode: true,
+      },
+    );
+    const tile = shared.quarters.find(panel => panel.quarter === 1);
+    const raw = shareFieldSheet({ lineups: back.lineups, subMode: true }).quarters.find(panel => panel.quarter === 1);
+    assert.ok(view?.pairs?.length, item.format);
+    assert.equal(pairKey(view.pairs), pairKey(tile.pairs), `${item.format} live pairs`);
+    assert.notEqual(pairKey(view.pairs), pairKey(raw.pairs), `${item.format} end-lineup pairs`);
+    const keeper = goalkeeperId(view.start);
+    assert.ok(keeper, item.format);
+    const onField = new Map((view.start.starters || []).filter(slot => slot.player).map(slot => [slot.player.id, slot]));
+    const bench = new Set((view.start.bench || []).map(player => player.id));
+    const tileByIn = new Map(tile.pairs.map(pair => [pair.inId, pair.outId]));
+    for (const pair of view.pairs) {
+      assert.equal(bench.has(pair.inId), true, item.format);
+      assert.equal(onField.has(pair.outId), true, item.format);
+      assert.notEqual(pair.outId, keeper, item.format);
+      assert.equal(onField.get(pair.outId).pos === "GK", false, item.format);
+      assert.equal(tileByIn.get(pair.inId), pair.outId, item.format);
+    }
+  }
 });
