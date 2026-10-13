@@ -26,6 +26,53 @@ function firstName(name) {
   return String(name || "").trim().split(/\s+/)[0] || "";
 }
 
+function benchCardMetrics(benchCount, h) {
+  const avail = h - 24;
+  const gap = 4;
+  const cardH = benchCount
+    ? Math.max(26, Math.min(48, (avail - gap * Math.max(0, benchCount - 1)) / benchCount))
+    : 0;
+  return { gap, cardH };
+}
+
+/** Straight sub lines on a share panel: bench dot to the target circle's rim. */
+export function sharePanelSubLines(panel, x, y, w, h) {
+  const benchW = 78;
+  const pitchX = x + benchW;
+  const pitchY = y + 4;
+  const pitchW = w - benchW - 4;
+  const pitchH = h - 8;
+  const circle = (46 / 320) * pitchW;
+  const rim = circle / 2;
+  const starters = placeTwoWideOnPitch(panel?.starters || [], pitchW, pitchH, circle);
+  const starterById = {};
+  starters.forEach(slot => {
+    if (slot.id) starterById[slot.id] = slot;
+  });
+  const pairByIn = {};
+  (panel?.pairs || []).forEach(pair => {
+    if (pair.inId) pairByIn[pair.inId] = pair;
+  });
+  const { gap, cardH } = benchCardMetrics((panel?.bench || []).length, h);
+  const lines = [];
+  (panel?.bench || []).forEach((player, index) => {
+    const target = starterById[pairByIn[player.id]?.outId];
+    if (!target || !player?.id) return;
+    const cardY = y + 20 + index * (cardH + gap);
+    const dot = { x: x + benchW - 12, y: cardY + 22 };
+    const spot = { x: pitchX + target.x, y: pitchY + target.y };
+    const stop = lineStopAtCircle(dot.x, dot.y, spot.x, spot.y, rim);
+    lines.push({
+      inId: player.id,
+      outId: target.id,
+      rim,
+      target: spot,
+      points: [{ x: dot.x, y: dot.y }, { x: stop.x, y: stop.y }],
+    });
+  });
+  return lines;
+}
+
 function fitCanvas(canvas, w, h) {
   const dpr = Math.max(2, (typeof window !== "undefined" && window.devicePixelRatio) || 1);
   canvas.width = Math.round(w * dpr);
@@ -98,11 +145,7 @@ function paintQuarterPanel(ctx, x, y, w, h, panel) {
     if (pair.inId) pairByIn[pair.inId] = pair;
   });
 
-  const avail = h - 24;
-  const gap = 4;
-  const cardH = bench.length
-    ? Math.max(26, Math.min(48, (avail - gap * Math.max(0, bench.length - 1)) / bench.length))
-    : 0;
+  const { gap, cardH } = benchCardMetrics(bench.length, h);
   const cards = bench.map((player, index) => ({
     player,
     cardY: y + 20 + index * (cardH + gap),
@@ -140,61 +183,19 @@ function paintQuarterPanel(ctx, x, y, w, h, panel) {
       ctx.fillText(`for ${firstName(target.name).slice(0, 7)}`, x + 8, cardY + height - 5);
     }
   });
-  ctx.save();
-  ctx.font = "bold 8px Arial, sans-serif";
-  const nameBoxFor = (slot) => {
-    const spot = at(slot);
-    const nameW = Math.max(18, ctx.measureText(firstName(slot.name).slice(0, 10)).width + 8);
-    return { x: spot.x - nameW / 2, y: spot.y + rim + 2, w: nameW, h: 12 };
-  };
-  const obstaclesFor = (target) => starters.flatMap(slot => {
-    const blocks = [nameBoxFor(slot)];
-    if (slot !== target) {
-      const spot = at(slot);
-      blocks.unshift({ cx: spot.x, cy: spot.y, r: rim });
-    }
-    return blocks;
-  });
-  const bounds = { x: pitchX, y: pitchY, w: pitchW, h: pitchH };
-  const benchRect = { x, y, w: benchW, h };
-  const badge = { x: pitchX + 6, y: pitchY + 6, w: 36, h: 18 };
-  const routedLines = [];
-  const elevatedLines = [];
-  const strokeRoute = (points, outline) => {
-    const draw = () => {
-      ctx.beginPath();
-      ctx.moveTo(points[0].x, points[0].y);
-      for (let i = 1; i < points.length; i += 1) ctx.lineTo(points[i].x, points[i].y);
-      ctx.stroke();
-    };
-    if (outline) {
-      ctx.save();
-      ctx.setLineDash([]);
-      ctx.strokeStyle = "#0a0d0f";
-      ctx.lineWidth = 4;
-      ctx.lineJoin = "round";
-      ctx.lineCap = "round";
-      draw();
-      ctx.restore();
-    }
+  const strokeRoute = (points) => {
+    ctx.beginPath();
+    ctx.moveTo(points[0].x, points[0].y);
+    for (let i = 1; i < points.length; i += 1) ctx.lineTo(points[i].x, points[i].y);
     ctx.setLineDash([3, 3]);
     ctx.strokeStyle = "#2ecc71";
     ctx.lineWidth = 1.6;
     ctx.lineJoin = "round";
     ctx.lineCap = "round";
-    draw();
+    ctx.stroke();
   };
-  cards.forEach(({ player, cardY }) => {
-    const target = starterById[pairByIn[player.id]?.outId];
-    if (!target) return;
-    const dot = dotAt(cardY);
-    const spot = at(target);
-    const stop = lineStopAtCircle(dot.x, dot.y, spot.x, spot.y, rim);
-    const points = [{ x: dot.x, y: dot.y }, { x: stop.x, y: stop.y }];
-    routedLines.push(points);
-    if (points.elevated) elevatedLines.push(points);
-    else strokeRoute(points, false);
-  });
+  ctx.save();
+  sharePanelSubLines(panel, x, y, w, h).forEach(line => strokeRoute(line.points));
   ctx.restore();
   cards.forEach(({ player, cardY }) => {
     if (!starterById[pairByIn[player.id]?.outId]) return;
@@ -226,12 +227,6 @@ function paintQuarterPanel(ctx, x, y, w, h, panel) {
     ctx.fillText("Not planned", pitchX + pitchW / 2, pitchY + pitchH / 2);
     ctx.restore();
     return;
-  }
-
-  if (elevatedLines.length) {
-    ctx.save();
-    elevatedLines.forEach(points => strokeRoute(points, true));
-    ctx.restore();
   }
 
   starters.forEach(slot => {
@@ -343,8 +338,7 @@ export function paintFieldTile(canvas, { panel, caption, league, opponent, homeS
   ctx.font = "bold 12px Arial, sans-serif";
   ctx.fillText(`US  ${homeScore ?? 0}  :  ${awayScore ?? 0}  ${(opponent || "THEM").toUpperCase()}`, W / 2, 63);
 
-  // Paint at the old combined sheet's cell origin. The sub-line router snaps
-  // to a fixed 18/9 px lattice, so a different origin bends the same pairs.
+  // Paint at the old combined sheet's cell origin so a tile matches that panel.
   const slot = Math.max(0, (panel.quarter || 1) - 1);
   const px = 10 + (slot % 2) * 370;
   const py = 96 + Math.floor(slot / 2) * 440;

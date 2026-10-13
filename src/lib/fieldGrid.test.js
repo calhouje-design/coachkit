@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { scheduleHalfRotation, shareFieldSheet } from "./gameDay.js";
 import { decorateShareSheet } from "./afterSubs.js";
-import { fieldImageTiles, shareHelperText } from "./fieldGrid.js";
+import { fieldImageTiles, fieldImagesHeading, shareHelperText } from "./fieldGrid.js";
 
 const slots = ["GK", "LD", "RD", "LM", "RM", "CF"];
 const players = ["Ann", "Bea", "Cal", "Dee", "Eve", "Fay", "Gia", "Hal"].map((name, index) => ({
@@ -121,6 +121,13 @@ test("a halves game names start and after subs instead of H1_H1", () => {
     "CoachKit_Field_H2_After.png",
   ]);
   assert.deepEqual(tiles.map(tile => tile.half), ["start", "after", "start", "after"]);
+  assert.equal(fieldImagesHeading(tiles), "Field images · start and after subs");
+});
+
+test("field image headings name quarters as 1st and 2nd half", () => {
+  const tiles = fieldImageTiles(sheet({ subMode: true }));
+  assert.equal(fieldImagesHeading(tiles), "Field images · 1st half and 2nd half");
+  assert.equal(fieldImagesHeading(fieldImageTiles(sheet({ subMode: false }))), "Field images");
 });
 
 test("a full-mode H2 file is one lineup, not a 2nd-half split", () => {

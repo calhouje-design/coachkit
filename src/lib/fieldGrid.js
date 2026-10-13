@@ -58,6 +58,14 @@ export function fieldImageTiles(field) {
   return tiles;
 }
 
+/** Heading above the share and game-log field images. */
+export function fieldImagesHeading(tiles) {
+  const split = (tiles || []).some(tile => tile.half);
+  if (!split) return "Field images";
+  const halves = (tiles || []).some(tile => /^H\d+$/.test(tile.panel?.label || ""));
+  return halves ? "Field images · start and after subs" : "Field images · 1st half and 2nd half";
+}
+
 export function shareHelperText({ split = false, periodAbbrev = "Q" } = {}) {
   if (!split) return "Tap Save under any image to send it or add it to Photos.";
   if (periodAbbrev === "H") {

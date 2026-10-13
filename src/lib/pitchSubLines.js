@@ -127,36 +127,6 @@ function fieldRectKey(live) {
   ].join(",");
 }
 
-/**
- * End dot on the target circle, outside every other circle.
- * Search the perimeter from the incoming direction. `clear` is false when
- * every sample sits inside a neighbour; the caller then highlights the target.
- */
-export function endDotOnTarget(cx, cy, radius, fromX, fromY, others, dotRadius = 3.5) {
-  const dx = fromX - cx;
-  const dy = fromY - cy;
-  const len = Math.hypot(dx, dy) || 1;
-  const face = Math.atan2(dy, dx);
-  const r = Math.max(0, Number(radius) || 0);
-  const circles = (others || []).filter(other => Number.isFinite(other?.r) && other.r > 0);
-  const outside = (x, y, pad) => circles.every(other => (
-    Math.hypot(x - other.cx, y - other.cy) >= other.r + pad - 0.05
-  ));
-  const at = (angle) => ({ x: cx + Math.cos(angle) * r, y: cy + Math.sin(angle) * r });
-  const steps = 72;
-  for (const pad of [dotRadius, 0]) {
-    for (let i = 0; i <= steps; i += 1) {
-      const delta = (i / steps) * Math.PI;
-      const signs = i === 0 ? [0] : [1, -1];
-      for (let s = 0; s < signs.length; s += 1) {
-        const point = at(face + signs[s] * delta);
-        if (outside(point.x, point.y, pad)) return { x: point.x, y: point.y, clear: true };
-      }
-    }
-  }
-  return { x: cx + (dx / len) * r, y: cy + (dy / len) * r, clear: false };
-}
-
 /** Measure sub lines after the field layout signature changes, and when the pitch box itself resizes. */
 export function usePitchSubLines(pitchWrapRef, { shownPairs, lineupKey, quarter, swapSel, fieldLayout }) {
   const [subLines, setSubLines] = useState([]);

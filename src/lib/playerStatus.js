@@ -19,11 +19,15 @@ export function withoutReturnAt(player) {
 /**
  * The returner himself was marked Out or Injured, so the 2nd-half mark is cleared.
  * Pass the player after out/injured is set and before the mark is removed.
+ * A return in a quarter that has already been played is not announced: the chart
+ * for that quarter does not change, so naming it would be misleading.
  */
-export function backHalfStatusNotice(player, abbrev = "Q") {
+export function backHalfStatusNotice(player, abbrev = "Q", options = {}) {
   const record = player?.returnAt;
   const quarter = Number(record?.quarter);
   if (!record || record.half !== "back" || !quarter) return null;
+  const playing = options?.playingQuarter;
+  if (playing != null && quarter < Number(playing)) return null;
   const status = player.injured ? "Injured" : player.out ? "Out" : null;
   if (!status) return null;
   const name = String(player?.name || "This player").trim().split(/\s+/)[0] || "This player";

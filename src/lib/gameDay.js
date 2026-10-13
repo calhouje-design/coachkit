@@ -579,527 +579,6 @@ export function lineStopAtCircle(x1, y1, cx, cy, radius) {
   return { x: cx + (dx / len) * r, y: cy + (dy / len) * r };
 }
 
-function pointOnSegment(px, py, x1, y1, x2, y2) {
-  const dx = x2 - x1;
-  const dy = y2 - y1;
-  const len2 = dx * dx + dy * dy;
-  const t = len2 === 0 ? 0 : Math.max(0, Math.min(1, ((px - x1) * dx + (py - y1) * dy) / len2));
-  const x = x1 + t * dx;
-  const y = y1 + t * dy;
-  return { x, y, t, d: Math.hypot(px - x, py - y) };
-}
-
-function segmentsIntersect(ax, ay, bx, by, cx, cy, dx, dy) {
-  const den = (bx - ax) * (dy - cy) - (by - ay) * (dx - cx);
-  if (Math.abs(den) < 1e-9) return false;
-  const t = ((cx - ax) * (dy - cy) - (cy - ay) * (dx - cx)) / den;
-  const u = ((cx - ax) * (by - ay) - (cy - ay) * (bx - ax)) / den;
-  return t >= 0 && t <= 1 && u >= 0 && u <= 1;
-}
-
-function segmentDistance(x1, y1, x2, y2, x3, y3, x4, y4) {
-  if (segmentsIntersect(x1, y1, x2, y2, x3, y3, x4, y4)) return 0;
-  return Math.min(
-    pointOnSegment(x1, y1, x3, y3, x4, y4).d,
-    pointOnSegment(x2, y2, x3, y3, x4, y4).d,
-    pointOnSegment(x3, y3, x1, y1, x2, y2).d,
-    pointOnSegment(x4, y4, x1, y1, x2, y2).d,
-  );
-}
-
-function segmentRectDistance(x1, y1, x2, y2, rect) {
-  const rx = rect.x;
-  const ry = rect.y;
-  const rw = rect.w;
-  const rh = rect.h;
-  const inside = (x, y) => x >= rx && x <= rx + rw && y >= ry && y <= ry + rh;
-  if (inside(x1, y1) || inside(x2, y2)) return 0;
-  const edges = [
-    [rx, ry, rx + rw, ry],
-    [rx + rw, ry, rx + rw, ry + rh],
-    [rx + rw, ry + rh, rx, ry + rh],
-    [rx, ry + rh, rx, ry],
-  ];
-  return Math.min(...edges.map(edge => segmentDistance(x1, y1, x2, y2, edge[0], edge[1], edge[2], edge[3])));
-}
-
-function isCircleObstacle(obstacle) {
-  return Number.isFinite(obstacle?.r);
-}
-
-/** Negative when the segment enters the keep-out around a circle or a name box. */
-function obstacleClearance(x1, y1, x2, y2, obstacle, gap) {
-  if (isCircleObstacle(obstacle)) {
-    return pointOnSegment(obstacle.cx, obstacle.cy, x1, y1, x2, y2).d - obstacle.r - gap;
-  }
-  const box = {
-    x: obstacle.x - gap,
-    y: obstacle.y - gap,
-    w: obstacle.w + gap * 2,
-    h: obstacle.h + gap * 2,
-  };
-  const dist = segmentRectDistance(x1, y1, x2, y2, box);
-  return dist === 0 ? -1 : dist;
-}
-
-function segmentBlocked(x1, y1, x2, y2, obstacle, gap) {
-  return obstacleClearance(x1, y1, x2, y2, obstacle, gap) < -0.05;
-}
-
-function pathLength(points) {
-  let length = 0;
-  for (let i = 1; i < points.length; i += 1) {
-    length += Math.hypot(points[i].x - points[i - 1].x, points[i].y - points[i - 1].y);
-  }
-  return length;
-}
-
-function insideRect(x, y, rect, pad = 0) {
-  return x >= rect.x - pad && y >= rect.y - pad && x <= rect.x + rect.w + pad && y <= rect.y + rect.h + pad;
-}
-
-function pointInKeepOut(x, y, obstacle, gap) {
-  if (isCircleObstacle(obstacle)) {
-    return Math.hypot(x - obstacle.cx, y - obstacle.cy) < obstacle.r + gap - 0.05;
-  }
-  return x >= obstacle.x - gap && x <= obstacle.x + obstacle.w + gap
-    && y >= obstacle.y - gap && y <= obstacle.y + obstacle.h + gap;
-}
-
-/** The last few pixels may enter a keep-out only when the destination already sits in it. */
-function segmentHits(x1, y1, x2, y2, obstacle, gap, end) {
-  let ax = x1;
-  let ay = y1;
-  let bx = x2;
-  let by = y2;
-  if (end && pointInKeepOut(end.x, end.y, obstacle, gap)) {
-    const arrive = gap + 1;
-    const len = Math.hypot(x2 - x1, y2 - y1);
-    const endIsB = Math.hypot(x2 - end.x, y2 - end.y) < 0.05;
-    const endIsA = Math.hypot(x1 - end.x, y1 - end.y) < 0.05;
-    if ((endIsA || endIsB) && len <= arrive + 0.01) return false;
-    if (endIsB && len > arrive) {
-      const t = (len - arrive) / len;
-      bx = x1 + (x2 - x1) * t;
-      by = y1 + (y2 - y1) * t;
-    } else if (endIsA && len > arrive) {
-      const t = (len - arrive) / len;
-      ax = x2 + (x1 - x2) * t;
-      ay = y2 + (y1 - y2) * t;
-    }
-  }
-  return segmentBlocked(ax, ay, bx, by, obstacle, gap);
-}
-
-function properCrossing(ax, ay, bx, by, cx, cy, dx, dy) {
-  const den = (bx - ax) * (dy - cy) - (by - ay) * (dx - cx);
-  if (Math.abs(den) < 1e-9) return false;
-  const t = ((cx - ax) * (dy - cy) - (cy - ay) * (dx - cx)) / den;
-  const u = ((cx - ax) * (by - ay) - (cy - ay) * (bx - ax)) / den;
-  return t > 0.02 && t < 0.98 && u > 0.02 && u < 0.98;
-}
-
-function crossingCount(points, lines) {
-  if (!lines || !lines.length) return 0;
-  let count = 0;
-  for (let i = 1; i < points.length; i += 1) {
-    const a = points[i - 1];
-    const b = points[i];
-    lines.forEach(line => {
-      for (let j = 1; j < line.length; j += 1) {
-        const c = line[j - 1];
-        const d = line[j];
-        if (properCrossing(a.x, a.y, b.x, b.y, c.x, c.y, d.x, d.y)) count += 1;
-      }
-    });
-  }
-  return count;
-}
-
-/** How far two roughly parallel segments run within 8px of each other. */
-function parallelOverlap(ax, ay, bx, by, cx, cy, dx, dy) {
-  const abx = bx - ax;
-  const aby = by - ay;
-  const cdx = dx - cx;
-  const cdy = dy - cy;
-  const ab = Math.hypot(abx, aby);
-  const cd = Math.hypot(cdx, cdy);
-  if (ab < 1 || cd < 1) return 0;
-  const align = Math.abs(abx * cdx + aby * cdy) / (ab * cd);
-  if (align < 0.85) return 0;
-  if (segmentDistance(ax, ay, bx, by, cx, cy, dx, dy) > 8) return 0;
-  const ux = abx / ab;
-  const uy = aby / ab;
-  const proj = (x, y) => (x - ax) * ux + (y - ay) * uy;
-  let b0 = proj(cx, cy);
-  let b1 = proj(dx, dy);
-  if (b0 > b1) {
-    const swap = b0;
-    b0 = b1;
-    b1 = swap;
-  }
-  return Math.max(0, Math.min(ab, b1) - Math.max(0, b0));
-}
-
-function routeParallelCost(points, lines) {
-  if (!lines || !lines.length) return 0;
-  let cost = 0;
-  for (let i = 1; i < points.length; i += 1) {
-    const a = points[i - 1];
-    const b = points[i];
-    lines.forEach(line => {
-      for (let j = 1; j < line.length; j += 1) {
-        const c = line[j - 1];
-        const d = line[j];
-        cost += parallelOverlap(a.x, a.y, b.x, b.y, c.x, c.y, d.x, d.y);
-      }
-    });
-  }
-  return cost;
-}
-
-function firstDotHits(points, dots) {
-  if (!dots || !dots.length || points.length < 2) return 0;
-  const a = points[0];
-  const b = points[1];
-  let hits = 0;
-  dots.forEach(dot => {
-    if (!dot || !Number.isFinite(dot.x) || !Number.isFinite(dot.y)) return;
-    if (pointOnSegment(dot.x, dot.y, a.x, a.y, b.x, b.y).d < 10) hits += 1;
-  });
-  return hits;
-}
-
-function betterRoute(next, prev) {
-  if (!next) return false;
-  if (!prev) return true;
-  if (next.dotHits !== prev.dotHits) return next.dotHits < prev.dotHits;
-  if (next.bends !== prev.bends) return next.bends < prev.bends;
-  if (next.crossings !== prev.crossings) return next.crossings < prev.crossings;
-  return next.length + next.parallel < prev.length + prev.parallel;
-}
-
-function inSegmentBox(point, start, end, margin) {
-  const minX = Math.min(start.x, end.x) - margin;
-  const maxX = Math.max(start.x, end.x) + margin;
-  const minY = Math.min(start.y, end.y) - margin;
-  const maxY = Math.max(start.y, end.y) + margin;
-  return point.x >= minX && point.x <= maxX && point.y >= minY && point.y <= maxY;
-}
-
-function circleSamples(obstacle, gap) {
-  const rad = obstacle.r + gap + 1;
-  const points = [];
-  for (let i = 0; i < 8; i += 1) {
-    const angle = (Math.PI * 2 * i) / 8;
-    points.push({ x: obstacle.cx + Math.cos(angle) * rad, y: obstacle.cy + Math.sin(angle) * rad });
-  }
-  return points;
-}
-
-function rectSamples(obstacle, gap) {
-  const left = obstacle.x - gap - 1;
-  const top = obstacle.y - gap - 1;
-  const right = obstacle.x + obstacle.w + gap + 1;
-  const bottom = obstacle.y + obstacle.h + gap + 1;
-  return [
-    { x: left, y: top },
-    { x: right, y: top },
-    { x: right, y: bottom },
-    { x: left, y: bottom },
-  ];
-}
-
-function frameSamples(bounds) {
-  if (!bounds || !(bounds.w > 0) || !(bounds.h > 0)) return [];
-  const inset = 10;
-  // Half a pixel inside the inset keeps an entering segment off the bench edge
-  // in the 32-step clearance samples.
-  const left = bounds.x + inset + 0.5;
-  const right = bounds.x + bounds.w - inset - 0.5;
-  const top = bounds.y + inset + 0.5;
-  const bottom = bounds.y + bounds.h - inset - 0.5;
-  if (right <= left || bottom <= top) return [];
-  const points = [];
-  const steps = 4;
-  for (let i = 0; i <= steps; i += 1) {
-    const t = i / steps;
-    points.push({ x: left + (right - left) * t, y: top });
-    points.push({ x: left + (right - left) * t, y: bottom });
-    if (i !== 0 && i !== steps) {
-      points.push({ x: left, y: top + (bottom - top) * t });
-      points.push({ x: right, y: top + (bottom - top) * t });
-    }
-  }
-  return points;
-}
-
-function dedupePoints(points) {
-  const kept = [];
-  points.forEach(point => {
-    if (kept.some(other => Math.hypot(other.x - point.x, other.y - point.y) < 1.5)) return;
-    kept.push(point);
-  });
-  return kept;
-}
-
-function circleBlocks(x1, y1, x2, y2, cx, cy, rad) {
-  const minX = x1 < x2 ? x1 : x2;
-  const maxX = x1 > x2 ? x1 : x2;
-  if (cx < minX - rad || cx > maxX + rad) return false;
-  const minY = y1 < y2 ? y1 : y2;
-  const maxY = y1 > y2 ? y1 : y2;
-  if (cy < minY - rad || cy > maxY + rad) return false;
-  const dx = x2 - x1;
-  const dy = y2 - y1;
-  const len2 = dx * dx + dy * dy;
-  let t = 0;
-  if (len2 > 0) {
-    t = ((cx - x1) * dx + (cy - y1) * dy) / len2;
-    if (t < 0) t = 0;
-    else if (t > 1) t = 1;
-  }
-  const px = x1 + t * dx - cx;
-  const py = y1 + t * dy - cy;
-  return px * px + py * py < rad * rad;
-}
-
-function rectBlocks(x1, y1, x2, y2, rx, ry, rw, rh) {
-  const right = rx + rw;
-  const bottom = ry + rh;
-  if (x1 >= rx && x1 <= right && y1 >= ry && y1 <= bottom) return true;
-  if (x2 >= rx && x2 <= right && y2 >= ry && y2 <= bottom) return true;
-  return segmentsIntersect(x1, y1, x2, y2, rx, ry, right, ry)
-    || segmentsIntersect(x1, y1, x2, y2, right, ry, right, bottom)
-    || segmentsIntersect(x1, y1, x2, y2, right, bottom, rx, bottom)
-    || segmentsIntersect(x1, y1, x2, y2, rx, bottom, rx, ry);
-}
-
-/**
- * Clear sub line, at most two bends. Prefer a route within 1.6× the straight
- * distance that stays off other lines and other bench dots. A longer clear
- * route is kept only when nothing shorter gets through. A detour past 2.8×
- * falls back to the straight line. When that straight line would cross two or
- * more circles, a clear route up to 3.5× is kept before the outline.
- */
-export function routeClearOfObstacles(x1, y1, x2, y2, obstacles = [], gap = 3, options = {}) {
-  const keep = Number.isFinite(gap) ? gap : 3;
-  const opts = options || {};
-  const start = { x: x1, y: y1 };
-  const end = { x: x2, y: y2 };
-  const straight = Math.hypot(end.x - start.x, end.y - start.y) || 1;
-  const lengthLimit = straight * 1.6;
-  // The outlined fallback is a 5px stroke. A circle counts as crossed when that
-  // stroke would paint over it, not only when the centerline enters the circle.
-  const straightCircleHits = (obstacles || []).filter(obstacle => (
-    isCircleObstacle(obstacle) && obstacle.r > 0
-    && circleBlocks(start.x, start.y, end.x, end.y, obstacle.cx, obstacle.cy, obstacle.r + 2.5)
-  )).length;
-  const normalLimit = straight * 2.8;
-  const wideLimit = straight * 3.5;
-  const corridor = straightCircleHits >= 2 ? 168 : 112;
-  const blocks = (obstacles || []).filter(obstacle => (
-    isCircleObstacle(obstacle) ? obstacle.r > 0 : obstacle.w > 0 && obstacle.h > 0
-  ));
-  if (opts.badge && opts.badge.w > 0 && opts.badge.h > 0) blocks.push(opts.badge);
-  const bounds = opts.bounds && opts.bounds.w > 0 && opts.bounds.h > 0 ? opts.bounds : null;
-  const bench = opts.bench && opts.bench.w > 0 && opts.bench.h > 0 ? opts.bench : null;
-  const dots = Array.isArray(opts.dots) ? opts.dots : [];
-
-  const pack = (points, elevated) => {
-    const route = points.map(point => ({ x: point.x, y: point.y }));
-    route.elevated = elevated;
-    return route;
-  };
-  const usable = (route) => route && route.dotHits === 0 && route.parallel < 40;
-
-  const attempt = (keepOut, lattice) => {
-    const endInside = blocks.map(obstacle => pointInKeepOut(end.x, end.y, obstacle, keepOut));
-    const hitsObstacle = (ax, ay, bx, by) => {
-      const arrives = (Math.abs(bx - end.x) < 0.05 && Math.abs(by - end.y) < 0.05)
-        || (Math.abs(ax - end.x) < 0.05 && Math.abs(ay - end.y) < 0.05);
-      for (let i = 0; i < blocks.length; i += 1) {
-        const obstacle = blocks[i];
-        if (isCircleObstacle(obstacle)) {
-          const rad = obstacle.r + keepOut;
-          if (arrives && endInside[i]) {
-            if (segmentHits(ax, ay, bx, by, obstacle, keepOut, end)) return true;
-          } else if (circleBlocks(ax, ay, bx, by, obstacle.cx, obstacle.cy, rad - 0.05)) return true;
-        } else {
-          const rx = obstacle.x - keepOut;
-          const ry = obstacle.y - keepOut;
-          const rw = obstacle.w + keepOut * 2;
-          const rh = obstacle.h + keepOut * 2;
-          if (arrives && endInside[i]) {
-            if (segmentHits(ax, ay, bx, by, obstacle, keepOut, end)) return true;
-          } else if (rectBlocks(ax, ay, bx, by, rx, ry, rw, rh)) return true;
-        }
-      }
-      return false;
-    };
-    const leavesField = (ax, ay, bx, by) => {
-      if (!bounds) return false;
-      const aIn = insideRect(ax, ay, bounds, 0.6);
-      const bIn = insideRect(bx, by, bounds, 0.6);
-      if (aIn && bIn) return false;
-      const aStart = Math.hypot(ax - start.x, ay - start.y) < 0.01;
-      const bStart = Math.hypot(bx - start.x, by - start.y) < 0.01;
-      if (aStart && !aIn && bIn) return false;
-      if (bStart && !bIn && aIn) return false;
-      return true;
-    };
-    const throughBench = (ax, ay, bx, by) => {
-      if (!bench) return false;
-      const aIn = insideRect(ax, ay, bench, 0);
-      const bIn = insideRect(bx, by, bench, 0);
-      const aStart = Math.hypot(ax - start.x, ay - start.y) < 0.01;
-      const bStart = Math.hypot(bx - start.x, by - start.y) < 0.01;
-      if (aStart && aIn && !bIn) return false;
-      if (bStart && bIn && !aIn) return false;
-      if (aIn || bIn) return true;
-      return rectBlocks(ax, ay, bx, by, bench.x, bench.y, bench.w, bench.h);
-    };
-    const segmentOpen = (a, b) => !hitsObstacle(a.x, a.y, b.x, b.y) && !leavesField(a.x, a.y, b.x, b.y) && !throughBench(a.x, a.y, b.x, b.y);
-    const pointFree = (point) => {
-      if (bounds && !insideRect(point.x, point.y, bounds, 0.4)) return false;
-      if (bench && insideRect(point.x, point.y, bench, 0)) return false;
-      if (Math.hypot(point.x - start.x, point.y - start.y) < 1.5) return false;
-      if (Math.hypot(point.x - end.x, point.y - end.y) < 1.5) return false;
-      return !blocks.some(obstacle => pointInKeepOut(point.x, point.y, obstacle, keepOut));
-    };
-    const samplesFor = (list) => dedupePoints(list.flatMap(obstacle => (
-      isCircleObstacle(obstacle) ? circleSamples(obstacle, keepOut) : rectSamples(obstacle, keepOut)
-    )).concat(frameSamples(bounds)).filter(point => pointFree(point) && inSegmentBox(point, start, end, corridor)));
-    const latticePoints = () => {
-      // The coarse grid misses open-field bends on a crowded 11v11 row.
-      // Use it only after the straight line would outline across two circles,
-      // so routes that already clear within 2.8× stay on the same samples.
-      const wide = lattice === "wide";
-      const margin = wide ? 96 : 48;
-      const step = wide ? 9 : 18;
-      const minX = Math.min(start.x, end.x) - margin;
-      const maxX = Math.max(start.x, end.x) + margin;
-      const minY = Math.min(start.y, end.y) - margin;
-      const maxY = Math.max(start.y, end.y) + margin;
-      const points = [];
-      const x0 = Math.ceil(minX / step) * step;
-      const y0 = Math.ceil(minY / step) * step;
-      for (let x = x0; x <= maxX; x += step) {
-        for (let y = y0; y <= maxY; y += step) {
-          if (bounds && !insideRect(x, y, bounds, -10)) continue;
-          const point = { x, y };
-          if (!pointFree(point)) continue;
-          points.push(point);
-        }
-      }
-      return points;
-    };
-    const search = (waypoints) => {
-      const nodes = [start, ...waypoints, end];
-      const last = nodes.length - 1;
-      const open = Array.from({ length: nodes.length }, () => new Uint8Array(nodes.length));
-      const sees = (i, j) => {
-        const cached = open[i][j];
-        if (cached) return cached === 1;
-        const clear = segmentOpen(nodes[i], nodes[j]);
-        open[i][j] = clear ? 1 : 2;
-        open[j][i] = open[i][j];
-        return clear;
-      };
-      let short = null;
-      let long = null;
-      const consider = (indexes) => {
-        const points = indexes.map(index => nodes[index]);
-        const score = {
-          bends: points.length - 2,
-          crossings: crossingCount(points, opts.lines),
-          parallel: routeParallelCost(points, opts.lines),
-          dotHits: firstDotHits(points, dots),
-          length: pathLength(points),
-          points,
-        };
-        if (score.length <= lengthLimit + 0.5) {
-          if (betterRoute(score, short)) short = score;
-        } else if (betterRoute(score, long)) long = score;
-      };
-      if (segmentOpen(start, end)) consider([0, last]);
-      const fromStart = [];
-      const toEnd = [];
-      for (let i = 1; i < last; i += 1) {
-        if (sees(0, i)) fromStart.push(i);
-        if (sees(i, last)) toEnd.push(i);
-      }
-      const toEndSet = new Set(toEnd);
-      fromStart.forEach(i => {
-        if (toEndSet.has(i)) consider([0, i, last]);
-      });
-      fromStart.forEach(i => {
-        toEnd.forEach(j => {
-          if (i !== j && sees(i, j)) consider([0, i, j, last]);
-        });
-      });
-      return { short, long };
-    };
-    const blocking = [];
-    blocks.forEach(obstacle => {
-      if (isCircleObstacle(obstacle)) {
-        if (circleBlocks(start.x, start.y, end.x, end.y, obstacle.cx, obstacle.cy, obstacle.r + keepOut - 0.05)) blocking.push(obstacle);
-      } else if (rectBlocks(start.x, start.y, end.x, end.y, obstacle.x - keepOut, obstacle.y - keepOut, obstacle.w + keepOut * 2, obstacle.h + keepOut * 2)) {
-        blocking.push(obstacle);
-      }
-    });
-    const narrow = search(samplesFor(blocking.length ? blocking : blocks));
-    let long = narrow.long;
-    if (narrow.short && !lattice) return narrow;
-    if (blocking.length && blocking.length < blocks.length) {
-      const wider = search(samplesFor(blocks));
-      if (wider.short && !lattice) return wider;
-      if (!narrow.short) narrow.short = wider.short;
-      else if (betterRoute(wider.short, narrow.short)) narrow.short = wider.short;
-      if (betterRoute(wider.long, long)) long = wider.long;
-    }
-    if (lattice) {
-      const seeded = search(dedupePoints(samplesFor(blocks).concat(latticePoints())));
-      if (betterRoute(seeded.short, narrow.short)) narrow.short = seeded.short;
-      if (betterRoute(seeded.long, long)) long = seeded.long;
-    }
-    return { short: narrow.short, long };
-  };
-
-  const gaps = [];
-  const addGap = (value) => {
-    if (value < 0 || value > keep || gaps.includes(value)) return;
-    gaps.push(value);
-  };
-  addGap(keep);
-  addGap(1);
-  addGap(0);
-  const within = (route, limit) => route && route.length <= limit + 0.5;
-  for (let i = 0; i < gaps.length; i += 1) {
-    const found = attempt(gaps[i], false);
-    if (usable(found.short)) return pack(found.short.points, false);
-    const clear = found.short || found.long;
-    if (within(clear, normalLimit)) {
-      const seeded = attempt(gaps[i], true);
-      if (usable(seeded.short)) return pack(seeded.short.points, false);
-      const kept = betterRoute(seeded.short, clear) && within(seeded.short, normalLimit) ? seeded.short : clear;
-      return pack(kept.points, false);
-    }
-    // Circle samples can only offer a loop past 2.8×. When the straight
-    // fallback would cut two or more circles, search a finer open-field
-    // grid and keep a clear route up to 3.5× before outlining.
-    if (straightCircleHits >= 2) {
-      const seeded = attempt(gaps[i], "wide");
-      if (usable(seeded.short)) return pack(seeded.short.points, false);
-      let best = within(clear, wideLimit) ? clear : null;
-      [seeded.short, seeded.long].forEach(route => {
-        if (within(route, wideLimit) && betterRoute(route, best)) best = route;
-      });
-      if (best) return pack(best.points, false);
-    }
-  }
-  return pack([start, end], true);
-}
 
 function byMinutesThenName(minutesById, direction) {
   return (a, b) => {
@@ -3215,12 +2694,6 @@ function droppedKickoffEntered(lineup, segments, quarter, returnerIds, kickoff =
   ));
 }
 
-function restoreDroppedKickoffHalf(lineup, segments, quarter, returnerIds, kickoff = null) {
-  const entered = droppedKickoffEntered(lineup, segments, quarter, returnerIds, kickoff);
-  if (!entered.length) return segments;
-  return writePeriodSegment(segments, entered[0], quarter, null);
-}
-
 /**
  * A re-planned lineup already brings this returner on at the half.
  * The donor is not the goalkeeper, and every left mark has its entered partner.
@@ -3377,9 +2850,10 @@ export function revalidateBackHalfMarks({
       const on = onFieldPlayerCount(lineup);
       const pastHalf = Number(pastHalfQuarter) === q;
       const sheetH1 = halfOwnerList(lineup, nextSegments, q).h1.length;
+      const outLeft = offSheetLeftExtras(players, lineup, nextSegments, q);
       // After the half, the Out or Injured player's own "left" is the first half
       // he already played. It stays off the sheet and still owns that half.
-      const playedLeft = pastHalf ? offSheetLeftExtras(players, lineup, nextSegments, q) : 0;
+      const playedLeft = pastHalf ? outLeft : 0;
       if (sheetH1 + playedLeft >= on) continue;
       const onSheet = sheetIdSet(lineup);
       const pulledLeft = (lineup.starters || []).some(slot => (
@@ -3397,10 +2871,12 @@ export function revalidateBackHalfMarks({
         return mark !== "left" && mark !== "entered";
       });
       // A regenerated plan can be one half short and still have an unmarked spare.
-      // That plan matches main, even when the Out player himself keeps a "left".
+      // That plan matches main. A live Out before the half is different: the
+      // player coming on can take the open first half, even when a spare sits.
       // An Out that pulls the sheet leaves no spare, or it leaves the "left"
       // player standing on the field.
-      if (!pulledLeft && !offLeft && spare) continue;
+      const preHalfOut = !pastHalf && outLeft > 0;
+      if (!pulledLeft && !offLeft && spare && !preHalfOut) continue;
       nextSegments = clearOnFieldLeft(lineup, nextSegments, q);
       // Before the half, the player coming on now can take the open first half.
       nextSegments = repairShortHalf(lineup, nextSegments, q, [], players, { clearEntered: !pastHalf });
@@ -3676,35 +3152,49 @@ export function planAvailability({
   }
   const currentGk = goalkeeperId(lineups?.[start]);
   const lockGoalkeeperId = livePeriod && currentGk && currentGk !== absentId ? currentGk : null;
-  if (kind === "absent" && livePeriod && absentId) {
-    const person = (players || []).find(player => player?.id === absentId);
-    const before = lineups?.[start] || lineups?.[String(start)];
-    if (person && before && !firstHalfRecordFor(person, start)) {
-      // A second absence in this period must not re-read the replanned sheet.
-      // The first live absence already recorded who owned the first half at kickoff.
-      // A later quarter records its own kickoff. The old set is not reused.
-      const recorded = kickoffSetForQuarter(players, start);
-      person.firstHalfQuarter = start;
-      person.firstHalfIds = recorded ? [...recorded] : firstHalfOwnerIds(before, segments, start);
-    }
-  }
-  return regenerateForAbsence({
-    players,
-    slots,
-    slotsByQuarter,
-    lineups,
-    segments,
-    absentId,
-    fromQuarter: start,
-    returnQuarter: kind === "return" ? start : null,
-    minHalves,
-    subMode,
-    rate,
-    totalQuarters,
-    lockGoalkeeperId,
-    livePeriod: !!livePeriod && kind === "return",
-    protectedIds,
-  });
+  // A second absence in this period must not re-read the replanned sheet.
+  // The first live absence already recorded who owned the first half at kickoff.
+  // A later quarter records its own kickoff. The old set is not reused.
+  const roster = kind === "absent" && livePeriod && absentId
+    ? withFirstHalfRecord(players, absentId, start, lineups, segments)
+    : players;
+  return {
+    ...regenerateForAbsence({
+      players: roster,
+      slots,
+      slotsByQuarter,
+      lineups,
+      segments,
+      absentId,
+      fromQuarter: start,
+      returnQuarter: kind === "return" ? start : null,
+      minHalves,
+      subMode,
+      rate,
+      totalQuarters,
+      lockGoalkeeperId,
+      livePeriod: !!livePeriod && kind === "return",
+      protectedIds,
+    }),
+    players: roster,
+  };
+}
+
+/**
+ * Copy the absent player and stamp who owned the first half at kickoff.
+ * The caller's player object is left unchanged.
+ */
+function withFirstHalfRecord(players, absentId, start, lineups, segments) {
+  const person = (players || []).find(player => player?.id === absentId);
+  const before = lineups?.[start] || lineups?.[String(start)];
+  if (!person || !before || firstHalfRecordFor(person, start)) return players;
+  const recorded = kickoffSetForQuarter(players, start);
+  const stamped = {
+    ...person,
+    firstHalfQuarter: start,
+    firstHalfIds: recorded ? [...recorded] : firstHalfOwnerIds(before, segments, start),
+  };
+  return (players || []).map(player => (player?.id === absentId ? stamped : player));
 }
 
 /** One Season game-log row. Strategy rides on the game the app already stores. */

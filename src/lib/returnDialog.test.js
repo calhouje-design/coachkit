@@ -1,6 +1,7 @@
 import "./domSetup.js";
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import {
   applyBenchRotation,
   backHalfDonorAvailable,
@@ -28,6 +29,7 @@ import {
   revalidateBackHalfMarks,
   backHalfStripNotice,
   clearPlayerSegmentsFrom,
+  clearFirstHalfRecords,
   nextBackHalfNotice,
   scheduleHalfRotation,
   scheduleWholeGame,
@@ -1542,7 +1544,7 @@ function injureStarter(players, lineups, segments, id, subMode, quarter = 2, slo
     livePeriod: true,
   });
   const replacedBy = vacatedSpotHolder(lineups[quarter], gone.lineups[quarter], id);
-  const injured = absent.map(player => (
+  const injured = (gone.players || absent).map(player => (
     player.id === id ? { ...player, replacedBy } : player
   ));
   return {
@@ -2361,8 +2363,18 @@ function halvesWithOffSheet(players, lineup, segments, quarter) {
   return owners.h1 + owners.h2 + extra;
 }
 
-function jaxonOutSheet(pastHalf) {
+function jaxonOutSheet(pastHalf, withSpare = false) {
   const players = namedSeven();
+  if (withSpare) {
+    players.push({
+      id: "p8",
+      name: "Trey",
+      number: "8",
+      positions: ["GK", "LD", "RD", "LM", "RM", "CF"],
+      injured: false,
+      out: false,
+    });
+  }
   const by = Object.fromEntries(players.map(player => [player.name, player]));
   const lineup = {
     starters: [
@@ -2373,7 +2385,7 @@ function jaxonOutSheet(pastHalf) {
       { pos: "RM", player: by.John },
       { pos: "CF", player: by.Henry },
     ],
-    bench: [by.Remi],
+    bench: withSpare ? [by.Remi, by.Trey] : [by.Remi],
   };
   const lineups = { 1: lineup, 2: lineup, 3: lineup, 4: lineup };
   let segments = noteSubSegment({}, by.Sean.id, 1, "entered");
@@ -2415,6 +2427,26 @@ test("marking a field player Out before the half can credit the player who comes
   assert.equal(segmentAt(checked.segments, by.Jaxon.id, 1), "left");
   assert.equal(segmentAt(checked.segments, by.Sean.id, 1) == null, true);
   assert.equal(halvesWithOffSheet(checked.players, checked.lineups[1], checked.segments, 1), 13);
+});
+
+test("an 8-player pre-half Out credits the player who comes on when a spare sits", () => {
+  const { by, incoming, checked } = jaxonOutSheet(false, true);
+  assert.equal(incoming, by.Remi.id);
+  assert.equal(segmentAt(checked.segments, by.Remi.id, 1) == null, true);
+  assert.equal(segmentAt(checked.segments, by.Jaxon.id, 1), "left");
+  assert.equal(segmentAt(checked.segments, by.Sean.id, 1) == null, true);
+  assert.equal(segmentAt(checked.segments, by.Trey.id, 1) == null, true);
+  assert.equal((checked.lineups[1].bench || []).some(player => player.id === by.Trey.id), true);
+  assert.equal(halvesWithOffSheet(checked.players, checked.lineups[1], checked.segments, 1), 13);
+});
+
+test("an 8-player post-half Out still leaves the 2nd-half sub without a first half", () => {
+  const { by, incoming, checked } = jaxonOutSheet(true, true);
+  assert.equal(incoming, by.Remi.id);
+  assert.equal(segmentAt(checked.segments, by.Sean.id, 1), "entered");
+  assert.equal(segmentAt(checked.segments, by.Remi.id, 1) == null, true);
+  assert.equal(segmentAt(checked.segments, by.Jaxon.id, 1), "left");
+  assert.equal(halvesWithOffSheet(checked.players, checked.lineups[1], checked.segments, 1), 12);
 });
 
 test("a short injury return restores the kickoff first half, not a bench player who sat", () => {
@@ -3097,4 +3129,106 @@ test("a second game does not reuse the previous game's firstHalfIds", () => {
   assert.deepEqual(kept, fresh);
   assert.equal(kept.p4, "10");
   assert.equal(kept.p6, "01");
+});
+
+test("planAvailability does not write the kickoff record onto the caller's player", () => {
+  const players = namedRoster([
+    "John Smith", "Wes Johnson", "Jaxon Williams", "Remi Brown", "Sean Jones",
+    "Henry Davis", "Jude Garcia", "Trey Miller",
+  ]);
+  const opened = openSheet(players, true, 1);
+  const id = "p8";
+  const absent = players.map(player => (
+    player.id === id
+      ? { ...player, injured: true, out: false, midGameInjury: true, injuredInQuarter: 1, returnQuarter: null }
+      : player
+  ));
+  const caller = absent.find(player => player.id === id);
+  const gone = planAvailability({
+    autoRegen: true, kind: "absent", players: absent, absentId: id, quarter: 1,
+    lineups: opened.lineups, segments: opened.segments, slots: SLOTS, subMode: true,
+    minHalves: 4, totalQuarters: 4, livePeriod: true,
+  });
+  assert.equal(caller.firstHalfIds, undefined);
+  assert.equal(Object.hasOwn(caller, "firstHalfQuarter"), false);
+  const stamped = gone.players.find(player => player.id === id);
+  assert.notEqual(stamped, caller);
+  assert.ok(stamped.firstHalfIds?.length);
+  assert.equal(stamped.firstHalfQuarter, 1);
+});
+
+test("a kickoff record with no quarter is ignored", () => {
+  const players = namedRoster([
+    "John Smith", "Wes Johnson", "Jaxon Williams", "Remi Brown", "Sean Jones",
+    "Henry Davis", "Jude Garcia", "Trey Miller", "Maddox Anderson", "Leo Martinez",
+  ]);
+  const opened = openSheet(players, true, 1);
+  const id = "p8";
+  const first = injureStarter(players, opened.lineups, opened.segments, id, true, 1);
+  const returned = returnToGame({
+    players: first.players, playerId: id, quarter: 1, half: "back",
+    lineups: first.lineups, segments: first.segments, slots: SLOTS, subMode: true,
+    minHalves: 4, totalQuarters: 4, livePeriod: true,
+  });
+  const carried = revalidateBackHalfMarks({
+    players: returned.players, lineups: returned.lineups, segments: returned.segments,
+    fromQuarter: 2, totalQuarters: 4,
+  });
+  const stale = carried.players.map(player => {
+    if (player.id !== id) return player;
+    const next = { ...player, firstHalfIds: ["not-a-player"] };
+    delete next.firstHalfQuarter;
+    return next;
+  });
+  assert.deepEqual(stale.find(player => player.id === id).firstHalfIds, ["not-a-player"]);
+  assert.equal(stale.find(player => player.id === id).firstHalfQuarter, undefined);
+  const other = (carried.lineups[1]?.starters || []).find(slot => (
+    slot.player && slot.player.id !== id && !isGkPosition(slot.pos)
+  )).player.id;
+  const fromStale = injureStarter(stale, carried.lineups, carried.segments, other, true, 1);
+  const fromFresh = injureStarter(withoutFirstHalfRecord(carried.players), carried.lineups, carried.segments, other, true, 1);
+  const stamped = fromStale.players.find(player => player.id === other).firstHalfIds;
+  assert.deepEqual(stamped, fromFresh.players.find(player => player.id === other).firstHalfIds);
+  assert.equal(stamped.includes("not-a-player"), false);
+  const kept = liveBackHalfThenBenchOut(stale, opened.lineups, opened.segments, id, 1);
+  const fresh = liveBackHalfThenBenchOut(withoutFirstHalfRecord(carried.players), opened.lineups, opened.segments, id, 1);
+  assert.ok(kept && fresh);
+  assert.deepEqual(kept, fresh);
+});
+
+test("clearFirstHalfRecords drops a same-quarter kickoff record before the next game", () => {
+  const app = readFileSync(new URL("../App.jsx", import.meta.url), "utf8");
+  assert.match(app, /decision\.resetClock \? clearFirstHalfRecords\(players\) : players/);
+  const players = namedRoster([
+    "John Smith", "Wes Johnson", "Jaxon Williams", "Remi Brown", "Sean Jones",
+    "Henry Davis", "Jude Garcia", "Trey Miller",
+  ]);
+  const opened = openSheet(players, true, 1);
+  const id = "p8";
+  const first = injureStarter(players, opened.lineups, opened.segments, id, true, 1);
+  const returned = returnToGame({
+    players: first.players, playerId: id, quarter: 1, half: "back",
+    lineups: first.lineups, segments: first.segments, slots: SLOTS, subMode: true,
+    minHalves: 4, totalQuarters: 4, livePeriod: true,
+  });
+  const carried = revalidateBackHalfMarks({
+    players: returned.players, lineups: returned.lineups, segments: returned.segments,
+    fromQuarter: 2, totalQuarters: 4,
+  });
+  const avail = carried.players.map(player => {
+    const next = { ...player, injured: false, out: false, midGameInjury: false, returnQuarter: null };
+    delete next.returnAt;
+    delete next.replacedBy;
+    return next;
+  });
+  assert.equal(avail.find(player => player.id === id).firstHalfQuarter, 1);
+  const cleared = clearFirstHalfRecords(avail);
+  assert.equal(cleared.find(player => player.id === id).firstHalfIds, undefined);
+  assert.equal(cleared.find(player => player.id === id).firstHalfQuarter, undefined);
+  assert.equal(avail.find(player => player.id === id).firstHalfIds.length > 0, true);
+  const plan = openSheet(cleared, true, 6);
+  const kept = liveBackHalfThenBenchOut(cleared, plan.lineups, plan.segments, id, 1);
+  const fresh = liveBackHalfThenBenchOut(withoutFirstHalfRecord(avail), plan.lineups, plan.segments, id, 1);
+  assert.ok(kept && fresh);
+  assert.deepEqual(kept, fresh);
 });
