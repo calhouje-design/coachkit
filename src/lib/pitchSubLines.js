@@ -1,5 +1,5 @@
 import { useLayoutEffect, useRef, useState } from "react";
-import { lineStopAtCircle, routeClearOfObstacles } from "./gameDay.js";
+import { lineStopAtCircle } from "./gameDay.js";
 
 /** Sub lines paint under player markers. Markers stay tappable; lines do not take hits. */
 export const PITCH_LAYER = { line: 1, marker: 6 };
@@ -22,76 +22,10 @@ function roundTenth(value) {
   return Math.round(value * 10) / 10;
 }
 
-/** Circles and name boxes a sub line has to miss. The target circle is the endpoint, so it is left out. */
-function subLineObstacles(root, box, targetId) {
-  return [...root.querySelectorAll("[data-sub-to]")].flatMap(node => {
-    const id = node.getAttribute("data-sub-to");
-    const bounds = node.getBoundingClientRect();
-    const obstacles = [];
-    if (id !== targetId) {
-      obstacles.push({
-        cx: bounds.left + bounds.width / 2 - box.left,
-        cy: bounds.top + bounds.height / 2 - box.top,
-        r: Math.min(bounds.width, bounds.height) / 2,
-      });
-    }
-    const label = node.parentElement?.querySelector("[title]");
-    if (!label) return obstacles;
-    const labelBox = label.getBoundingClientRect();
-    if (labelBox.width > 0 && labelBox.height > 0) {
-      obstacles.push({
-        x: labelBox.left - box.left,
-        y: labelBox.top - box.top,
-        w: labelBox.width,
-        h: labelBox.height,
-      });
-    }
-    return obstacles;
-  });
-}
-
-function benchDots(root, box, exceptId) {
-  return [...root.querySelectorAll("[data-sub-from]")].flatMap(node => {
-    if (node.getAttribute("data-sub-from") === exceptId) return [];
-    const bounds = node.getBoundingClientRect();
-    if (!(bounds.width > 0) || !(bounds.height > 0)) return [];
-    return [{
-      x: bounds.left + bounds.width / 2 - box.left,
-      y: bounds.top + bounds.height / 2 - box.top,
-    }];
-  });
-}
-
-function guideRect(node, box) {
-  if (!node) return null;
-  const bounds = node.getBoundingClientRect();
-  if (!(bounds.width > 0) || !(bounds.height > 0)) return null;
-  return {
-    x: bounds.left - box.left,
-    y: bounds.top - box.top,
-    w: bounds.width,
-    h: bounds.height,
-  };
-}
-
-/** Field rect, the quarter badge, and the bench column, in pitch-wrap coordinates. */
-function pitchGuides(root, box) {
-  const bounds = guideRect(root.querySelector("[data-pitch-svg]"), box);
-  let badge = null;
-  if (bounds) {
-    const sx = bounds.w / 320;
-    const sy = bounds.h / 480;
-    badge = { x: bounds.x + 12 * sx, y: bounds.y + 12 * sy, w: 62 * sx, h: 34 * sy };
-  }
-  return { bounds, badge, bench: guideRect(root.querySelector("[data-bench-column]"), box) };
-}
-
 /** Dashed sub lines from the bench dots to the field circles currently in the pitch. */
 export function readSubLines(root, pairs) {
   if (!root) return [];
   const box = root.getBoundingClientRect();
-  const guides = pitchGuides(root, box);
-  const drawn = [];
   return (pairs || []).map(pair => {
     const from = root.querySelector(`[data-sub-from="${cssEscape(pair.inId)}"]`);
     const to = root.querySelector(`[data-sub-to="${cssEscape(pair.outId)}"]`);
@@ -106,42 +40,19 @@ export function readSubLines(root, pairs) {
     const end = lineStopAtCircle(x1, y1, cx, cy, radius);
     const x2 = Math.round(end.x);
     const y2 = Math.round(end.y);
-    const obstacles = subLineObstacles(root, box, pair.outId);
-    const routed = routeClearOfObstacles(x1, y1, x2, y2, obstacles, 3, {
-      bounds: guides.bounds,
-      badge: guides.badge,
-      bench: guides.bench,
-      lines: drawn,
-      dots: benchDots(root, box, pair.inId),
-    });
-    const points = routed.map(point => ({ x: roundTenth(point.x), y: roundTenth(point.y) }));
-    points[0] = { x: x1, y: y1 };
-    points[points.length - 1] = { x: x2, y: y2 };
-    let endX = x2;
-    let endY = y2;
-    let endClear = true;
-    if (routed.elevated) {
-      const prev = points.length > 1 ? points[points.length - 2] : { x: x1, y: y1 };
-      const dot = endDotOnTarget(cx, cy, radius, prev.x, prev.y, obstacles);
-      endX = roundTenth(dot.x);
-      endY = roundTenth(dot.y);
-      points[points.length - 1] = { x: endX, y: endY };
-      endClear = dot.clear;
-    }
-    drawn.push(points);
     return {
       key: `${pair.inId}-${pair.outId}`,
       targetId: pair.outId,
       x1,
       y1,
-      x2: endX,
-      y2: endY,
+      x2,
+      y2,
       targetX: roundTenth(cx),
       targetY: roundTenth(cy),
       targetR: roundTenth(radius),
-      endClear,
-      points,
-      elevated: !!routed.elevated,
+      endClear: true,
+      points: [{ x: x1, y: y1 }, { x: x2, y: y2 }],
+      elevated: false,
     };
   }).filter(Boolean);
 }
