@@ -63,5 +63,6 @@ export function shareHelperText({ split = false, periodAbbrev = "Q" } = {}) {
   if (periodAbbrev === "H") {
     return "Each half has a start lineup and an after-subs lineup. Tap Save under any image to send it or add it to Photos.";
   }
-  return "Each quarter has a 1st-half and a 2nd-half lineup. Tap Save under any image to send it or add it to Photos.";
+  const noun = periodAbbrev === "P" ? "period" : "quarter";
+  return `Each ${noun} has a 1st-half and a 2nd-half lineup. Tap Save under any image to send it or add it to Photos.`;
 }

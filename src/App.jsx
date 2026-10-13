@@ -3979,14 +3979,14 @@ function SheetCanvases({ field, playTime, league, opponent, homeScore, awayScore
         <div data-testid="print-preview" style={{background:"#fff", color:"#1a1a1a", borderRadius:8, padding:12, marginBottom:16}}>
           <div style={{fontSize:14, fontWeight:800, marginBottom:8}}>Print preview</div>
           <div style={{fontSize:12, marginBottom:8, lineHeight:1.4}}>Start and After subs, side by side, for each period that has subs.</div>
-          <canvas ref={printRef} style={{width:"100%",height:"auto",display:"block",background:"#fff"}} />
+          <canvas ref={printRef} role="img" aria-label="Print preview" style={{width:"100%",height:"auto",display:"block",background:"#fff"}} />
           <AfterLineupMarks field={field} prefix="print" />
         </div>
       )}
       <div data-testid={source === "share" ? "play-time-sheet" : "game-log-play-time"} style={{marginTop:4}}>
         <div style={{fontSize:12,fontWeight:800,color:"#2ecc71",marginBottom:6}}>Play time</div>
         <div style={{borderRadius:8,overflow:"hidden",marginBottom:8,border:"1px solid rgba(255,255,255,0.08)",background:"#0c1409"}}>
-          <canvas ref={playRef} style={{width:"100%",height:"auto",display:"block"}} />
+          <canvas ref={playRef} role="img" aria-label="Play time" style={{width:"100%",height:"auto",display:"block"}} />
         </div>
         {saveRow(playFile, playName, playTestId, playHoldId, "Save play time image", "play", false)}
       </div>

@@ -145,6 +145,10 @@ test("share helper text follows quarters, halves, and full games", () => {
     "Each half has a start lineup and an after-subs lineup. Tap Save under any image to send it or add it to Photos.",
   );
   assert.equal(
+    shareHelperText({ split: true, periodAbbrev: "P" }),
+    "Each period has a 1st-half and a 2nd-half lineup. Tap Save under any image to send it or add it to Photos.",
+  );
+  assert.equal(
     shareHelperText({ split: false, periodAbbrev: "Q" }),
     "Tap Save under any image to send it or add it to Photos.",
   );

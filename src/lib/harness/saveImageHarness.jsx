@@ -48,9 +48,10 @@ const splitField = splitLog ? {
   ...logField,
   quarters: logField.quarters.map((panel, index) => {
     if (index !== 0) return { ...panel, label: "Q2", quarter: 2 };
+    const withPlayer = (slot, other) => ({ ...slot, id: other.id, name: other.name, number: other.number });
     const starters = panel.starters.map((slot, slotIndex) => {
-      if (slotIndex === 1) return { ...panel.starters[2], idx: slot.idx };
-      if (slotIndex === 2) return { ...panel.starters[1], idx: slot.idx };
+      if (slotIndex === 1) return withPlayer(slot, panel.starters[2]);
+      if (slotIndex === 2) return withPlayer(slot, panel.starters[1]);
       return slot;
     });
     return {
