@@ -2910,12 +2910,19 @@ export function revalidateBackHalfMarks({
         return mark !== "left" && mark !== "entered";
       });
       // A regenerated plan can be one half short and still have an unmarked spare.
-      // That plan matches main. A live Out before the half is different: the
-      // player coming on can take the open first half, even when a spare sits.
+      // That plan matches main, including an injury replan on a larger squad.
+      // The exception is only an 8-player Out before the half: the player coming
+      // on can take the open first half even when one unmarked spare sits.
       // An Out that pulls the sheet leaves no spare, or it leaves the "left"
       // player standing on the field.
-      const preHalfOut = !pastHalf && outLeft > 0;
-      if (!pulledLeft && !offLeft && spare && !preHalfOut) continue;
+      const eightPlayerOut = (players || []).filter(player => player?.id).length === 8
+        && (players || []).some(player => {
+          if (!player?.id || !player.out || player.injured) return false;
+          if (onSheet.has(String(player.id))) return false;
+          return segmentAt(nextSegments, player.id, q) === "left";
+        });
+      const preHalfSpareOut = !pastHalf && eightPlayerOut;
+      if (!pulledLeft && !offLeft && spare && !preHalfSpareOut) continue;
       nextSegments = clearOnFieldLeft(lineup, nextSegments, q);
       // Before the half, the player coming on now can take the open first half.
       nextSegments = repairShortHalf(lineup, nextSegments, q, [], players, { clearEntered: !pastHalf });

@@ -143,7 +143,6 @@ export function usePitchSubLines(pitchWrapRef, { shownPairs, lineupKey, quarter,
     // Orientation hides are counted here, before React applies them. A frame
     // can try to show the lines before that update is visible in state.
     let rotateTicket = 0;
-    let settledTicket = 0;
     const concealNow = (live) => {
       live.querySelectorAll("[data-sub-lines]").forEach(node => {
         node.style.visibility = "hidden";
@@ -152,6 +151,7 @@ export function usePitchSubLines(pitchWrapRef, { shownPairs, lineupKey, quarter,
         if (prev.holding) return prev;
         const next = prev.slice();
         next.holding = true;
+        next.settledTicket = prev.settledTicket || 0;
         return next;
       });
     };
@@ -175,7 +175,8 @@ export function usePitchSubLines(pitchWrapRef, { shownPairs, lineupKey, quarter,
       lastRect = fieldRectKey(live);
       const measured = readSubLinesCached(live, shownPairs || []);
       setSubLines(prev => {
-        const rotationPending = rotateTicket > settledTicket;
+        const settled = prev.settledTicket || 0;
+        const rotationPending = rotateTicket > settled;
         if (sameLines(prev, measured) && !prev.holding && !followUp) {
           if (rotationPending) {
             // The hide is recorded, but this state does not show it yet.
@@ -185,9 +186,11 @@ export function usePitchSubLines(pitchWrapRef, { shownPairs, lineupKey, quarter,
           }
           return prev;
         }
-        if (rotationPending) settledTicket = rotateTicket;
         const next = measured.slice();
         next.holding = false;
+        // Carry the ticket on the array. A later hide in this burst reads it
+        // from state, so the updater does not write a closed-over variable.
+        next.settledTicket = rotationPending ? rotateTicket : settled;
         return next;
       });
     };
@@ -228,10 +231,11 @@ export function usePitchSubLines(pitchWrapRef, { shownPairs, lineupKey, quarter,
         });
         setSubLines(prev => {
           // A show that already ran for this burst must not be covered again.
-          if (settledTicket >= ticket) return prev;
+          if ((prev.settledTicket || 0) >= ticket) return prev;
           if (prev.holding) return prev;
           const next = prev.slice();
           next.holding = true;
+          next.settledTicket = prev.settledTicket || 0;
           return next;
         });
       }
