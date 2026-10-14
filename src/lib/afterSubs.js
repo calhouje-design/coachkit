@@ -2,12 +2,11 @@
 
 import {
   applyBenchRotation,
-  backHalfShownPairs,
+  backHalfQuarterView,
   fieldMarker,
   isBackHalfReturn,
   isGkPosition,
   placeTwoWideMarkers,
-  quarterHalfPresentation,
   shareFieldSheet,
 } from "./gameDay.js";
 
@@ -493,20 +492,21 @@ export function withBackHalfShare(sheet, {
         after: { ...after, label: panel.label, pairs: [] },
       };
     }
-    const view = quarterHalfPresentation(lineup, segments, q, { returnerId: returner.id });
-    if (!view?.pairs?.length) return panel;
-    changed = true;
     const next = lineups?.[q + 1] || lineups?.[String(q + 1)] || null;
     const manual = pairPlan?.[q] || pairPlan?.[String(q)] || [];
-    const pairs = useSubs
-      ? backHalfShownPairs({
-        start: view.start,
-        returnerPair: view.pairs[0],
-        nextLineup: next,
-        minutesById,
-        manualPairs: manual,
-      })
-      : view.pairs;
+    const view = backHalfQuarterView({
+      lineup,
+      segments,
+      players,
+      quarter: q,
+      nextLineup: next,
+      minutesById,
+      manualPairs: manual,
+      subMode: useSubs,
+    });
+    if (!view?.pairs?.length) return panel;
+    changed = true;
+    const pairs = view.pairs;
     const override = afterSubs?.[q] || afterSubs?.[String(q)] || null;
     const start = paintLineup(view.start, q, periodAbbrev);
     const after = paintLineup(sameAfterLineup(view.start, pairs, override), q, periodAbbrev);

@@ -479,7 +479,7 @@ export function placeTwoWideOnPitch(starters, fieldWidth, fieldHeight, circle) {
  * Sheet 1. Four quarters, each with the pitch markers, the bench, and the
  * dotted sub pairs. Full-quarter mode stores the bench and leaves pairs empty.
  */
-export function shareFieldSheet({ lineups, pairPlan, subMode = true, quarters = [1, 2, 3, 4], periodAbbrev = "Q" } = {}) {
+export function shareFieldSheet({ lineups, pairPlan, subMode = true, quarters = [1, 2, 3, 4], periodAbbrev = "Q", minutesById = {} } = {}) {
   const panels = quarters.map(q => {
     const lineup = lineups?.[q] || lineups?.[String(q)] || null;
     const counts = {};
@@ -511,7 +511,7 @@ export function shareFieldSheet({ lineups, pairPlan, subMode = true, quarters = 
     let pairs = [];
     if (subMode && lineup) {
       const next = lineups?.[q + 1] || lineups?.[String(q + 1)] || null;
-      const auto = planBenchRotation(lineup, { minutesById: {}, nextLineup: next });
+      const auto = planBenchRotation(lineup, { minutesById, nextLineup: next });
       const manual = pairPlan?.[q] || pairPlan?.[String(q)] || [];
       pairs = pairsForDisplay(auto, manual, lineup).map(pair => ({
         inId: pair.inId,
@@ -1261,6 +1261,8 @@ export function quarterHalfPresentation(lineup, segments, quarter, { returnerId 
 /**
  * The returner pair plus the normal half pairs for that start lineup.
  * The returner pair is first, so the donor is not also used in another pair.
+ * Auto pairs are chosen only among the players those manual pairs did not take.
+ * Sorting the donor in with everyone else lets one extra minute move the other lines.
  */
 export function backHalfShownPairs({
   start,
@@ -1280,8 +1282,45 @@ export function backHalfShownPairs({
     usedOut.add(pair.outId);
     manual.push(pair);
   });
-  const auto = planBenchRotation(start, { minutesById, nextLineup });
+  const open = {
+    starters: (start.starters || []).map(slot => (
+      slot?.player?.id && usedOut.has(slot.player.id) ? { ...slot, player: null } : slot
+    )),
+    bench: (start.bench || []).filter(player => player?.id && !usedIn.has(player.id)),
+  };
+  const auto = planBenchRotation(open, { minutesById, nextLineup });
   return pairsForDisplay(auto, manual, start);
+}
+
+/**
+ * Start lineup and sub pairs for a back-half return.
+ * The same view the share tiles paint: the returner is still on the bench,
+ * and every line names a player standing on that start field.
+ */
+export function backHalfQuarterView({
+  lineup,
+  segments,
+  players,
+  quarter,
+  nextLineup = null,
+  minutesById = {},
+  manualPairs = [],
+  subMode = true,
+} = {}) {
+  const returner = (players || []).find(player => isBackHalfReturn(player, quarter));
+  if (!returner || !lineup) return null;
+  const presentation = quarterHalfPresentation(lineup, segments, quarter, { returnerId: returner.id });
+  if (!presentation?.pairs?.length) return null;
+  const pairs = subMode
+    ? backHalfShownPairs({
+      start: presentation.start,
+      returnerPair: presentation.pairs[0],
+      nextLineup,
+      minutesById,
+      manualPairs,
+    })
+    : presentation.pairs;
+  return { ...presentation, pairs };
 }
 
 /** Drop a back-half mark for one quarter. Whole-quarter returnQuarter stays. Later quarters stay. */
