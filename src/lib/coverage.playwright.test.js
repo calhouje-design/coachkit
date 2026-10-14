@@ -401,26 +401,49 @@ async function linesShownWithin(page, timeout) {
   }
 }
 
+async function subLineState(page) {
+  return page.evaluate(() => {
+    const node = document.querySelector("[data-sub-lines]");
+    const base = !node ? { missing: true } : {
+      computed: getComputedStyle(node).visibility,
+      inline: node.style.visibility,
+      hold: node.getAttribute("data-hold"),
+      lines: node.querySelectorAll("polyline").length,
+    };
+    return { ...base, log: (window.__subLineDebug || []).slice(-40) };
+  });
+}
+
 for (const width of [320, 390]) {
   test(`webkit sub lines settle visible after rotate-and-back and a resize burst at ${width}`, async () => {
     const engine = await webkit.launch({ headless: true });
     const page = await engine.newPage({ viewport: { width, height: 640 }, deviceScaleFactor: 1 });
     try {
+      await page.addInitScript(() => { window.__subLineDebug = []; });
       await openCoverage(page, width);
       let rotateStuck = 0;
+      const cycles = [];
       for (let i = 0; i < 10; i += 1) {
+        const started = Date.now();
+        await page.evaluate(() => { window.__subLineDebug = []; });
         await page.evaluate(() => {
           window.dispatchEvent(new Event("orientationchange"));
           const start = performance.now();
           while (performance.now() - start < 60) {}
           window.dispatchEvent(new Event("orientationchange"));
         });
-        if (!(await linesShownWithin(page, 5000))) rotateStuck += 1;
+        const shown = await linesShownWithin(page, 5000);
+        if (!shown) rotateStuck += 1;
+        const state = await subLineState(page);
+        cycles.push({ i, ms: Date.now() - started, shown, ...state, log: shown ? undefined : state.log });
       }
       await page.evaluate(() => {
         for (let i = 0; i < 25; i += 1) window.dispatchEvent(new Event("resize"));
       });
-      const burstStuck = (await linesShownWithin(page, 5000)) ? 0 : 1;
+      const burstShown = await linesShownWithin(page, 5000);
+      const burstStuck = burstShown ? 0 : 1;
+      const burst = await subLineState(page);
+      console.log(`rotate-diag ${width} ${JSON.stringify({ cycles, burstStuck, burst: burstShown ? { shown: true } : burst })}`);
       assert.equal(
         rotateStuck + burstStuck,
         0,

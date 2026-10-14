@@ -114,6 +114,13 @@ export function useReportFieldLayout(rootRef, placed, onLayout) {
   }, [placed]);
 }
 
+function trace(message) {
+  const sink = typeof window !== "undefined" ? window.__subLineDebug : null;
+  if (!sink) return;
+  sink.push(`${Math.round(performance.now())} ${message}`);
+  if (sink.length > 100) sink.shift();
+}
+
 function fieldRectKey(live) {
   const node = live.querySelector("[data-pitch-svg]") || live;
   const box = node.getBoundingClientRect();
@@ -148,6 +155,7 @@ export function usePitchSubLines(pitchWrapRef, { shownPairs, lineupKey, quarter,
       live.querySelectorAll("[data-sub-lines]").forEach(node => {
         node.style.visibility = "hidden";
       });
+      trace("conceal");
       setSubLines(prev => {
         if (prev.holding) return prev;
         const next = prev.slice();
@@ -160,10 +168,12 @@ export function usePitchSubLines(pitchWrapRef, { shownPairs, lineupKey, quarter,
       if (followQueued) return;
       followQueued = true;
       queued = true;
+      trace("schedule-follow");
       frame = requestAnimationFrame(() => {
         followQueued = false;
         queued = false;
         frame = 0;
+        trace("follow-ran");
         apply(true);
       });
     };
@@ -181,11 +191,15 @@ export function usePitchSubLines(pitchWrapRef, { shownPairs, lineupKey, quarter,
             // The hide is recorded, but this state does not show it yet.
             // Keeping this array would let the later hide commit with no
             // frame left to clear it.
+            trace(`bail pending ticket=${rotateTicket} settled=${settledTicket} followQueued=${followQueued}`);
             scheduleFollowUp();
           }
           return prev;
         }
-        if (rotationPending) settledTicket = rotateTicket;
+        if (rotationPending) {
+          trace(`show ticket=${rotateTicket} settled=${settledTicket} follow=${followUp} holding=${!!prev.holding}`);
+          settledTicket = rotateTicket;
+        }
         const next = measured.slice();
         next.holding = false;
         return next;
@@ -205,8 +219,12 @@ export function usePitchSubLines(pitchWrapRef, { shownPairs, lineupKey, quarter,
     const measure = () => {
       const live = pitchWrapRef.current;
       if (live) concealIfFieldMoved(live);
-      if (queued) return;
+      if (queued) {
+        trace("measure-skip");
+        return;
+      }
       queued = true;
+      trace("measure-schedule");
       frame = requestAnimationFrame(() => {
         queued = false;
         frame = 0;
@@ -223,12 +241,16 @@ export function usePitchSubLines(pitchWrapRef, { shownPairs, lineupKey, quarter,
       if (live) {
         rotateTicket += 1;
         const ticket = rotateTicket;
+        trace(`rotate ticket=${ticket} settled=${settledTicket}`);
         live.querySelectorAll("[data-sub-lines]").forEach(node => {
           node.style.visibility = "hidden";
         });
         setSubLines(prev => {
           // A show that already ran for this burst must not be covered again.
-          if (settledTicket >= ticket) return prev;
+          if (settledTicket >= ticket) {
+            trace(`hide-skip ticket=${ticket} settled=${settledTicket} holding=${!!prev.holding}`);
+            return prev;
+          }
           if (prev.holding) return prev;
           const next = prev.slice();
           next.holding = true;
@@ -243,6 +265,7 @@ export function usePitchSubLines(pitchWrapRef, { shownPairs, lineupKey, quarter,
     const observer = typeof ResizeObserver === "function" ? new ResizeObserver(measure) : null;
     observer?.observe(root);
     return () => {
+      trace(`cleanup frame=${frame} queued=${queued} follow=${followQueued}`);
       if (frame) cancelAnimationFrame(frame);
       window.removeEventListener("resize", onViewport);
       window.removeEventListener("orientationchange", onRotate);
@@ -254,6 +277,7 @@ export function usePitchSubLines(pitchWrapRef, { shownPairs, lineupKey, quarter,
   // React leaves the direct write in place. Put it back when the lines are
   // not being held. Do not do this inside apply(); that paints stale frames.
   useLayoutEffect(() => {
+    trace(`layout holding=${!!subLines.holding} lines=${subLines.length}`);
     if (subLines.holding) return;
     pitchWrapRef.current?.querySelectorAll("[data-sub-lines]").forEach(node => { node.style.visibility = "visible"; });
   }, [subLines]);
