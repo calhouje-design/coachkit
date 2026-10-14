@@ -853,7 +853,6 @@ function SoccerField({ lineup, onTap, selectedIdx, quarter, periodAbbrev = "Q", 
       {subLines.length > 0 && lineOrigin && (
         <svg
           data-sub-lines=""
-          data-hold={linesHold ? "1" : "0"}
           style={{
             position:"absolute", inset:0, width:"100%", height:"100%",
             overflow:"visible", pointerEvents:"none", zIndex:PITCH_LAYER.line,
