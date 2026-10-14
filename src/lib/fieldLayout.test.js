@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { FORMATION_TEMPLATES } from "./formations.js";
-import { fieldMarker, isMirroredPair, lineStopAtCircle, pitchCenterDisc, placeTwoWideOnPitch, routeClearOfObstacles, shareFieldSheet, twoWideCenters, TWO_WIDE_FRACTION } from "./gameDay.js";
+import { fieldMarker, isMirroredPair, pitchCenterDisc, placeTwoWideOnPitch, shareFieldSheet, twoWideCenters, TWO_WIDE_FRACTION } from "./gameDay.js";
 import {
   CIRCLE_DIAMETER,
   FOUR_WIDE_MIN_NUDGE,
@@ -350,117 +350,6 @@ test("a mirrored pair stays clear at the real phone field widths", () => {
   assert.ok(Math.abs(wide[0].x / 704 - 1 / 3) < 0.001);
 });
 
-test("a 196px line from the bench to RD clears every circle and label", () => {
-  const fieldWidth = 196;
-  const fieldHeight = 294;
-  const fieldX = 82;
-  const fieldY = 8;
-  const formation = FORMATION_TEMPLATES["6v6"].find(shape => shape.name === "2-2-1");
-  const layout = layoutFieldPlayers(startersFor(formation.slots, [
-    "Sam Keeper", "Blake Pete", "Trey Lazear", "Remi Brown", "Sean Jones", "Henry Davis",
-  ]), { fieldWidth, fieldHeight });
-  const target = layout.find(spot => spot.pos === "RD");
-  const dot = { x: 72, y: 182 };
-  const center = { x: fieldX + target.x, y: fieldY + target.y };
-  const end = lineStopAtCircle(dot.x, dot.y, center.x, center.y, CIRCLE_DIAMETER / 2);
-  const obstacles = [];
-  layout.forEach(spot => {
-    if (spot !== target) {
-      obstacles.push({ cx: fieldX + spot.x, cy: fieldY + spot.y, r: CIRCLE_DIAMETER / 2 });
-    }
-    if (spot.labelBox) {
-      obstacles.push({
-        x: fieldX + spot.labelBox.x,
-        y: fieldY + spot.labelBox.y,
-        w: spot.labelBox.width,
-        h: spot.labelBox.height,
-      });
-    }
-  });
-  const bounds = { x: fieldX, y: fieldY, w: fieldWidth, h: fieldHeight };
-  const badge = {
-    x: fieldX + (12 / 320) * fieldWidth,
-    y: fieldY + (12 / 480) * fieldHeight,
-    w: (62 / 320) * fieldWidth,
-    h: (34 / 480) * fieldHeight,
-  };
-  const bench = { x: 0, y: 0, w: fieldX, h: fieldY + fieldHeight };
-  const routed = routeClearOfObstacles(dot.x, dot.y, end.x, end.y, obstacles, 3, { bounds, badge, bench });
-  assert.equal(routed.elevated, false, "the line has a clear path and must not fall back to straight");
-  assert.ok(routed.length >= 3 && routed.length <= 4, `bends ${routed.length - 2}`);
-  const gap = 3;
-  for (let i = 1; i < routed.length; i += 1) {
-    const from = routed[i - 1];
-    const to = routed[i];
-    for (let step = 0; step <= 32; step += 1) {
-      const t = step / 32;
-      const x = from.x + (to.x - from.x) * t;
-      const y = from.y + (to.y - from.y) * t;
-      const inField = x >= bounds.x - 0.2 && x <= bounds.x + bounds.w + 0.2 && y >= bounds.y - 0.2 && y <= bounds.y + bounds.h + 0.2;
-      const leavingBench = i === 1 && x < bounds.x;
-      if (!leavingBench) {
-        assert.ok(inField, `outside field ${x.toFixed(1)},${y.toFixed(1)}`);
-        const inBench = x >= bench.x && x <= bench.x + bench.w && y >= bench.y && y <= bench.y + bench.h;
-        assert.equal(inBench, false, `through the bench at ${x.toFixed(1)},${y.toFixed(1)}`);
-        const inBadge = x >= badge.x - gap && x <= badge.x + badge.w + gap && y >= badge.y - gap && y <= badge.y + badge.h + gap;
-        assert.equal(inBadge, false, `behind the badge at ${x.toFixed(1)},${y.toFixed(1)}`);
-      }
-      obstacles.forEach(obstacle => {
-        if (Number.isFinite(obstacle.r)) {
-          const near = Math.hypot(x - obstacle.cx, y - obstacle.cy);
-          assert.ok(near >= obstacle.r + gap - 0.35, `within ${near.toFixed(1)} of a circle`);
-        } else {
-          const inside = x >= obstacle.x - gap && x <= obstacle.x + obstacle.w + gap && y >= obstacle.y - gap && y <= obstacle.y + obstacle.h + gap;
-          assert.equal(inside, false, `through a label at ${x.toFixed(1)},${y.toFixed(1)}`);
-        }
-      });
-    }
-  }
-});
-
-test("a 9v9 line to the far centre-back stays off the goal line", () => {
-  const formation = FORMATION_TEMPLATES["9v9"].find(shape => shape.name === "4-2-2");
-  const fieldWidth = 266;
-  const fieldHeight = 399;
-  const fieldX = 82;
-  const fieldY = 8;
-  const names = ["Ann Keeper", "Bea Left", "Cal Centre", "Dee Centre", "Eve Right", "Fay Wing", "Gia Wing", "Hal Wing", "Ian Wing"];
-  const layout = layoutFieldPlayers(startersFor(formation.slots, names), { fieldWidth, fieldHeight });
-  const target = layout.filter(spot => spot.pos === "CD")[1];
-  const dot = { x: 72, y: 240 };
-  const center = { x: fieldX + target.x, y: fieldY + target.y };
-  const end = lineStopAtCircle(dot.x, dot.y, center.x, center.y, CIRCLE_DIAMETER / 2);
-  const obstacles = [];
-  layout.forEach(spot => {
-    if (spot !== target) obstacles.push({ cx: fieldX + spot.x, cy: fieldY + spot.y, r: CIRCLE_DIAMETER / 2 });
-    if (spot.labelBox) {
-      obstacles.push({
-        x: fieldX + spot.labelBox.x,
-        y: fieldY + spot.labelBox.y,
-        w: spot.labelBox.width,
-        h: spot.labelBox.height,
-      });
-    }
-  });
-  const bounds = { x: fieldX, y: fieldY, w: fieldWidth, h: fieldHeight };
-  const routed = routeClearOfObstacles(dot.x, dot.y, end.x, end.y, obstacles, 3, {
-    bounds,
-    bench: { x: 0, y: 0, w: fieldX, h: fieldY + fieldHeight },
-    badge: {
-      x: fieldX + (12 / 320) * fieldWidth,
-      y: fieldY + (12 / 480) * fieldHeight,
-      w: (62 / 320) * fieldWidth,
-      h: (34 / 480) * fieldHeight,
-    },
-  });
-  const straight = Math.hypot(end.x - dot.x, end.y - dot.y);
-  let length = 0;
-  for (let i = 1; i < routed.length; i += 1) length += Math.hypot(routed[i].x - routed[i - 1].x, routed[i].y - routed[i - 1].y);
-  assert.equal(routed.elevated, false);
-  assert.ok(length <= straight * 1.6 + 0.5, `route is ${length.toFixed(0)}px, ${(length / straight).toFixed(2)}× straight`);
-  const minY = Math.min(...routed.map(point => point.y));
-  assert.ok(minY > fieldY + 40, `route climbs to ${minY.toFixed(0)}`);
-});
 
 test("4-2-3-1 keeps CF and RF on the sideline spots", () => {
   assert.equal(isMirroredPair("LD", "RD"), true);

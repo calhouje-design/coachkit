@@ -103,7 +103,7 @@ function injuryReturn() {
     livePeriod: true,
   });
   const replacedBy = vacatedSpotHolder(lineups[2], gone.lineups[2], wes.id);
-  const injured = absent.map(player => (
+  const injured = (gone.players || absent).map(player => (
     player.id === wes.id ? { ...player, replacedBy } : player
   ));
   const marked = noteSubSegment(gone.segments, wes.id, 2, "left");

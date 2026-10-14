@@ -127,36 +127,6 @@ function fieldRectKey(live) {
   ].join(",");
 }
 
-/**
- * End dot on the target circle, outside every other circle.
- * Search the perimeter from the incoming direction. `clear` is false when
- * every sample sits inside a neighbour; the caller then highlights the target.
- */
-export function endDotOnTarget(cx, cy, radius, fromX, fromY, others, dotRadius = 3.5) {
-  const dx = fromX - cx;
-  const dy = fromY - cy;
-  const len = Math.hypot(dx, dy) || 1;
-  const face = Math.atan2(dy, dx);
-  const r = Math.max(0, Number(radius) || 0);
-  const circles = (others || []).filter(other => Number.isFinite(other?.r) && other.r > 0);
-  const outside = (x, y, pad) => circles.every(other => (
-    Math.hypot(x - other.cx, y - other.cy) >= other.r + pad - 0.05
-  ));
-  const at = (angle) => ({ x: cx + Math.cos(angle) * r, y: cy + Math.sin(angle) * r });
-  const steps = 72;
-  for (const pad of [dotRadius, 0]) {
-    for (let i = 0; i <= steps; i += 1) {
-      const delta = (i / steps) * Math.PI;
-      const signs = i === 0 ? [0] : [1, -1];
-      for (let s = 0; s < signs.length; s += 1) {
-        const point = at(face + signs[s] * delta);
-        if (outside(point.x, point.y, pad)) return { x: point.x, y: point.y, clear: true };
-      }
-    }
-  }
-  return { x: cx + (dx / len) * r, y: cy + (dy / len) * r, clear: false };
-}
-
 /** Measure sub lines after the field layout signature changes, and when the pitch box itself resizes. */
 export function usePitchSubLines(pitchWrapRef, { shownPairs, lineupKey, quarter, swapSel, fieldLayout }) {
   const [subLines, setSubLines] = useState([]);
@@ -170,6 +140,9 @@ export function usePitchSubLines(pitchWrapRef, { shownPairs, lineupKey, quarter,
     let frame = 0;
     let queued = false;
     let lastRect = fieldRectKey(root);
+    // Orientation hides are counted here, before React applies them. A frame
+    // can try to show the lines before that update is visible in state.
+    let rotateTicket = 0;
     const concealNow = (live) => {
       live.querySelectorAll("[data-sub-lines]").forEach(node => {
         node.style.visibility = "hidden";
@@ -178,10 +151,23 @@ export function usePitchSubLines(pitchWrapRef, { shownPairs, lineupKey, quarter,
         if (prev.holding) return prev;
         const next = prev.slice();
         next.holding = true;
+        next.settledTicket = prev.settledTicket || 0;
         return next;
       });
     };
-    const apply = () => {
+    let followQueued = false;
+    const scheduleFollowUp = () => {
+      if (followQueued) return;
+      followQueued = true;
+      queued = true;
+      frame = requestAnimationFrame(() => {
+        followQueued = false;
+        queued = false;
+        frame = 0;
+        apply(true);
+      });
+    };
+    const apply = (followUp = false) => {
       const live = pitchWrapRef.current;
       if (!live) return;
       // The field can move during the hidden frame. The next resize should
@@ -189,9 +175,22 @@ export function usePitchSubLines(pitchWrapRef, { shownPairs, lineupKey, quarter,
       lastRect = fieldRectKey(live);
       const measured = readSubLinesCached(live, shownPairs || []);
       setSubLines(prev => {
-        if (sameLines(prev, measured) && !prev.holding) return prev;
+        const settled = prev.settledTicket || 0;
+        const rotationPending = rotateTicket > settled;
+        if (sameLines(prev, measured) && !prev.holding && !followUp) {
+          if (rotationPending) {
+            // The hide is recorded, but this state does not show it yet.
+            // Keeping this array would let the later hide commit with no
+            // frame left to clear it.
+            scheduleFollowUp();
+          }
+          return prev;
+        }
         const next = measured.slice();
         next.holding = false;
+        // Carry the ticket on the array. A later hide in this burst reads it
+        // from state, so the updater does not write a closed-over variable.
+        next.settledTicket = rotationPending ? rotateTicket : settled;
         return next;
       });
     };
@@ -224,7 +223,22 @@ export function usePitchSubLines(pitchWrapRef, { shownPairs, lineupKey, quarter,
     };
     const onRotate = () => {
       const live = pitchWrapRef.current;
-      if (live) concealNow(live);
+      if (live) {
+        rotateTicket += 1;
+        const ticket = rotateTicket;
+        live.querySelectorAll("[data-sub-lines]").forEach(node => {
+          node.style.visibility = "hidden";
+        });
+        setSubLines(prev => {
+          // A show that already ran for this burst must not be covered again.
+          if ((prev.settledTicket || 0) >= ticket) return prev;
+          if (prev.holding) return prev;
+          const next = prev.slice();
+          next.holding = true;
+          next.settledTicket = prev.settledTicket || 0;
+          return next;
+        });
+      }
       measure();
     };
     apply();

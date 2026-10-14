@@ -401,30 +401,60 @@ async function linesShownWithin(page, timeout) {
   }
 }
 
+async function subLineSnapshot(page) {
+  return page.evaluate(() => {
+    const node = document.querySelector("[data-sub-lines]");
+    if (!node) return { missing: true };
+    return {
+      computed: getComputedStyle(node).visibility,
+      inline: node.style.visibility,
+      lines: node.querySelectorAll("polyline").length,
+    };
+  });
+}
+
 for (const width of [320, 390]) {
   test(`webkit sub lines settle visible after rotate-and-back and a resize burst at ${width}`, async () => {
     const engine = await webkit.launch({ headless: true });
     const page = await engine.newPage({ viewport: { width, height: 640 }, deviceScaleFactor: 1 });
     try {
       await openCoverage(page, width);
+      let warmupStuck = 0;
       let rotateStuck = 0;
-      for (let i = 0; i < 10; i += 1) {
+      const stuckNotes = [];
+      const burst = async () => {
         await page.evaluate(() => {
           window.dispatchEvent(new Event("orientationchange"));
           const start = performance.now();
           while (performance.now() - start < 60) {}
           window.dispatchEvent(new Event("orientationchange"));
         });
-        if (!(await linesShownWithin(page, 5000))) rotateStuck += 1;
+      };
+      // The first rotate in a fresh WebKit commits the dev-mode Game Day tree
+      // while the rest of CI is still busy. On the 320 run that commit took
+      // 3778ms and the lines were then visible, with all 5 drawn. The same
+      // cycle has also run past 5s. Later cycles settle in about 100ms.
+      // Warm that commit, then require every counted cycle to show within 5s.
+      await burst();
+      if (!(await linesShownWithin(page, 15000))) {
+        warmupStuck += 1;
+        stuckNotes.push(`warmup ${JSON.stringify(await subLineSnapshot(page))}`);
+      }
+      for (let i = 0; i < 10; i += 1) {
+        await burst();
+        if (await linesShownWithin(page, 5000)) continue;
+        rotateStuck += 1;
+        stuckNotes.push(`cycle ${i} ${JSON.stringify(await subLineSnapshot(page))}`);
       }
       await page.evaluate(() => {
         for (let i = 0; i < 25; i += 1) window.dispatchEvent(new Event("resize"));
       });
       const burstStuck = (await linesShownWithin(page, 5000)) ? 0 : 1;
+      if (burstStuck) stuckNotes.push(`burst ${JSON.stringify(await subLineSnapshot(page))}`);
       assert.equal(
-        rotateStuck + burstStuck,
+        warmupStuck + rotateStuck + burstStuck,
         0,
-        `${width} rotate-and-back stuck ${rotateStuck}/10, resize burst stuck ${burstStuck}/1`,
+        `${width} rotate-and-back stuck ${rotateStuck}/10, resize burst stuck ${burstStuck}/1, warmup stuck ${warmupStuck}${stuckNotes.length ? ` ${stuckNotes.join("; ")}` : ""}`,
       );
     } finally {
       await page.close();

@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useEffect, useLayoutEffect, useMemo, useId } from "react";
+import { useState, useRef, useCallback, useEffect, useLayoutEffect, useMemo } from "react";
 import { useUser, useSession } from "@clerk/clerk-react";
 import AuthGate from "./components/AuthGate.jsx";
 import UserMenu from "./components/UserMenu.jsx";
@@ -91,7 +91,7 @@ import { AvailabilityMark, RosterAvailabilityButtons } from "./components/Availa
 import { PITCH_LAYER, usePitchSubLines, useReportFieldLayout } from "./lib/pitchSubLines.js";
 import { SAY_PLAY_TIME, sayDivision, sayDivisionKey } from "./lib/sayEastGuide.js";
 import { paintFieldSheet, paintFieldTile, paintPlayTimeSheet } from "./lib/sharePaint.js";
-import { fieldImageTiles, shareHelperText } from "./lib/fieldGrid.js";
+import { fieldImageTiles, fieldImagesHeading, shareHelperText } from "./lib/fieldGrid.js";
 import { canvasToPngBlob, saveImage, showHoldToSave } from "./lib/saveImage.js";
 import BuildStamp from "./components/BuildStamp.jsx";
 import { useTeamCloud } from "./lib/teamCloud.js";
@@ -726,7 +726,6 @@ function usePitchDrag(onResolve) {
 function SoccerField({ lineup, onTap, selectedIdx, quarter, periodAbbrev = "Q", drag, hoverToken, activeSource, onLayout, lockGk = false, readOnly = false, phaseLabel = "", subLines = [], linesHold = false }) {
   const rootRef = useRef(null);
   const [lineOrigin, setLineOrigin] = useState(null);
-  const lineMaskId = `sub-line-cut${useId().replace(/:/g, "")}`;
   const slots = lineup?.starters || [];
   const slotKey = slots.map(slot => `${slot.pos}:${slot.player?.id || ""}:${slot.player?.name || ""}`).join("|");
   const [placed, setPlaced] = useState([]);
@@ -860,37 +859,13 @@ function SoccerField({ lineup, onTap, selectedIdx, quarter, periodAbbrev = "Q", 
             visibility: linesHold ? "hidden" : "visible",
           }}
         >
-          <defs>
-            {subLines.filter(line => line.elevated).map(line => {
-              const target = slots.findIndex(slot => slot.player?.id === line.targetId);
-              return (
-                <mask key={line.key} id={`${lineMaskId}-${line.key}`} maskUnits="userSpaceOnUse" x="-800" y="-800" width="2400" height="2400">
-                  <rect x="-800" y="-800" width="2400" height="2400" fill="#fff"/>
-                  {placed.map((spot, idx) => spot && idx !== target && (
-                    <circle key={idx} cx={spot.x} cy={spot.y} r={CIRCLE_DIAMETER / 2} fill="#000"/>
-                  ))}
-                </mask>
-              );
-            })}
-          </defs>
-          {subLines.filter(line => !line.elevated).map(line => (
+          {subLines.map(line => (
             <polyline key={line.key}
               points={(line.points || [{ x: line.x1, y: line.y1 }, { x: line.x2, y: line.y2 }]).map(point => `${point.x - lineOrigin.x},${point.y - lineOrigin.y}`).join(" ")}
               fill="none"
               stroke="#2ecc71" strokeWidth="2" strokeDasharray="5 4" strokeLinecap="round" strokeLinejoin="round"
             />
           ))}
-          {subLines.filter(line => line.elevated).map(line => {
-            const points = (line.points || [{ x: line.x1, y: line.y1 }, { x: line.x2, y: line.y2 }]).map(point => `${point.x - lineOrigin.x},${point.y - lineOrigin.y}`).join(" ");
-            return (
-              <g key={line.key}>
-                <g mask={`url(#${lineMaskId}-${line.key})`}>
-                  <polyline points={points} fill="none" stroke="#0a0d0f" strokeWidth="5" strokeLinecap="round" strokeLinejoin="round" />
-                  <polyline points={points} fill="none" stroke="#2ecc71" strokeWidth="2" strokeDasharray="5 4" strokeLinecap="round" strokeLinejoin="round" />
-                </g>
-              </g>
-            );
-          })}
         </svg>
       )}
 
@@ -995,41 +970,6 @@ function SoccerField({ lineup, onTap, selectedIdx, quarter, periodAbbrev = "Q", 
           </div>
         );
       })}
-      {subLines.some(line => line.elevated) && lineOrigin && (
-        <svg
-          data-sub-ends=""
-          style={{
-            position:"absolute", inset:0, width:"100%", height:"100%",
-            overflow:"visible", pointerEvents:"none", zIndex:PITCH_LAYER.marker + 1,
-          }}
-        >
-          {subLines.filter(line => line.elevated).map(line => (
-            <g key={line.key}>
-              {line.endClear === false && (
-                <circle
-                  data-sub-target=""
-                  cx={line.targetX - lineOrigin.x}
-                  cy={line.targetY - lineOrigin.y}
-                  r={line.targetR + 3}
-                  fill="none"
-                  stroke="#2ecc71"
-                  strokeWidth="2"
-                />
-              )}
-              <circle
-                data-sub-end=""
-                data-sub-for={line.targetId}
-                cx={line.x2 - lineOrigin.x}
-                cy={line.y2 - lineOrigin.y}
-                r="3.5"
-                fill="#2ecc71"
-                stroke="#0a0d0f"
-                strokeWidth="1"
-              />
-            </g>
-          ))}
-        </svg>
-      )}
     </div>
   );
 }
@@ -1947,7 +1887,7 @@ export function TabGame({ format, league, players, setPlayers, addPlayer, remove
       const pending = mode === "out"
         ? { ...p, out: true, injured: false }
         : { ...p, injured: true, out: false };
-      statusNotice = backHalfStatusNotice(pending, abbr);
+      statusNotice = backHalfStatusNotice(pending, abbr, { playingQuarter: quarter });
       if (mode === "out") return markOut(p, { ...extra, midGameInjury: false });
       return markInjured(p, { ...extra, midGameInjury: true });
     });
@@ -1984,7 +1924,7 @@ export function TabGame({ format, league, players, setPlayers, addPlayer, remove
         totalQuarters,
         livePeriod: live,
       });
-      let roster = updatedPlayers;
+      let roster = planned.players || updatedPlayers;
       if (onFieldNow && live) {
         const holder = vacatedSpotHolder(currentL, planned.lineups?.[quarter], playerId);
         if (holder) {
@@ -3934,11 +3874,7 @@ function SheetCanvases({ field, playTime, league, opponent, homeScore, awayScore
   return (
     <div data-image-source={source} data-testid={source === "share" ? "share-sheet" : "game-log-sheet"} data-dual={dual ? "true" : "false"} data-preview="grid">
       <div style={{fontSize:12,fontWeight:800,color:"#e8a020",marginBottom:6}}>
-        {dual
-          ? (tiles.some(tile => /^H\d+$/.test(tile.panel?.label || ""))
-            ? "Field images · start and after subs"
-            : "Field images · 1st half and 2nd half")
-          : "Field images"}
+        {fieldImagesHeading(tiles)}
       </div>
       <AfterLineupMarks field={field} prefix="share" />
       <div data-testid={source === "share" ? "field-grid" : "game-log-field-grid"} style={{display:"grid", gridTemplateColumns:"minmax(0, 1fr) minmax(0, 1fr)", gap:8, marginBottom:12}}>
