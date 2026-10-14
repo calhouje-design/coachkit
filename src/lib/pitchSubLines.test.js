@@ -297,6 +297,50 @@ test("a field resize hides sub lines until the next frame", async () => {
   }
 });
 
+test("a rotate-and-back outside one flush does not leave sub lines hidden", async () => {
+  const { lineup, pairs } = planAt(slotsNamed("6v6", "2-2-1"));
+  const view = await renderPitch({ lineup, pairs, fieldWidth: 390 });
+  const realRAF = globalThis.requestAnimationFrame;
+  const realCancel = globalThis.cancelAnimationFrame;
+  const frames = [];
+  let nextId = 1;
+  globalThis.requestAnimationFrame = (callback) => {
+    const id = nextId;
+    nextId += 1;
+    frames.push({ id, callback });
+    return id;
+  };
+  globalThis.cancelAnimationFrame = (id) => {
+    const index = frames.findIndex(entry => entry.id === id);
+    if (index >= 0) frames.splice(index, 1);
+  };
+  try {
+    const layer = () => view.host.querySelector("[data-sub-lines]");
+    assert.equal(layer().getAttribute("data-hold"), "0");
+    assert.equal(layer().style.visibility, "visible");
+    window.dispatchEvent(new window.Event("orientationchange"));
+    const start = performance.now();
+    while (performance.now() - start < 60) {}
+    const due = frames.shift();
+    assert.ok(due, "the first rotate scheduled a frame");
+    due.callback(performance.now());
+    window.dispatchEvent(new window.Event("orientationchange"));
+    const queuedBeforeFlush = frames.length;
+    await act(async () => {});
+    const follow = frames.slice(queuedBeforeFlush);
+    await act(async () => {
+      follow.forEach(entry => entry.callback(performance.now()));
+    });
+    assert.equal(layer().getAttribute("data-hold"), "0");
+    assert.equal(layer().style.visibility, "visible");
+    assert.equal(view.host.querySelectorAll("[data-sub-line]").length, pairs.length);
+  } finally {
+    globalThis.requestAnimationFrame = realRAF;
+    globalThis.cancelAnimationFrame = realCancel;
+    await view.unmount();
+  }
+});
+
 test("rotation hides sub lines until the next frame", async () => {
   const fieldWidth = 390;
   const { lineup, pairs } = planAt(slotsNamed("6v6", "2-2-1"));
